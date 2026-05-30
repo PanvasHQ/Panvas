@@ -1,0 +1,50 @@
+{
+  "name": "panvas",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Panvas — A visual thinking workspace for engineers, researchers, and technical students",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@excalidraw/excalidraw": "^0.18.0",
+    "@hookform/resolvers": "^5.4.0",
+    "@supabase/supabase-js": "^2.49.0",
+    "dexie": "^4.0.11",
+    "dexie-react-hooks": "^1.1.7",
+    "framer-motion": "^12.40.0",
+    "katex": "^0.16.21",
+    "lucide-react": "^0.469.0",
+    "nanoid": "^5.1.0",
+    "pdfjs-dist": "^4.10.38",
+    "posthog-js": "^1.376.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-hook-form": "^7.76.1",
+    "react-markdown": "^9.0.3",
+    "react-syntax-highlighter": "^15.6.1",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.0",
+    "remark-math": "^6.0.0",
+    "wouter": "^3.10.0",
+    "zod": "^4.4.3",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/katex": "^0.16.7",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "playwright": "^1.60.0",
+    "postcss": "^8.5.1",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0"
+  }
+}

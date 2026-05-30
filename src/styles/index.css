@@ -1,0 +1,256 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   PANVAS — Global Design System
+   ============================================ */
+
+@layer base {
+  * {
+    @apply border-panvas-border-subtle;
+  }
+
+  body {
+    @apply bg-panvas-bg-primary text-panvas-text-primary font-sans;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  /* Selection */
+  ::selection {
+    background: rgba(124, 58, 237, 0.3);
+    color: #fff;
+  }
+}
+
+@layer components {
+  /* Glass panel */
+  .glass-panel {
+    @apply bg-panvas-glass-bg backdrop-blur-xl border border-panvas-glass-border;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  }
+
+  /* Sidebar item */
+  .sidebar-item {
+    @apply flex items-center gap-2 px-2.5 py-1.5 my-0.5 rounded-md text-sm text-panvas-text-secondary 
+           hover:bg-panvas-bg-hover hover:text-panvas-text-primary
+           border border-transparent
+           transition-all duration-150 cursor-pointer select-none relative;
+  }
+
+  .sidebar-item.active {
+    @apply bg-panvas-bg-hover text-panvas-text-primary;
+  }
+  
+  .sidebar-item.active::before {
+    content: '';
+    @apply absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-3/4 bg-panvas-accent-violet rounded-r-full;
+  }
+
+  /* Focus ring */
+  .focus-ring {
+    @apply focus:outline-none focus:ring-2 focus:ring-panvas-accent-violet/40 focus:ring-offset-0;
+  }
+
+  /* Gradient text */
+  .gradient-text {
+    @apply bg-gradient-to-r from-panvas-accent-violet to-panvas-accent-blue bg-clip-text text-transparent;
+  }
+
+  /* Button variants */
+  .btn-primary {
+    @apply px-4 py-2 rounded-lg bg-gradient-to-r from-panvas-accent-violet to-panvas-accent-blue
+           text-white font-medium text-sm
+           hover:shadow-glow-violet transition-all duration-200
+           active:scale-[0.98] focus-ring;
+  }
+
+  .btn-ghost {
+    @apply px-3 py-1.5 rounded-lg text-sm text-panvas-text-secondary
+           hover:bg-panvas-bg-hover hover:text-panvas-text-primary
+           transition-all duration-150 focus-ring;
+  }
+
+  .btn-icon {
+    @apply p-1.5 rounded-lg text-panvas-text-tertiary
+           hover:bg-panvas-bg-hover hover:text-panvas-text-primary
+           transition-all duration-150 focus-ring;
+  }
+
+  /* Input */
+  .input-field {
+    @apply w-full px-3 py-2 rounded-lg
+           bg-panvas-bg-primary border border-panvas-border-default
+           text-panvas-text-primary text-sm placeholder:text-panvas-text-tertiary
+           focus:border-panvas-accent-violet/50 focus:ring-1 focus:ring-panvas-accent-violet/30
+           focus:outline-none transition-all duration-200;
+  }
+
+  /* Tooltip */
+  .tooltip {
+    @apply absolute z-50 px-2 py-1 text-xs rounded-md
+           bg-panvas-bg-elevated text-panvas-text-primary
+           border border-panvas-border-default shadow-glass-sm
+           animate-scale-in pointer-events-none whitespace-nowrap;
+  }
+
+  /* Canvas overlay blocks */
+  .canvas-block {
+    @apply absolute rounded-xl border border-panvas-border-default
+           bg-panvas-bg-secondary shadow-glass
+           transition-shadow duration-200
+           hover:border-panvas-border-strong hover:shadow-glow-violet;
+  }
+
+  /* Status indicator dot */
+  .status-dot {
+    @apply w-2 h-2 rounded-full;
+  }
+
+  .status-dot.saved {
+    @apply bg-panvas-accent-emerald;
+  }
+
+  .status-dot.saving {
+    @apply bg-panvas-accent-amber animate-pulse-subtle;
+  }
+
+  .status-dot.error {
+    @apply bg-panvas-accent-rose;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+/* ============================================
+   Excalidraw Theme Overrides
+   ============================================ */
+.excalidraw {
+  --color-primary: #7c3aed !important;
+  --color-primary-light: #a78bfa !important;
+}
+
+.excalidraw .App-menu_top {
+  z-index: 3 !important;
+}
+
+/* KaTeX styling overrides for dark theme */
+.katex {
+  color: #e8e8ed;
+  font-size: 1.1em;
+}
+
+.katex .katex-html {
+  color: #e8e8ed;
+}
+
+/* Markdown block styles */
+.markdown-content {
+  @apply text-panvas-text-primary leading-relaxed;
+}
+
+.markdown-content h1 {
+  @apply text-2xl font-bold mb-3 mt-1 text-panvas-text-primary;
+}
+
+.markdown-content h2 {
+  @apply text-xl font-semibold mb-2 mt-4 text-panvas-text-primary;
+}
+
+.markdown-content h3 {
+  @apply text-lg font-semibold mb-2 mt-3 text-panvas-text-primary;
+}
+
+.markdown-content p {
+  @apply mb-2 text-panvas-text-secondary;
+}
+
+.markdown-content ul, .markdown-content ol {
+  @apply mb-2 pl-5;
+}
+
+.markdown-content li {
+  @apply mb-1 text-panvas-text-secondary;
+}
+
+.markdown-content ul li {
+  list-style-type: disc;
+}
+
+.markdown-content ol li {
+  list-style-type: decimal;
+}
+
+.markdown-content code {
+  @apply px-1.5 py-0.5 rounded bg-panvas-bg-elevated text-panvas-accent-violet font-mono text-sm;
+}
+
+.markdown-content pre {
+  @apply p-3 rounded-lg bg-panvas-bg-primary border border-panvas-border-subtle mb-3 overflow-x-auto;
+}
+
+.markdown-content pre code {
+  @apply bg-transparent p-0 text-panvas-text-primary;
+}
+
+.markdown-content blockquote {
+  @apply pl-4 border-l-2 border-panvas-accent-violet/50 text-panvas-text-secondary italic my-2;
+}
+
+.markdown-content a {
+  @apply text-panvas-accent-blue hover:text-panvas-accent-violet transition-colors underline;
+}
+
+.markdown-content table {
+  @apply w-full mb-3 border-collapse;
+}
+
+.markdown-content th {
+  @apply text-left p-2 border-b border-panvas-border-default text-panvas-text-primary font-semibold text-sm;
+}
+
+.markdown-content td {
+  @apply p-2 border-b border-panvas-border-subtle text-panvas-text-secondary text-sm;
+}
+
+.markdown-content hr {
+  @apply my-4 border-panvas-border-subtle;
+}
+
+.markdown-content strong {
+  @apply text-panvas-text-primary font-semibold;
+}
+
+.markdown-content em {
+  @apply text-panvas-text-secondary italic;
+}
+
+/* PDF block styles */
+.pdf-container canvas {
+  @apply rounded-lg;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+}

@@ -1,0 +1,84 @@
+/* ============================================
+   Panvas — Canvas Block Styles
+   Shared styles for overlay blocks (markdown, latex, pdf)
+   ============================================ */
+
+.canvas-block-wrapper {
+  position: absolute;
+  z-index: 10;
+  pointer-events: auto;
+}
+
+.canvas-block-wrapper.dragging {
+  cursor: grabbing;
+  opacity: 0.9;
+}
+
+.canvas-block-wrapper .block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: grab;
+  user-select: none;
+}
+
+.canvas-block-wrapper .block-header:active {
+  cursor: grabbing;
+}
+
+.canvas-block-wrapper .resize-handle {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: se-resize;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.canvas-block-wrapper:hover .resize-handle {
+  opacity: 0.6;
+}
+
+.canvas-block-wrapper .resize-handle::after {
+  content: '';
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid rgba(255, 255, 255, 0.3);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 0 0 2px 0;
+}
+
+/* Block type indicators */
+.block-type-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.block-type-badge.markdown {
+  background: rgba(124, 58, 237, 0.15);
+  color: #a78bfa;
+}
+
+.block-type-badge.latex {
+  background: rgba(59, 130, 246, 0.15);
+  color: #93c5fd;
+}
+
+.block-type-badge.pdf {
+  background: rgba(244, 63, 94, 0.15);
+  color: #fda4af;
+}
