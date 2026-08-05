@@ -1,7 +1,3 @@
-// ============================================
-// Panvas — Workspace Tree
-// ============================================
-
 import React from 'react';
 import {
   Folder,
@@ -23,13 +19,11 @@ export function WorkspaceTree({ workspaceId }: WorkspaceTreeProps) {
   const { folders, canvasFiles, activeCanvasId, setActiveCanvas } = useWorkspaceStore();
   const { openContextMenu, renamingId, setRenamingId } = useUIStore();
 
-  // Build tree structure
-  const rootFolders = folders.filter(f => f.parentId === null);
-  const rootCanvases = canvasFiles.filter(c => c.folderId === null);
+  const rootFolders = folders.filter(f => f.parentId === null && f.workspaceId === workspaceId);
+  const rootCanvases = canvasFiles.filter(c => c.folderId === null && c.workspaceId === workspaceId);
 
   return (
     <div className="space-y-0.5">
-      {/* Root Folders */}
       {rootFolders.map(folder => (
         <FolderNode
           key={folder.id}
@@ -45,7 +39,6 @@ export function WorkspaceTree({ workspaceId }: WorkspaceTreeProps) {
         />
       ))}
 
-      {/* Root Canvases */}
       {rootCanvases.map(canvas => (
         <CanvasNode
           key={canvas.id}
@@ -60,20 +53,18 @@ export function WorkspaceTree({ workspaceId }: WorkspaceTreeProps) {
       ))}
 
       {rootFolders.length === 0 && rootCanvases.length === 0 && (
-        <div className="px-2 py-3 text-center text-2xs text-panvas-text-tertiary">
-          No items yet. Create a canvas or folder.
+        <div className="px-2 py-3 text-center text-xs text-panvas-text-tertiary">
+          Empty workspace
         </div>
       )}
     </div>
   );
 }
 
-// ---- Folder Node ----
-
 interface FolderNodeProps {
-  folder: { id: string; name: string; isExpanded?: boolean };
+  folder: { id: string; name: string; workspaceId: string; isExpanded?: boolean };
   depth: number;
-  folders: { id: string; parentId: string | null; name: string; isExpanded?: boolean }[];
+  folders: { id: string; parentId: string | null; name: string; workspaceId: string; isExpanded?: boolean }[];
   canvasFiles: { id: string; folderId: string | null; name: string; isPinned: boolean }[];
   activeCanvasId: string | null;
   onSelectCanvas: (id: string | null) => void;
@@ -93,12 +84,13 @@ function FolderNode({
   renamingId,
   setRenamingId,
 }: FolderNodeProps) {
-  const { toggleFolderExpanded, renameFolder } = useWorkspaceStore();
+  const { toggleFolderExpanded, renameFolder, moveCanvas } = useWorkspaceStore();
   const isExpanded = folder.isExpanded !== false;
   const childFolders = folders.filter(f => f.parentId === folder.id);
   const childCanvases = canvasFiles.filter(c => c.folderId === folder.id);
   const isRenaming = renamingId === folder.id;
   const [renameValue, setRenameValue] = React.useState(folder.name);
+  const [isDragOver, setIsDragOver] = React.useState(false);
 
   const handleRename = async () => {
     if (renameValue.trim() && renameValue !== folder.name) {
@@ -107,27 +99,77 @@ function FolderNode({
     setRenamingId(null);
   };
 
+  const handleDragStart = (e: React.DragEvent) => {
+    e.stopPropagation();
+    e.dataTransfer.setData('application/json', JSON.stringify({ type: 'folder', id: folder.id }));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    
+    try {
+      const dataStr = e.dataTransfer.getData('application/json');
+      if (!dataStr) return;
+      const data = JSON.parse(dataStr);
+      
+      if (data.type === 'canvas') {
+        await moveCanvas(data.id, folder.workspaceId, folder.id);
+      }
+    } catch (err) {
+      console.warn('Invalid drop payload', err);
+    }
+  };
+
   return (
     <div>
       <div
-        className="sidebar-item group"
-        style={{ paddingLeft: `${depth * 12 + 8}px` }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            toggleFolderExpanded(folder.id);
+          }
+        }}
+        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md border-l-2 text-sm font-medium
+                    hover:bg-panvas-bg-hover transition-colors group cursor-pointer text-panvas-text-secondary
+                    ${isDragOver ? 'border-panvas-text-primary bg-panvas-bg-hover' : 'border-transparent'}`}
+        style={{ paddingLeft: `${depth * 14 + 12}px` }}
         onClick={() => toggleFolderExpanded(folder.id)}
         onContextMenu={(e) => {
           e.preventDefault();
           onContextMenu(e.clientX, e.clientY, folder.id, 'folder');
         }}
+        draggable
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
       >
         <ChevronRight
-          size={12}
-          className={`flex-shrink-0 transition-transform duration-150 text-panvas-text-tertiary ${
+          size={14}
+          className={`flex-shrink-0 transition-transform duration-200 text-panvas-text-tertiary hover:text-panvas-text-primary ${
             isExpanded ? 'rotate-90' : ''
           }`}
         />
         {isExpanded ? (
-          <FolderOpen size={14} className="flex-shrink-0 text-panvas-accent-amber" />
+          <FolderOpen size={16} className="flex-shrink-0 text-panvas-text-secondary" />
         ) : (
-          <Folder size={14} className="flex-shrink-0 text-panvas-accent-amber/70" />
+          <Folder size={16} className="flex-shrink-0 text-panvas-text-tertiary" />
         )}
 
         {isRenaming ? (
@@ -141,11 +183,11 @@ function FolderNode({
               if (e.key === 'Escape') setRenamingId(null);
             }}
             onClick={e => e.stopPropagation()}
-            className="flex-1 bg-transparent text-xs text-panvas-text-primary outline-none
-                       border-b border-panvas-accent-violet/50 py-0"
+            className="flex-1 bg-transparent text-sm text-panvas-text-primary outline-none
+                       border-b border-panvas-border-strong py-0"
           />
         ) : (
-          <span className="truncate text-xs">{folder.name}</span>
+          <span className="truncate flex-1 text-left">{folder.name}</span>
         )}
 
         <button
@@ -153,9 +195,9 @@ function FolderNode({
             e.stopPropagation();
             onContextMenu(e.clientX, e.clientY, folder.id, 'folder');
           }}
-          className="ml-auto btn-icon p-0.5 opacity-0 group-hover:opacity-100"
+          className="btn-icon p-1 opacity-0 group-hover:opacity-100"
         >
-          <MoreHorizontal size={12} />
+          <MoreHorizontal size={14} />
         </button>
       </div>
 
@@ -165,7 +207,7 @@ function FolderNode({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.12, ease: 'easeInOut' }}
+            transition={{ duration: 0.15, ease: 'easeInOut' }}
             className="overflow-hidden"
           >
             {childFolders.map(cf => (
@@ -201,8 +243,6 @@ function FolderNode({
   );
 }
 
-// ---- Canvas Node ----
-
 interface CanvasNodeProps {
   canvas: { id: string; name: string; isPinned: boolean };
   depth: number;
@@ -233,19 +273,29 @@ function CanvasNode({
     setRenamingId(null);
   };
 
+  const handleDragStart = (e: React.DragEvent) => {
+    e.stopPropagation();
+    e.dataTransfer.setData('application/json', JSON.stringify({ type: 'canvas', id: canvas.id }));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
   return (
     <div
-      className={`sidebar-item group ${isActive ? 'active' : ''}`}
-      style={{ paddingLeft: `${depth * 12 + 20}px` }}
+      className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md border-l-2 text-sm font-medium
+                  hover:bg-panvas-bg-hover transition-colors group cursor-pointer
+                  ${isActive ? 'border-panvas-text-primary bg-panvas-bg-hover text-panvas-text-primary' : 'border-transparent text-panvas-text-secondary'}`}
+      style={{ paddingLeft: `${depth * 14 + 32}px` }}
       onClick={onSelect}
       onContextMenu={(e) => {
         e.preventDefault();
         onContextMenu(e.clientX, e.clientY, canvas.id, 'canvas');
       }}
+      draggable
+      onDragStart={handleDragStart}
     >
       <FileText
-        size={14}
-        className={`flex-shrink-0 ${isActive ? 'text-panvas-accent-violet' : 'opacity-40'}`}
+        size={16}
+        className={`flex-shrink-0 ${isActive ? 'text-panvas-text-primary' : 'text-panvas-text-tertiary'}`}
       />
 
       {isRenaming ? (
@@ -259,15 +309,15 @@ function CanvasNode({
             if (e.key === 'Escape') setRenamingId(null);
           }}
           onClick={e => e.stopPropagation()}
-          className="flex-1 bg-transparent text-xs text-panvas-text-primary outline-none
-                     border-b border-panvas-accent-violet/50 py-0"
+          className="flex-1 bg-transparent text-sm text-panvas-text-primary outline-none
+                     border-b border-panvas-border-strong py-0"
         />
       ) : (
-        <span className="truncate text-xs">{canvas.name}</span>
+        <span className="truncate flex-1 text-left">{canvas.name}</span>
       )}
 
       {canvas.isPinned && (
-        <Star size={10} className="flex-shrink-0 text-panvas-accent-amber fill-panvas-accent-amber" />
+        <Star size={12} className="flex-shrink-0 text-panvas-accent-amber fill-panvas-accent-amber" />
       )}
 
       <button
@@ -275,9 +325,9 @@ function CanvasNode({
           e.stopPropagation();
           onContextMenu(e.clientX, e.clientY, canvas.id, 'canvas');
         }}
-        className="ml-auto btn-icon p-0.5 opacity-0 group-hover:opacity-100"
+        className="btn-icon p-1 opacity-0 group-hover:opacity-100"
       >
-        <MoreHorizontal size={12} />
+        <MoreHorizontal size={14} />
       </button>
     </div>
   );
