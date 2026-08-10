@@ -63,3 +63,13 @@ export interface PdfFileData {
   createdAt: number;
   userId: string | null;
 }
+
+export interface ImageFileData {
+  id: string;
+  canvasFileId: string;
+  fileName: string;
+  mimeType: string;
+  data: ArrayBuffer;
+  createdAt: number;
+  userId: string | null;
+}

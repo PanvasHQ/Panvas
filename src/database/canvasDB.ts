@@ -3,7 +3,7 @@
 // ============================================
 
 import { db } from './schema';
-import type { CanvasData, CustomBlock, PdfFileData } from '@/types/canvas';
+import type { CanvasData, CustomBlock, PdfFileData, ImageFileData } from '@/types/canvas';
 import { generateId } from '@/lib/utils/id';
 
 // ---- Canvas Data ----
@@ -95,4 +95,28 @@ export async function getPdfFile(userId: string | null, id: string): Promise<Pdf
 
 export async function deletePdfFile(id: string): Promise<void> {
   await db.pdfFiles.delete(id);
+}
+
+// ---- Image Files ----
+
+export async function storeImageFile(userId: string | null, canvasFileId: string, fileName: string, mimeType: string, data: ArrayBuffer): Promise<ImageFileData> {
+  const imageFile: ImageFileData = {
+    id: generateId('img'),
+    canvasFileId,
+    fileName,
+    mimeType,
+    data,
+    createdAt: Date.now(),
+    userId,
+  };
+  await db.imageFiles.add(imageFile);
+  return imageFile;
+}
+
+export async function getImageFile(id: string): Promise<ImageFileData | undefined> {
+  return db.imageFiles.get(id);
+}
+
+export async function deleteImageFile(id: string): Promise<void> {
+  await db.imageFiles.delete(id);
 }

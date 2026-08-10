@@ -14,6 +14,8 @@ export interface Workspace {
   syncStatus: SyncStatusField;
   userId: string | null;
   deletedAt: number | null;
+  isSystem?: boolean;
+  systemType?: 'default' | 'welcome';
 }
 
 export interface Folder {
@@ -43,6 +45,8 @@ export interface CanvasFile {
   syncStatus: SyncStatusField;
   userId: string | null;
   deletedAt: number | null;
+  isSystem?: boolean;
+  systemType?: 'default' | 'welcome';
 }
 
 export type TreeNodeType = 'workspace' | 'folder' | 'canvas';

@@ -5,6 +5,7 @@
 import React, { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
+  BookOpen,
   Pencil,
   Trash2,
   Star,
@@ -12,6 +13,8 @@ import {
   Copy,
   FolderPlus,
   Plus,
+  MoveRight,
+  FileText,
 } from 'lucide-react';
 import { useUIStore } from '@/stores/uiStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
@@ -22,9 +25,13 @@ export function ContextMenu() {
     deleteWorkspace,
     deleteFolder,
     deleteCanvas,
+    deleteNotebook,
+    deleteNotebookSection,
+    deleteNotebookPage,
     togglePinWorkspace,
     togglePinCanvas,
     setActiveWorkspace,
+    duplicateCanvas,
   } = useWorkspaceStore();
   const ref = useRef<HTMLDivElement>(null);
 
@@ -48,12 +55,13 @@ export function ContextMenu() {
 
   const menuItems: { label: string; icon: React.ReactNode; action: () => void; danger?: boolean }[] = [];
 
-  // Rename
-  menuItems.push({
-    label: 'Rename',
-    icon: <Pencil size={13} />,
-    action: () => { setRenamingId(targetId); closeContextMenu(); },
-  });
+  if (targetType === 'workspace' || targetType === 'folder' || targetType === 'canvas') {
+    menuItems.push({
+      label: 'Rename',
+      icon: <Pencil size={13} />,
+      action: () => { setRenamingId(targetId); closeContextMenu(); },
+    });
+  }
 
   // Pin/Unpin (workspace and canvas only)
   if (targetType === 'workspace' || targetType === 'canvas') {
@@ -65,6 +73,11 @@ export function ContextMenu() {
         else togglePinCanvas(targetId);
         closeContextMenu();
       },
+    });
+    menuItems.push({
+      label: 'New Notebook',
+      icon: <BookOpen size={13} />,
+      action: () => { setActiveWorkspace(targetId); openCreateDialog('notebook'); closeContextMenu(); },
     });
   }
 
@@ -88,6 +101,36 @@ export function ContextMenu() {
         closeContextMenu();
       },
     });
+    menuItems.push({
+      label: 'New Notebook Here',
+      icon: <BookOpen size={13} />,
+      action: () => { openCreateDialog('notebook', targetId); closeContextMenu(); },
+    });
+  }
+
+  if (targetType === 'notebook') {
+    menuItems.push({
+      label: 'New Section',
+      icon: <FolderPlus size={13} />,
+      action: () => { openCreateDialog('section', targetId); closeContextMenu(); },
+    });
+  }
+
+  if (targetType === 'section') {
+    menuItems.push({
+      label: 'New Page',
+      icon: <Plus size={13} />,
+      action: () => { openCreateDialog('page', targetId); closeContextMenu(); },
+    });
+    menuItems.push({
+      label: 'Import PDF',
+      icon: <FileText size={13} />,
+      action: () => { 
+        // We trigger the hidden file input in NotebookSidebar by dispatching a custom event
+        window.dispatchEvent(new CustomEvent('panvas:import-pdf', { detail: { sectionId: targetId } }));
+        closeContextMenu(); 
+      },
+    });
   }
 
   if (targetType === 'folder') {
@@ -103,18 +146,38 @@ export function ContextMenu() {
     });
   }
 
+  if (targetType === 'canvas') {
+    menuItems.push({
+      label: 'Duplicate Canvas',
+      icon: <Copy size={13} />,
+      action: () => { duplicateCanvas(targetId); closeContextMenu(); },
+    });
+  }
+
   // Delete
-  menuItems.push({
-    label: 'Delete',
-    icon: <Trash2 size={13} />,
-    danger: true,
-    action: () => {
-      if (targetType === 'workspace') deleteWorkspace(targetId);
-      else if (targetType === 'folder') deleteFolder(targetId);
-      else deleteCanvas(targetId);
-      closeContextMenu();
-    },
-  });
+  if (
+    targetType === 'workspace' || 
+    targetType === 'folder' || 
+    targetType === 'canvas' ||
+    targetType === 'notebook' ||
+    targetType === 'section' ||
+    targetType === 'page'
+  ) {
+    menuItems.push({
+      label: 'Delete',
+      icon: <Trash2 size={13} />,
+      danger: true,
+      action: () => {
+        if (targetType === 'workspace') deleteWorkspace(targetId);
+        else if (targetType === 'folder') deleteFolder(targetId);
+        else if (targetType === 'canvas') deleteCanvas(targetId);
+        else if (targetType === 'notebook') deleteNotebook(targetId);
+        else if (targetType === 'section') deleteNotebookSection(targetId);
+        else if (targetType === 'page') deleteNotebookPage(targetId);
+        closeContextMenu();
+      },
+    });
+  }
 
   return (
     <motion.div

@@ -1,334 +1,394 @@
 import React from 'react';
-import {
-  Folder,
-  FolderOpen,
-  FileText,
-  ChevronRight,
-  MoreHorizontal,
-  Star,
-} from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { BookOpen, ChevronRight, FileText, Folder, FolderOpen, MoreHorizontal, Plus, Star } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { useUIStore } from '@/stores/uiStore';
+import type { Notebook, NotebookPage, NotebookSection } from '@/types/notebook';
+import type { CanvasFile, Folder as WorkspaceFolder } from '@/types/workspace';
 
-interface WorkspaceTreeProps {
-  workspaceId: string;
+export type DropPosition = 'before' | 'inside' | 'after';
+
+export function getReorderedIds(items: any[], draggedId: string, targetId: string, position: 'before' | 'after') {
+  const filtered = items.filter(i => i.id !== draggedId);
+  const targetIndex = filtered.findIndex(i => i.id === targetId);
+  if (targetIndex === -1) return items.map(i => i.id);
+  const draggedItem = items.find(i => i.id === draggedId);
+  if (!draggedItem) return items.map(i => i.id);
+  filtered.splice(position === 'before' ? targetIndex : targetIndex + 1, 0, draggedItem);
+  return filtered.map(i => i.id);
 }
 
-export function WorkspaceTree({ workspaceId }: WorkspaceTreeProps) {
-  const { folders, canvasFiles, activeCanvasId, setActiveCanvas } = useWorkspaceStore();
-  const { openContextMenu, renamingId, setRenamingId } = useUIStore();
+export function WorkspaceTree({ workspaceId }: { workspaceId: string }) {
+  const { folders, notebooks, canvasFiles, moveCanvas, moveNotebook, moveFolder, reorderItems } = useWorkspaceStore();
+  const [isDragOverRoot, setIsDragOverRoot] = React.useState(false);
 
-  const rootFolders = folders.filter(f => f.parentId === null && f.workspaceId === workspaceId);
-  const rootCanvases = canvasFiles.filter(c => c.folderId === null && c.workspaceId === workspaceId);
+  const rootFolders = folders.filter(folder => folder.workspaceId === workspaceId && folder.parentId === null);
+  const rootNotebooks = notebooks.filter(notebook => notebook.workspaceId === workspaceId && notebook.folderId === null);
+  const rootCanvases = canvasFiles.filter(canvas => canvas.workspaceId === workspaceId && canvas.folderId === null);
+
+  const handleRootDrop = async (event: React.DragEvent) => {
+    event.preventDefault();
+    setIsDragOverRoot(false);
+    const raw = event.dataTransfer.getData('application/json');
+    if (!raw) return;
+    try {
+      const data = JSON.parse(raw);
+      if (data.type === 'canvas') {
+        const item = canvasFiles.find(c => c.id === data.id);
+        if (item && item.folderId !== null) await moveCanvas(data.id, workspaceId, null);
+      }
+      else if (data.type === 'notebook') {
+        const item = notebooks.find(n => n.id === data.id);
+        if (item && item.folderId !== null) await moveNotebook(data.id, workspaceId, null);
+      }
+      else if (data.type === 'folder') {
+        const item = folders.find(f => f.id === data.id);
+        if (item && item.parentId !== null) await moveFolder(data.id, workspaceId, null);
+      }
+    } catch { /* Ignore */ }
+  };
 
   return (
-    <div className="space-y-0.5">
-      {rootFolders.map(folder => (
-        <FolderNode
-          key={folder.id}
-          folder={folder}
-          depth={0}
-          folders={folders}
-          canvasFiles={canvasFiles}
-          activeCanvasId={activeCanvasId}
-          onSelectCanvas={setActiveCanvas}
-          onContextMenu={openContextMenu}
-          renamingId={renamingId}
-          setRenamingId={setRenamingId}
-        />
-      ))}
-
-      {rootCanvases.map(canvas => (
-        <CanvasNode
-          key={canvas.id}
-          canvas={canvas}
-          depth={0}
-          isActive={activeCanvasId === canvas.id}
-          onSelect={() => setActiveCanvas(canvas.id)}
-          onContextMenu={openContextMenu}
-          renamingId={renamingId}
-          setRenamingId={setRenamingId}
-        />
-      ))}
-
-      {rootFolders.length === 0 && rootCanvases.length === 0 && (
-        <div className="px-2 py-3 text-center text-xs text-panvas-text-tertiary">
-          Empty workspace
-        </div>
+    <div
+      onDragOver={(e) => { e.preventDefault(); setIsDragOverRoot(true); }}
+      onDragLeave={() => setIsDragOverRoot(false)}
+      onDrop={handleRootDrop}
+      className={`space-y-0.5 min-h-[40px] rounded-md transition-colors ${isDragOverRoot ? 'bg-panvas-bg-hover/60 border border-dashed border-panvas-border-strong' : ''}`}
+    >
+      {rootFolders.map(folder => <FolderNode key={folder.id} folder={folder} depth={0} />)}
+      {rootNotebooks.map(notebook => <NotebookNode key={notebook.id} notebook={notebook} depth={0} />)}
+      {rootCanvases.map(canvas => <CanvasNode key={canvas.id} canvas={canvas} depth={0} />)}
+      {rootFolders.length === 0 && rootNotebooks.length === 0 && rootCanvases.length === 0 && (
+        <div className="px-2 py-3 text-center text-xs text-panvas-text-tertiary">Empty workspace</div>
       )}
     </div>
   );
 }
 
-interface FolderNodeProps {
-  folder: { id: string; name: string; workspaceId: string; isExpanded?: boolean };
-  depth: number;
-  folders: { id: string; parentId: string | null; name: string; workspaceId: string; isExpanded?: boolean }[];
-  canvasFiles: { id: string; folderId: string | null; name: string; isPinned: boolean }[];
-  activeCanvasId: string | null;
-  onSelectCanvas: (id: string | null) => void;
-  onContextMenu: (x: number, y: number, targetId: string, targetType: 'workspace' | 'folder' | 'canvas') => void;
-  renamingId: string | null;
-  setRenamingId: (id: string | null) => void;
-}
-
-function FolderNode({
-  folder,
-  depth,
-  folders,
-  canvasFiles,
-  activeCanvasId,
-  onSelectCanvas,
-  onContextMenu,
-  renamingId,
-  setRenamingId,
-}: FolderNodeProps) {
-  const { toggleFolderExpanded, renameFolder, moveCanvas } = useWorkspaceStore();
-  const isExpanded = folder.isExpanded !== false;
-  const childFolders = folders.filter(f => f.parentId === folder.id);
-  const childCanvases = canvasFiles.filter(c => c.folderId === folder.id);
+function FolderNode({ folder, depth }: { folder: WorkspaceFolder; depth: number }) {
+  const { folders, notebooks, canvasFiles, toggleFolderExpanded, moveCanvas, renameFolder, moveNotebook, moveFolder, reorderItems } = useWorkspaceStore();
+  const { openContextMenu, renamingId, setRenamingId } = useUIStore();
+  const [value, setValue] = React.useState(folder.name);
   const isRenaming = renamingId === folder.id;
-  const [renameValue, setRenameValue] = React.useState(folder.name);
-  const [isDragOver, setIsDragOver] = React.useState(false);
+  const save = async () => { if (value.trim() && value !== folder.name) await renameFolder(folder.id, value.trim()); setRenamingId(null); };
 
-  const handleRename = async () => {
-    if (renameValue.trim() && renameValue !== folder.name) {
-      await renameFolder(folder.id, renameValue.trim());
-    }
-    setRenamingId(null);
-  };
+  const childFolders = folders.filter(item => item.parentId === folder.id);
+  const childNotebooks = notebooks.filter(item => item.folderId === folder.id);
+  const childCanvases = canvasFiles.filter(item => item.folderId === folder.id);
+  const isExpanded = folder.isExpanded !== false;
 
-  const handleDragStart = (e: React.DragEvent) => {
-    e.stopPropagation();
-    e.dataTransfer.setData('application/json', JSON.stringify({ type: 'folder', id: folder.id }));
-    e.dataTransfer.effectAllowed = 'move';
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    e.dataTransfer.dropEffect = 'move';
-    setIsDragOver(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(false);
-  };
-
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(false);
-    
-    try {
-      const dataStr = e.dataTransfer.getData('application/json');
-      if (!dataStr) return;
-      const data = JSON.parse(dataStr);
-      
-      if (data.type === 'canvas') {
-        await moveCanvas(data.id, folder.workspaceId, folder.id);
+  const handleDropItem = async (data: any, position: DropPosition) => {
+    if (position === 'inside') {
+      if (data.type === 'canvas') await moveCanvas(data.id, folder.workspaceId, folder.id);
+      else if (data.type === 'notebook') await moveNotebook(data.id, folder.workspaceId, folder.id);
+      else if (data.type === 'folder' && data.id !== folder.id) await moveFolder(data.id, folder.workspaceId, folder.id);
+    } else {
+      if (data.type !== 'folder') return;
+      const siblings = folders.filter(f => f.workspaceId === folder.workspaceId && f.parentId === folder.parentId);
+      const reorderedIds = getReorderedIds(siblings, data.id, folder.id, position);
+      const draggedItem = folders.find(f => f.id === data.id);
+      if (draggedItem && draggedItem.parentId !== folder.parentId) {
+        await moveFolder(data.id, folder.workspaceId, folder.parentId);
       }
-    } catch (err) {
-      console.warn('Invalid drop payload', err);
+      await reorderItems('folder', reorderedIds);
     }
   };
 
   return (
     <div>
-      <div
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            toggleFolderExpanded(folder.id);
-          }
-        }}
-        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md border-l-2 text-sm font-medium
-                    hover:bg-panvas-bg-hover transition-colors group cursor-pointer text-panvas-text-secondary
-                    ${isDragOver ? 'border-panvas-text-primary bg-panvas-bg-hover' : 'border-transparent'}`}
-        style={{ paddingLeft: `${depth * 14 + 12}px` }}
+      <TreeRow
+        depth={depth}
+        expanded={isExpanded}
+        badge={childFolders.length + childNotebooks.length + childCanvases.length || undefined}
         onClick={() => toggleFolderExpanded(folder.id)}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          onContextMenu(e.clientX, e.clientY, folder.id, 'folder');
-        }}
+        onToggle={() => toggleFolderExpanded(folder.id)}
+        onContextMenu={(event) => openContextMenu(event.clientX, event.clientY, folder.id, 'folder')}
         draggable
-        onDragStart={handleDragStart}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
-        <ChevronRight
-          size={14}
-          className={`flex-shrink-0 transition-transform duration-200 text-panvas-text-tertiary hover:text-panvas-text-primary ${
-            isExpanded ? 'rotate-90' : ''
-          }`}
-        />
-        {isExpanded ? (
-          <FolderOpen size={16} className="flex-shrink-0 text-panvas-text-secondary" />
-        ) : (
-          <Folder size={16} className="flex-shrink-0 text-panvas-text-tertiary" />
-        )}
-
-        {isRenaming ? (
-          <input
-            autoFocus
-            value={renameValue}
-            onChange={e => setRenameValue(e.target.value)}
-            onBlur={handleRename}
-            onKeyDown={e => {
-              if (e.key === 'Enter') handleRename();
-              if (e.key === 'Escape') setRenamingId(null);
-            }}
-            onClick={e => e.stopPropagation()}
-            className="flex-1 bg-transparent text-sm text-panvas-text-primary outline-none
-                       border-b border-panvas-border-strong py-0"
-          />
-        ) : (
-          <span className="truncate flex-1 text-left">{folder.name}</span>
-        )}
-
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onContextMenu(e.clientX, e.clientY, folder.id, 'folder');
-          }}
-          className="btn-icon p-1 opacity-0 group-hover:opacity-100"
-        >
-          <MoreHorizontal size={14} />
-        </button>
-      </div>
-
-      <AnimatePresence>
-        {isExpanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.15, ease: 'easeInOut' }}
-            className="overflow-hidden"
-          >
-            {childFolders.map(cf => (
-              <FolderNode
-                key={cf.id}
-                folder={cf}
-                depth={depth + 1}
-                folders={folders}
-                canvasFiles={canvasFiles}
-                activeCanvasId={activeCanvasId}
-                onSelectCanvas={onSelectCanvas}
-                onContextMenu={onContextMenu}
-                renamingId={renamingId}
-                setRenamingId={setRenamingId}
-              />
-            ))}
-            {childCanvases.map(cc => (
-              <CanvasNode
-                key={cc.id}
-                canvas={cc}
-                depth={depth + 1}
-                isActive={activeCanvasId === cc.id}
-                onSelect={() => onSelectCanvas(cc.id)}
-                onContextMenu={onContextMenu}
-                renamingId={renamingId}
-                setRenamingId={setRenamingId}
-              />
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
+        onDragStart={(event) => event.dataTransfer.setData('application/json', JSON.stringify({ type: 'folder', id: folder.id }))}
+        onDropItem={handleDropItem}
+        acceptsDropInside
+        icon={isExpanded ? <FolderOpen size={15} className="text-panvas-text-secondary" /> : <Folder size={15} className="text-panvas-text-tertiary" />}
+        label={isRenaming ? <input autoFocus value={value} onChange={event => setValue(event.target.value)} onBlur={save} onKeyDown={event => { if (event.key === 'Enter') save(); if (event.key === 'Escape') setRenamingId(null); }} onClick={event => event.stopPropagation()} className="w-full bg-transparent outline-none" /> : folder.name}
+      />
+      <Collapsible open={isExpanded}>
+        {childFolders.map(item => <FolderNode key={item.id} folder={item} depth={depth + 1} />)}
+        {childNotebooks.map(item => <NotebookNode key={item.id} notebook={item} depth={depth + 1} />)}
+        {childCanvases.map(item => <CanvasNode key={item.id} canvas={item} depth={depth + 1} />)}
+      </Collapsible>
     </div>
   );
 }
 
-interface CanvasNodeProps {
-  canvas: { id: string; name: string; isPinned: boolean };
-  depth: number;
-  isActive: boolean;
-  onSelect: () => void;
-  onContextMenu: (x: number, y: number, targetId: string, targetType: 'workspace' | 'folder' | 'canvas') => void;
-  renamingId: string | null;
-  setRenamingId: (id: string | null) => void;
-}
+function NotebookNode({ notebook, depth }: { notebook: Notebook; depth: number }) {
+  const { notebooks, notebookSections, notebookPages, toggleNotebookExpanded, setActiveNotebook, renameNotebook, activeNotebookId, moveNotebookSection, reorderItems, moveNotebook } = useWorkspaceStore();
+  const { openContextMenu, renamingId, setRenamingId } = useUIStore();
+  const [value, setValue] = React.useState(notebook.name);
+  const isRenaming = renamingId === notebook.id;
+  const isActive = activeNotebookId === notebook.id;
+  const save = async () => { if (value.trim() && value !== notebook.name) await renameNotebook(notebook.id, value.trim()); setRenamingId(null); };
+  
+  const sections = notebookSections.filter(section => section.notebookId === notebook.id);
 
-function CanvasNode({
-  canvas,
-  depth,
-  isActive,
-  onSelect,
-  onContextMenu,
-  renamingId,
-  setRenamingId,
-}: CanvasNodeProps) {
-  const { renameCanvas } = useWorkspaceStore();
-  const isRenaming = renamingId === canvas.id;
-  const [renameValue, setRenameValue] = React.useState(canvas.name);
-
-  const handleRename = async () => {
-    if (renameValue.trim() && renameValue !== canvas.name) {
-      await renameCanvas(canvas.id, renameValue.trim());
+  const handleNotebookClick = () => {
+    setActiveNotebook(notebook.id);
+    if (!notebook.isExpanded) {
+      toggleNotebookExpanded(notebook.id);
     }
-    setRenamingId(null);
   };
 
-  const handleDragStart = (e: React.DragEvent) => {
-    e.stopPropagation();
-    e.dataTransfer.setData('application/json', JSON.stringify({ type: 'canvas', id: canvas.id }));
-    e.dataTransfer.effectAllowed = 'move';
+  const handleDropItem = async (data: any, position: DropPosition) => {
+    if (position === 'inside') {
+      if (data.type === 'section') await moveNotebookSection(data.id, notebook.workspaceId, notebook.id);
+    } else {
+      if (data.type !== 'notebook') return;
+      const siblings = notebooks.filter(n => n.workspaceId === notebook.workspaceId && n.folderId === notebook.folderId);
+      const reorderedIds = getReorderedIds(siblings, data.id, notebook.id, position);
+      const draggedItem = notebooks.find(n => n.id === data.id);
+      if (draggedItem && draggedItem.folderId !== notebook.folderId) {
+        await moveNotebook(data.id, notebook.workspaceId, notebook.folderId);
+      }
+      await reorderItems('notebook', reorderedIds);
+    }
   };
 
   return (
-    <div
-      className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md border-l-2 text-sm font-medium
-                  hover:bg-panvas-bg-hover transition-colors group cursor-pointer
-                  ${isActive ? 'border-panvas-text-primary bg-panvas-bg-hover text-panvas-text-primary' : 'border-transparent text-panvas-text-secondary'}`}
-      style={{ paddingLeft: `${depth * 14 + 32}px` }}
-      onClick={onSelect}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        onContextMenu(e.clientX, e.clientY, canvas.id, 'canvas');
-      }}
-      draggable
-      onDragStart={handleDragStart}
-    >
-      <FileText
-        size={16}
-        className={`flex-shrink-0 ${isActive ? 'text-panvas-text-primary' : 'text-panvas-text-tertiary'}`}
+    <div>
+      <TreeRow
+        depth={depth}
+        active={isActive}
+        expanded={notebook.isExpanded}
+        badge={sections.length || undefined}
+        onClick={handleNotebookClick}
+        onToggle={() => { setActiveNotebook(notebook.id); toggleNotebookExpanded(notebook.id); }}
+        onContextMenu={(event) => openContextMenu(event.clientX, event.clientY, notebook.id, 'notebook')}
+        draggable
+        onDragStart={(event) => event.dataTransfer.setData('application/json', JSON.stringify({ type: 'notebook', id: notebook.id }))}
+        onDropItem={handleDropItem}
+        acceptsDropInside
+        icon={<BookOpen size={15} className="text-panvas-text-secondary" />}
+        label={isRenaming ? <input autoFocus value={value} onChange={event => setValue(event.target.value)} onBlur={save} onKeyDown={event => { if (event.key === 'Enter') save(); if (event.key === 'Escape') setRenamingId(null); }} onClick={event => event.stopPropagation()} className="w-full bg-transparent outline-none" /> : notebook.name}
       />
+      <Collapsible open={notebook.isExpanded}>
+        {sections.map(section => <SectionNode key={section.id} section={section} pages={notebookPages.filter(page => page.sectionId === section.id)} depth={depth + 1} />)}
+        {sections.length === 0 && <TreeEmptyState depth={depth + 1} label="No sections" />}
+      </Collapsible>
+    </div>
+  );
+}
 
-      {isRenaming ? (
-        <input
-          autoFocus
-          value={renameValue}
-          onChange={e => setRenameValue(e.target.value)}
-          onBlur={handleRename}
-          onKeyDown={e => {
-            if (e.key === 'Enter') handleRename();
-            if (e.key === 'Escape') setRenamingId(null);
-          }}
-          onClick={e => e.stopPropagation()}
-          className="flex-1 bg-transparent text-sm text-panvas-text-primary outline-none
-                     border-b border-panvas-border-strong py-0"
-        />
+function SectionNode({ section, pages, depth }: { section: NotebookSection; pages: NotebookPage[]; depth: number }) {
+  const { notebooks, notebookSections, notebookPages, toggleNotebookSectionExpanded, setActiveNotebookSection, renameNotebookSection, activeNotebookSectionId, moveNotebookPage, reorderItems, moveNotebookSection } = useWorkspaceStore();
+  const { openContextMenu, renamingId, setRenamingId } = useUIStore();
+  const [value, setValue] = React.useState(section.name);
+  const isRenaming = renamingId === section.id;
+  const isActive = activeNotebookSectionId === section.id;
+  const save = async () => { if (value.trim() && value !== section.name) await renameNotebookSection(section.id, value.trim()); setRenamingId(null); };
+
+  const workspaceId = notebooks.find(n => n.id === section.notebookId)?.workspaceId || '';
+
+  const handleSectionClick = () => {
+    setActiveNotebookSection(section.id);
+    if (!section.isExpanded) {
+      toggleNotebookSectionExpanded(section.id);
+    }
+  };
+
+  const handleDropItem = async (data: any, position: DropPosition) => {
+    if (position === 'inside') {
+      if (data.type === 'page') await moveNotebookPage(data.id, workspaceId, section.id);
+    } else {
+      if (data.type !== 'section') return;
+      const siblings = notebookSections.filter(s => s.notebookId === section.notebookId);
+      const reorderedIds = getReorderedIds(siblings, data.id, section.id, position);
+      const draggedItem = notebookSections.find(s => s.id === data.id);
+      if (draggedItem && draggedItem.notebookId !== section.notebookId) {
+        await moveNotebookSection(data.id, workspaceId, section.notebookId);
+      }
+      await reorderItems('section', reorderedIds);
+    }
+  };
+
+  return (
+    <div>
+      <TreeRow
+        depth={depth}
+        active={isActive}
+        expanded={section.isExpanded}
+        badge={pages.length || undefined}
+        onClick={handleSectionClick}
+        onToggle={() => { setActiveNotebookSection(section.id); toggleNotebookSectionExpanded(section.id); }}
+        onContextMenu={(event) => openContextMenu(event.clientX, event.clientY, section.id, 'section')}
+        draggable
+        onDragStart={(event) => event.dataTransfer.setData('application/json', JSON.stringify({ type: 'section', id: section.id, notebookId: section.notebookId }))}
+        onDropItem={handleDropItem}
+        acceptsDropInside
+        icon={<ChevronRight size={13} className="text-panvas-text-tertiary" />}
+        label={isRenaming ? <input autoFocus value={value} onChange={event => setValue(event.target.value)} onBlur={save} onKeyDown={event => { if (event.key === 'Enter') save(); if (event.key === 'Escape') setRenamingId(null); }} onClick={event => event.stopPropagation()} className="w-full bg-transparent outline-none" /> : section.name}
+      />
+      <Collapsible open={section.isExpanded}>
+        {pages.map(page => <PageNode key={page.id} page={page} depth={depth + 1} />)}
+        {pages.length === 0 && <TreeEmptyState depth={depth + 1} label="No pages" />}
+      </Collapsible>
+    </div>
+  );
+}
+
+function PageNode({ page, depth }: { page: NotebookPage; depth: number }) {
+  const { notebooks, notebookSections, notebookPages, activePageId, setActivePage, renameNotebookPage, moveNotebookPage, reorderItems } = useWorkspaceStore();
+  const { openContextMenu, renamingId, setRenamingId } = useUIStore();
+  const [value, setValue] = React.useState(page.title);
+  const isRenaming = renamingId === page.id;
+  const save = async () => { if (value.trim() && value !== page.title) await renameNotebookPage(page.id, value.trim()); setRenamingId(null); };
+
+  const section = notebookSections.find(s => s.id === page.sectionId);
+  const workspaceId = section ? notebooks.find(n => n.id === section.notebookId)?.workspaceId || '' : '';
+
+  const handleDropItem = async (data: any, position: DropPosition) => {
+    if (position === 'inside') return;
+    if (data.type !== 'page') return;
+    const siblings = notebookPages.filter(p => p.sectionId === page.sectionId);
+    const reorderedIds = getReorderedIds(siblings, data.id, page.id, position);
+    const draggedItem = notebookPages.find(p => p.id === data.id);
+    if (draggedItem && draggedItem.sectionId !== page.sectionId) {
+      await moveNotebookPage(data.id, workspaceId, page.sectionId);
+    }
+    await reorderItems('page', reorderedIds);
+  };
+
+  return (
+    <TreeRow
+      depth={depth}
+      active={activePageId === page.id}
+      onClick={() => setActivePage(page.id)}
+      onContextMenu={(event) => openContextMenu(event.clientX, event.clientY, page.id, 'page')}
+      draggable
+      onDragStart={(event) => event.dataTransfer.setData('application/json', JSON.stringify({ type: 'page', id: page.id, sectionId: page.sectionId }))}
+      onDropItem={handleDropItem}
+      icon={<FileText size={15} className="text-panvas-text-tertiary" />}
+      label={isRenaming ? <input autoFocus value={value} onChange={event => setValue(event.target.value)} onBlur={save} onKeyDown={event => { if (event.key === 'Enter') save(); if (event.key === 'Escape') setRenamingId(null); }} onClick={event => event.stopPropagation()} className="w-full bg-transparent outline-none" /> : page.title}
+    />
+  );
+}
+
+function CanvasNode({ canvas, depth }: { canvas: CanvasFile; depth: number }) {
+  const { canvasFiles, activeCanvasId, setActiveCanvas, renameCanvas, moveCanvas, reorderItems } = useWorkspaceStore();
+  const { openContextMenu, renamingId, setRenamingId } = useUIStore();
+  const [value, setValue] = React.useState(canvas.name);
+  const isRenaming = renamingId === canvas.id;
+  const save = async () => { if (value.trim() && value !== canvas.name) await renameCanvas(canvas.id, value.trim()); setRenamingId(null); };
+
+  const handleDropItem = async (data: any, position: DropPosition) => {
+    if (position === 'inside') return;
+    if (data.type !== 'canvas') return;
+    const siblings = canvasFiles.filter(c => c.workspaceId === canvas.workspaceId && c.folderId === canvas.folderId);
+    const reorderedIds = getReorderedIds(siblings, data.id, canvas.id, position);
+    const draggedItem = canvasFiles.find(c => c.id === data.id);
+    if (draggedItem && draggedItem.folderId !== canvas.folderId) {
+      await moveCanvas(data.id, canvas.workspaceId, canvas.folderId);
+    }
+    await reorderItems('canvas', reorderedIds);
+  };
+
+  return (
+    <TreeRow
+      depth={depth}
+      active={activeCanvasId === canvas.id}
+      onClick={() => setActiveCanvas(canvas.id)}
+      onContextMenu={(event) => openContextMenu(event.clientX, event.clientY, canvas.id, 'canvas')}
+      draggable
+      onDragStart={(event) => event.dataTransfer.setData('application/json', JSON.stringify({ type: 'canvas', id: canvas.id }))}
+      onDropItem={handleDropItem}
+      icon={<FileText size={16} className="text-panvas-text-tertiary" />}
+      label={isRenaming ? <input autoFocus value={value} onChange={event => setValue(event.target.value)} onBlur={save} onKeyDown={event => { if (event.key === 'Enter') save(); if (event.key === 'Escape') setRenamingId(null); }} onClick={event => event.stopPropagation()} className="w-full bg-transparent outline-none" /> : canvas.name}
+      trailing={canvas.isPinned ? <Star size={12} className="text-panvas-accent-amber fill-panvas-accent-amber" /> : undefined}
+    />
+  );
+}
+
+function TreeRow({ depth, label, icon, expanded, active = false, onClick, onToggle, onContextMenu, trailing, badge, draggable, onDragStart, onDropItem, acceptsDropInside = false }: { depth: number; label: React.ReactNode; icon: React.ReactNode; expanded?: boolean; active?: boolean; onClick?: () => void; onToggle?: () => void; onContextMenu?: (event: React.MouseEvent) => void; trailing?: React.ReactNode; badge?: number; draggable?: boolean; onDragStart?: (event: React.DragEvent) => void; onDropItem?: (data: any | null, position: DropPosition, files?: FileList) => void; acceptsDropInside?: boolean }) {
+  const activate = () => onClick?.();
+  const [dragPosition, setDragPosition] = React.useState<DropPosition | null>(null);
+  const ref = React.useRef<HTMLDivElement>(null);
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!ref.current) return;
+    const rect = ref.current.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    let pos: DropPosition = 'inside';
+    if (y < rect.height * 0.25) pos = 'before';
+    else if (y > rect.height * 0.75) pos = 'after';
+    else pos = acceptsDropInside ? 'inside' : (y < rect.height / 2 ? 'before' : 'after');
+    setDragPosition(pos);
+  };
+
+  const handleDragLeave = () => setDragPosition(null);
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const pos = dragPosition;
+    setDragPosition(null);
+    const raw = e.dataTransfer.getData('application/json');
+    if (!raw && (!e.dataTransfer.files || e.dataTransfer.files.length === 0)) return;
+    try {
+      const data = raw ? JSON.parse(raw) : null;
+      onDropItem?.(data, pos || 'inside', e.dataTransfer.files);
+    } catch {}
+  };
+
+  let dragClass = '';
+  if (dragPosition === 'before') dragClass = 'before:absolute before:inset-x-2 before:top-0 before:h-px before:bg-panvas-text-primary';
+  else if (dragPosition === 'after') dragClass = 'before:absolute before:inset-x-2 before:bottom-0 before:h-px before:bg-panvas-text-primary';
+  else if (dragPosition === 'inside') dragClass = 'bg-panvas-bg-hover';
+
+  return (
+    <div
+      ref={ref}
+      role="button"
+      tabIndex={0}
+      onClick={activate}
+      onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activate(); } }}
+      onContextMenu={onContextMenu}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className={`group relative flex h-7 items-center gap-1.5 rounded-md border-l-2 px-2 text-xs transition-colors duration-150 ${active ? 'border-panvas-text-primary bg-panvas-bg-hover text-panvas-text-primary' : 'border-transparent text-panvas-text-secondary hover:bg-panvas-bg-hover'} ${dragClass}`}
+      style={{ paddingLeft: `${depth * 16 + 10}px` }}
+    >
+      {onToggle ? (
+        <button
+          type="button"
+          onClick={event => { event.stopPropagation(); onToggle(); }}
+          className="flex h-4 w-4 items-center justify-center rounded text-panvas-text-tertiary hover:text-panvas-text-primary"
+        >
+          <ChevronRight size={13} className={`transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`} />
+        </button>
       ) : (
-        <span className="truncate flex-1 text-left">{canvas.name}</span>
+        <span className="w-4" />
       )}
-
-      {canvas.isPinned && (
-        <Star size={12} className="flex-shrink-0 text-panvas-accent-amber fill-panvas-accent-amber" />
-      )}
-
+      <span className="flex-shrink-0">{icon}</span>
+      <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+      {badge !== undefined && <span className="text-2xs text-panvas-text-tertiary group-hover:hidden">{badge}</span>}
+      {trailing}
       <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onContextMenu(e.clientX, e.clientY, canvas.id, 'canvas');
-        }}
-        className="btn-icon p-1 opacity-0 group-hover:opacity-100"
+        type="button"
+        onClick={event => { event.stopPropagation(); onContextMenu?.(event); }}
+        className="btn-icon hidden p-1 group-hover:flex"
       >
-        <MoreHorizontal size={14} />
+        <MoreHorizontal size={13} />
       </button>
     </div>
   );
+}
+
+function Collapsible({ open, children }: { open: boolean; children: React.ReactNode }) {
+  return <AnimatePresence>{open && <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.18, ease: 'easeInOut' }} className="overflow-hidden">{children}</motion.div>}</AnimatePresence>;
+}
+
+function TreeEmptyState({ depth, label }: { depth: number; label: string }) {
+  return <div className="h-7 px-2 text-xs italic leading-7 text-panvas-text-tertiary" style={{ paddingLeft: `${depth * 16 + 30}px` }}>{label}</div>;
 }

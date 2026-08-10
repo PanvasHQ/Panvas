@@ -2,9 +2,10 @@
 // Panvas — Landing Page (Marketing)
 // ============================================
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { motion, useScroll, useTransform } from 'framer-motion';
-import { Link } from 'wouter';
+import { Link, useLocation } from 'wouter';
+import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { Footer } from '@/components/layout/Footer';
 import { captureEvent } from '@/lib/analytics';
 import {
@@ -76,17 +77,49 @@ function SectionTexture({ gridOpacity = 0.015, dotOpacity = 0.012 }: { gridOpaci
 export function LandingPage() {
   const { scrollYProgress } = useScroll();
   const y = useTransform(scrollYProgress, [0, 1], [0, 100]);
+  const [, setLocation] = useLocation();
+  const setActiveWorkspace = useWorkspaceStore(state => state.setActiveWorkspace);
+
+  const activeWorkspaceId = useWorkspaceStore(state => state.activeWorkspaceId);
+
+  useEffect(() => {
+    // If the user already has an active workspace, automatically route them to the app
+    if (activeWorkspaceId) {
+      setLocation('/app');
+    }
+  }, [activeWorkspaceId, setLocation]);
+
+  const handleOpenWorkspace = async () => {
+    try {
+      if (window.panvas?.workspace?.openDialog) {
+        const ws = await window.panvas.workspace.openDialog();
+        if (ws) {
+          await useWorkspaceStore.getState().loadWorkspaces();
+          setActiveWorkspace(ws.id);
+          setLocation('/app');
+        }
+      } else {
+        setLocation('/app');
+      }
+    } catch (e) {
+      console.error(e);
+      alert(e instanceof Error ? e.message : 'Failed to open workspace');
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#0D0D0D] text-[#E8E8E8] overflow-x-hidden font-sans">
 
       {/* Navigation */}
-      <nav className="fixed top-0 inset-x-0 h-14 border-b border-white/5 bg-[#0D0D0D]/60 backdrop-blur-2xl backdrop-saturate-150 z-50 flex items-center justify-between px-8">
-        <div className="flex items-center gap-2.5">
-          <img src="/panvas-logo-1.png" alt="Panvas Logo" className="w-7 h-7 rounded-md" />
+      <nav 
+        className="fixed top-0 inset-x-0 h-14 border-b border-white/5 bg-[#0D0D0D]/60 backdrop-blur-2xl backdrop-saturate-150 z-50 flex items-center justify-between pl-8 pr-[150px] select-none"
+        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+      >
+        <div className="flex items-center gap-2.5" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          <img src="./panvas-logo-1.1.png" alt="Panvas Logo" className="w-7 h-7 rounded-md" />
           <span className="font-sketch text-lg text-[#E8E8E8] tracking-wide">Panvas</span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           <Link href={import.meta.env.VITE_MARKETING_ONLY === 'true' ? '/private-beta' : '/auth/login'}>
             <button className="px-4 py-1.5 text-sm font-medium rounded-lg text-[#A3A3A3] hover:text-[#E8E8E8] transition-colors">
               Sign In
@@ -100,14 +133,15 @@ export function LandingPage() {
               Create Account
             </button>
           </Link>
-          <Link href={import.meta.env.VITE_MARKETING_ONLY === 'true' ? '/private-beta' : '/app'}>
             <button 
-              onClick={() => captureEvent('cta_click', { placement: 'nav_start_drawing' })}
+              onClick={() => {
+                captureEvent('cta_click', { placement: 'nav_start_drawing' });
+                handleOpenWorkspace();
+              }}
               className="px-4 py-1.5 text-sm font-medium rounded-lg bg-[#E8E8E8] text-[#0D0D0D] hover:bg-white transition-all duration-200"
             >
               Open Workspace
             </button>
-          </Link>
         </div>
       </nav>
 
@@ -133,7 +167,7 @@ export function LandingPage() {
             className="max-w-md bg-[#0D0D0D]/12 backdrop-blur-2xl backdrop-saturate-[140%] border border-white/8 rounded-2xl p-8 md:p-10 shadow-[0_24px_48px_rgba(0,0,0,0.4)]"
           >
             <div className="flex items-center gap-2.5 mb-6">
-              <img src="/panvas-logo-1.png" alt="Panvas" className="w-10 h-10 rounded-lg border border-white/8" />
+              <img src="./panvas-logo-1.1.png" alt="Panvas" className="w-10 h-10 rounded-lg border border-white/8" />
               <span className="font-sketch text-xl text-[#E8E8E8] tracking-wide">Panvas</span>
             </div>
 
@@ -174,15 +208,16 @@ export function LandingPage() {
               transition={{ duration: 0.8, delay: 0.6 }}
               className="pt-5 border-t border-white/5"
             >
-              <Link href={import.meta.env.VITE_MARKETING_ONLY === 'true' ? '/private-beta' : '/app'}>
                 <button 
-                  onClick={() => captureEvent('cta_click', { placement: 'hero_open_workspace' })}
+                  onClick={() => {
+                    captureEvent('cta_click', { placement: 'hero_open_workspace' });
+                    handleOpenWorkspace();
+                  }}
                   className="flex items-center gap-2.5 px-6 py-3 rounded-xl bg-[#E8E8E8] text-[#0D0D0D] text-sm font-semibold hover:bg-white transition-all group"
                 >
                   Open Workspace
                   <ArrowRight size={16} className="group-hover:translate-x-0.5 transition-transform" />
                 </button>
-              </Link>
             </motion.div>
           </motion.div>
         </div>

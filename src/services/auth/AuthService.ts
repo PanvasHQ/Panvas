@@ -101,6 +101,23 @@ export class AuthService {
     };
   }
 
+  // ---- PKCE Code Exchange ----
+  async exchangeCodeForSession(code: string): Promise<AuthResult> {
+    if (!supabase) {
+      return { user: null, session: null, error: 'Supabase is not configured' };
+    }
+
+    const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+    if (error) {
+      return { user: null, session: null, error: error.message };
+    }
+    return {
+      user: data.session?.user ?? null,
+      session: data.session,
+      error: null,
+    };
+  }
+
   // ---- Forgot Password ----
   async forgotPassword(email: string): Promise<SimpleResult> {
     if (!supabase) {

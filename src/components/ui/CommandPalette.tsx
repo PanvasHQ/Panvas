@@ -15,6 +15,8 @@ import {
   Sigma,
   FileUp,
   Cloud,
+  Clock3,
+  CornerDownRight,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { useUIStore } from '@/stores/uiStore';
@@ -214,11 +216,13 @@ export function CommandPalette() {
           </div>
 
           {/* Results */}
-          <div className="max-h-[320px] overflow-y-auto py-2">
+          <div className="max-h-[380px] overflow-y-auto py-2">
             {filteredCommands.length === 0 ? (
               <div className="px-4 py-8 text-center text-sm text-panvas-text-tertiary">
                 No results found
               </div>
+            ) : !query.trim() ? (
+              <CommandPaletteHome commands={commands} selectedIndex={selectedIndex} setSelectedIndex={setSelectedIndex} />
             ) : (
               Object.entries(groupedCommands).map(([category, items]) => (
                 <div key={category}>
@@ -268,4 +272,23 @@ export function CommandPalette() {
       </div>
     </AnimatePresence>
   );
+}
+
+function CommandPaletteHome({ commands, selectedIndex, setSelectedIndex }: { commands: CommandItem[]; selectedIndex: number; setSelectedIndex: (index: number) => void }) {
+  const quickActions = commands.filter(command => command.category === 'Actions');
+  const files = commands.filter(command => command.category === 'Files').slice(0, 4);
+  return <>
+    <PaletteHint icon={<Clock3 size={14} />} title="Recent Searches" description="Your recent searches will appear here." />
+    <PaletteSection title="Quick Actions" items={quickActions} allItems={commands} selectedIndex={selectedIndex} setSelectedIndex={setSelectedIndex} />
+    <PaletteSection title="Jump To" items={files} allItems={commands} selectedIndex={selectedIndex} setSelectedIndex={setSelectedIndex} empty="Create a canvas to jump between work." />
+    <PaletteSection title="Recently Opened" items={files} allItems={commands} selectedIndex={selectedIndex} setSelectedIndex={setSelectedIndex} empty="Recently opened items will appear here." />
+  </>;
+}
+
+function PaletteHint({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
+  return <div className="mx-2 mb-2 flex items-center gap-3 rounded-lg border border-dashed border-panvas-border-subtle px-3 py-3 text-xs text-panvas-text-tertiary"><span>{icon}</span><div><div className="font-medium text-panvas-text-secondary">{title}</div><div className="mt-0.5 text-2xs">{description}</div></div></div>;
+}
+
+function PaletteSection({ title, items, allItems, selectedIndex, setSelectedIndex, empty }: { title: string; items: CommandItem[]; allItems: CommandItem[]; selectedIndex: number; setSelectedIndex: (index: number) => void; empty?: string }) {
+  return <div className="mb-2"><div className="px-4 py-1.5 text-2xs font-medium uppercase tracking-[0.12em] text-panvas-text-tertiary">{title}</div>{items.length === 0 && empty ? <div className="px-4 py-2 text-xs text-panvas-text-tertiary">{empty}</div> : items.map(item => { const index = allItems.indexOf(item); return <button key={`${title}-${item.id}`} onClick={item.action} onMouseEnter={() => setSelectedIndex(index)} className={`flex w-full items-center gap-3 px-4 py-2 text-left text-sm transition-colors ${index === selectedIndex ? 'bg-panvas-bg-hover text-panvas-text-primary' : 'text-panvas-text-secondary hover:bg-panvas-bg-hover/50'}`}><span className="flex w-5 flex-shrink-0 justify-center">{item.icon}</span><span className="min-w-0 flex-1 truncate">{item.label}</span>{item.shortcut ? <kbd className="rounded border border-panvas-border-subtle bg-panvas-bg-tertiary px-1.5 py-0.5 text-2xs text-panvas-text-tertiary">{item.shortcut}</kbd> : <CornerDownRight size={13} className="text-panvas-text-tertiary" />}</button>; })}</div>;
 }

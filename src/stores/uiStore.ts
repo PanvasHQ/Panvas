@@ -3,6 +3,7 @@
 // ============================================
 
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 
 interface UIState {
   // Sidebar
@@ -19,9 +20,9 @@ interface UIState {
 
   // Modals
   isCreateDialogOpen: boolean;
-  createDialogType: 'workspace' | 'folder' | 'canvas' | null;
+  createDialogType: 'workspace' | 'folder' | 'notebook' | 'section' | 'page' | 'canvas' | null;
   createDialogParentId: string | null;
-  openCreateDialog: (type: 'workspace' | 'folder' | 'canvas', parentId?: string | null) => void;
+  openCreateDialog: (type: 'workspace' | 'folder' | 'notebook' | 'section' | 'page' | 'canvas', parentId?: string | null) => void;
   closeCreateDialog: () => void;
 
   // Context menu
@@ -30,9 +31,9 @@ interface UIState {
     x: number;
     y: number;
     targetId: string | null;
-    targetType: 'workspace' | 'folder' | 'canvas' | null;
+    targetType: 'workspace' | 'folder' | 'notebook' | 'section' | 'page' | 'canvas' | null;
   };
-  openContextMenu: (x: number, y: number, targetId: string, targetType: 'workspace' | 'folder' | 'canvas') => void;
+  openContextMenu: (x: number, y: number, targetId: string, targetType: 'workspace' | 'folder' | 'notebook' | 'section' | 'page' | 'canvas') => void;
   closeContextMenu: () => void;
 
   // Rename
@@ -43,9 +44,24 @@ interface UIState {
   toast: { message: string; type: 'info' | 'success' | 'error' } | null;
   showToast: (message: string, type?: 'info' | 'success' | 'error') => void;
   clearToast: () => void;
+
+  // Theme
+  theme: 'dark' | 'light' | 'ink';
+  setTheme: (theme: 'dark' | 'light' | 'ink') => void;
+
+  // New UI states
+  // Deprecated: use layoutStore instead
+  // isFullscreen: boolean;
+  // toggleFullscreen: () => void;
+  isPropertiesPanelOpen: boolean;
+  togglePropertiesPanel: () => void;
+  isToolbarExpanded: boolean;
+  toggleToolbar: () => void;
 }
 
-export const useUIStore = create<UIState>((set, get) => ({
+export const useUIStore = create<UIState>()(
+  persist(
+    (set, get) => ({
   // Sidebar
   isSidebarOpen: true,
   sidebarWidth: 280,
@@ -105,4 +121,38 @@ export const useUIStore = create<UIState>((set, get) => ({
     }, 3000);
   },
   clearToast: () => set({ toast: null }),
+
+  // Theme
+  theme: (localStorage.getItem('panvas-theme') as 'dark' | 'light' | 'ink') || 'dark',
+  setTheme: (theme) => {
+    localStorage.setItem('panvas-theme', theme);
+    set({ theme });
+    
+    // Apply theme to document
+    const html = document.documentElement;
+    html.classList.remove('dark', 'theme-ink');
+    if (theme === 'dark') html.classList.add('dark');
+    if (theme === 'ink') html.classList.add('theme-ink');
+
+    if (typeof window !== 'undefined' && window.panvas?.settings?.setTheme) {
+      window.panvas.settings.setTheme(theme);
+    }
+  },
+
+  // New UI States
+  // isFullscreen: false,
+  // toggleFullscreen: () => set(s => ({ isFullscreen: !s.isFullscreen })),
+  isPropertiesPanelOpen: true,
+  togglePropertiesPanel: () => set(s => ({ isPropertiesPanelOpen: !s.isPropertiesPanelOpen })),
+  isToolbarExpanded: true,
+  toggleToolbar: () => set(s => ({ isToolbarExpanded: !s.isToolbarExpanded })),
+}),
+{
+  name: 'panvas-ui-store',
+  partialize: (state) => ({
+    isSidebarOpen: state.isSidebarOpen,
+    sidebarWidth: state.sidebarWidth,
+    isPropertiesPanelOpen: state.isPropertiesPanelOpen,
+    isToolbarExpanded: state.isToolbarExpanded,
+  }),
 }));

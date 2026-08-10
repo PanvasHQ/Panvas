@@ -18,9 +18,29 @@ export function AuthCallbackHandler() {
 
     async function handleCallback() {
       try {
-        // Supabase handles the URL hash parsing automatically when detectSessionInUrl is true
-        // We just need to check if a session was established
-        const result = await authService.handleOAuthCallback();
+        const params = new URLSearchParams(window.location.search);
+        const code = params.get('code');
+        const urlError = params.get('error');
+        const urlErrorDescription = params.get('error_description');
+
+        // 1. Immediately catch and surface backend/provider errors sent in the URL
+        if (urlError) {
+          const errorMessage = urlErrorDescription ? urlErrorDescription.replace(/\+/g, ' ') : urlError;
+          setError(errorMessage);
+          return;
+        }
+
+        if (!mounted) return;
+
+        let result;
+
+        // 2. If a PKCE code is present, explicitly exchange it
+        if (code) {
+          result = await authService.exchangeCodeForSession(code);
+        } else {
+          // Fallback (e.g., Implicit flow or auto-exchanged session)
+          result = await authService.handleOAuthCallback();
+        }
         
         if (!mounted) return;
 

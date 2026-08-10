@@ -200,16 +200,60 @@ export async function getLastSyncError(): Promise<string | null> {
  * requiring components to know anything about cloud state.
  */
 export async function queueLocalSnapshotForSync(userId: string): Promise<void> {
-  const workspaces = await db.workspaces
+  let workspaces = await db.workspaces
     .filter(item => item.deletedAt === null || item.deletedAt === undefined)
     .toArray();
-  const folders = await db.folders
+  let folders = await db.folders
     .filter(item => item.deletedAt === null || item.deletedAt === undefined)
     .toArray();
-  const canvasFiles = await db.canvasFiles
+  let canvasFiles = await db.canvasFiles
     .filter(item => item.deletedAt === null || item.deletedAt === undefined)
     .toArray();
-  const canvasData = await db.canvasData.toArray();
+  let canvasData = await db.canvasData.toArray();
+
+  // DE-DUPLICATION LOGIC:
+  // If the user already has cloud workspaces (they are an existing user),
+  // we must purge the local `isSystem` default workspace to prevent it from
+  // being adopted and synced to the cloud, causing duplicates.
+  const hasCloudWorkspaces = workspaces.some(ws => ws.userId === userId && ws.syncStatus === 'synced');
+  
+  if (hasCloudWorkspaces) {
+    const systemWorkspaces = workspaces.filter(ws => ws.userId === null && ws.isSystem === true);
+    for (const sysWs of systemWorkspaces) {
+      // Check if the user drew anything on the local system canvases before logging in
+      let hasUserDrawings = false;
+      const sysCanvases = canvasFiles.filter(cf => cf.workspaceId === sysWs.id);
+      for (const sc of sysCanvases) {
+        const cd = canvasData.find(d => d.canvasFileId === sc.id);
+        if (cd && cd.elements && cd.elements.length > 0) {
+          hasUserDrawings = true;
+          break;
+        }
+      }
+
+      // Only purge if it's completely untouched. If they drew something, we adopt it so they don't lose work.
+      if (!hasUserDrawings) {
+        console.log('[SyncEngine] Purging untouched local system workspace to prevent duplication.');
+        await db.workspaces.delete(sysWs.id);
+        for (const sc of sysCanvases) {
+          await db.canvasFiles.delete(sc.id);
+          await db.canvasData.delete(sc.id);
+        }
+      }
+    }
+
+    // Refresh memory arrays after potential purge
+    workspaces = await db.workspaces
+      .filter(item => item.deletedAt === null || item.deletedAt === undefined)
+      .toArray();
+    folders = await db.folders
+      .filter(item => item.deletedAt === null || item.deletedAt === undefined)
+      .toArray();
+    canvasFiles = await db.canvasFiles
+      .filter(item => item.deletedAt === null || item.deletedAt === undefined)
+      .toArray();
+    canvasData = await db.canvasData.toArray();
+  }
 
   for (const workspace of workspaces) {
     if (workspace.userId === null || (workspace.userId === userId && workspace.syncStatus !== 'synced')) {
@@ -291,6 +335,7 @@ async function syncWorkspace(item: SyncQueueItem, userId: string) {
       color: data.color || null,
       created_at: new Date(data.createdAt ?? data.updatedAt).toISOString(),
       updated_at: new Date(data.updatedAt).toISOString(),
+      deleted_at: data.deletedAt ? new Date(data.deletedAt).toISOString() : null,
     }));
   }
 }
@@ -305,13 +350,14 @@ async function syncFolder(item: SyncQueueItem, userId: string) {
     assertSupabaseSuccess(await supabase.from('folders').upsert({
       id: item.entityId,
       workspace_id: data.workspaceId,
-      parent_id: data.parentId,
+      parent_id: data.parentId || null,
       user_id: userId,
       name: data.name,
-      sort_order: data.order,
-      is_expanded: data.isExpanded,
+      sort_order: data.order ?? 0,
+      is_expanded: data.isExpanded ?? true,
       created_at: new Date(data.createdAt ?? data.updatedAt).toISOString(),
       updated_at: new Date(data.updatedAt).toISOString(),
+      deleted_at: data.deletedAt ? new Date(data.deletedAt).toISOString() : null,
     }));
   }
 }
@@ -326,14 +372,15 @@ async function syncCanvasFile(item: SyncQueueItem, userId: string) {
     assertSupabaseSuccess(await supabase.from('canvas_files').upsert({
       id: item.entityId,
       workspace_id: data.workspaceId,
-      folder_id: data.folderId,
+      folder_id: data.folderId || null,
       user_id: userId,
       name: data.name,
-      is_pinned: data.isPinned,
-      sort_order: data.order,
+      is_pinned: data.isPinned ?? false,
+      sort_order: data.order ?? 0,
       created_at: new Date(data.createdAt ?? data.updatedAt).toISOString(),
       updated_at: new Date(data.updatedAt).toISOString(),
-      last_opened_at: new Date(data.lastOpenedAt).toISOString(),
+      last_opened_at: new Date(data.lastOpenedAt ?? data.updatedAt).toISOString(),
+      deleted_at: data.deletedAt ? new Date(data.deletedAt).toISOString() : null,
     }));
   }
 }
@@ -446,7 +493,7 @@ export async function pullFromCloud(userId: string): Promise<void> {
           updatedAt: new Date(ws.updated_at).getTime(),
           syncStatus: 'synced',
           userId,
-          deletedAt: null,
+          deletedAt: ws.deleted_at ? new Date(ws.deleted_at).getTime() : null,
         });
       }
     }
@@ -475,7 +522,7 @@ export async function pullFromCloud(userId: string): Promise<void> {
           updatedAt: new Date(f.updated_at).getTime(),
           syncStatus: 'synced',
           userId,
-          deletedAt: null,
+          deletedAt: f.deleted_at ? new Date(f.deleted_at).getTime() : null,
         });
       }
     }
@@ -505,7 +552,7 @@ export async function pullFromCloud(userId: string): Promise<void> {
           lastOpenedAt: new Date(cf.last_opened_at).getTime(),
           syncStatus: 'synced',
           userId,
-          deletedAt: null,
+          deletedAt: cf.deleted_at ? new Date(cf.deleted_at).getTime() : null,
         });
       }
     }

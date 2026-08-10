@@ -46,12 +46,16 @@ export class SyncScheduler {
     if (!user) return; // Must be logged in
 
     const syncStore = useSyncStore.getState();
-    const pendingCount = await getPendingCount();
-
-    if (pendingCount === 0) return; // Nothing to sync
 
     try {
       this.isProcessing = true;
+      
+      const pendingCount = await getPendingCount();
+      if (pendingCount === 0) {
+        this.isProcessing = false;
+        return; // Nothing to sync
+      }
+
       syncStore.setStatus('syncing');
 
       const { failed } = await processSyncQueue(user.id);
@@ -70,8 +74,12 @@ export class SyncScheduler {
       syncStore.setLastError(err instanceof Error ? err.message : String(err));
     } finally {
       this.isProcessing = false;
-      // Update pending count
-      syncStore.setPendingChanges(await getPendingCount());
+      // Update pending count safely
+      try {
+        syncStore.setPendingChanges(await getPendingCount());
+      } catch (e) {
+        // Ignore quota/db errors here
+      }
     }
   }
 

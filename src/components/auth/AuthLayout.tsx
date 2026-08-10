@@ -67,7 +67,7 @@ export function AuthLayout({ children, title, subtitle }: AuthLayoutProps) {
               className="flex items-center gap-3 cursor-pointer group"
             >
               <img 
-                src="/panvas-logo-1.png" 
+                src="./panvas-logo-1.1.png" 
                 alt="Panvas" 
                 className="w-9 h-9 rounded-lg border border-white/8 group-hover:border-white/15 transition-colors" 
               />
@@ -137,7 +137,7 @@ export function AuthLayout({ children, title, subtitle }: AuthLayoutProps) {
         <div className="lg:hidden p-6 pb-0">
           <Link href="/">
             <div className="flex items-center gap-2.5 cursor-pointer">
-              <img src="/panvas-logo-1.png" alt="Panvas" className="w-7 h-7 rounded-md border border-white/8" />
+              <img src="./panvas-logo-1.1.png" alt="Panvas" className="w-7 h-7 rounded-md border border-white/8" />
               <span className="font-sketch text-lg text-[#E8E8E8] tracking-wide">Panvas</span>
             </div>
           </Link>

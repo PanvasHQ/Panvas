@@ -7,6 +7,92 @@
    ============================================ */
 
 @layer base {
+  :root {
+    /* LIGHT THEME */
+    --bg-primary: 255 255 255;
+    --bg-secondary: 249 250 251;
+    --bg-tertiary: 243 244 246;
+    --bg-elevated: 255 255 255;
+    --bg-hover: 243 244 246;
+    --bg-active: 229 231 235;
+    --border-subtle: 0 0 0;
+    --border-default: 229 231 235;
+    --border-strong: 0 0 0;
+    --text-primary: 17 24 39;
+    --text-secondary: 75 85 99;
+    --text-tertiary: 107 114 128;
+    --text-accent: 17 24 39;
+    --accent-violet: 124 58 237;
+    --accent-violet-light: 139 92 246;
+    --accent-blue: 59 130 246;
+    --accent-emerald: 16 185 129;
+    --accent-amber: 245 158 11;
+    --accent-rose: 244 63 94;
+    --glass-bg: 255 255 255;
+    --glass-border: 229 231 235;
+  }
+
+  .dark {
+    /* DARK THEME */
+    --bg-primary: 13 13 13;
+    --bg-secondary: 18 18 18;
+    --bg-tertiary: 26 26 26;
+    --bg-elevated: 34 34 34;
+    --bg-hover: 23 23 23;
+    --bg-active: 38 38 38;
+    --border-subtle: 255 255 255;
+    --border-default: 38 38 38;
+    --border-strong: 255 255 255;
+    --text-primary: 245 245 245;
+    --text-secondary: 163 163 163;
+    --text-tertiary: 115 115 115;
+    --text-accent: 245 245 245;
+    --accent-violet: 139 92 246;
+    --accent-violet-light: 167 139 250;
+    --accent-blue: 59 130 246;
+    --accent-emerald: 16 185 129;
+    --accent-amber: 245 158 11;
+    --accent-rose: 244 63 94;
+    --glass-bg: 18 18 18;
+    --glass-border: 38 38 38;
+  }
+
+  .theme-ink {
+    /* INK THEME (Warm paper) */
+    --bg-primary: 247 244 235;
+    --bg-secondary: 239 235 223;
+    --bg-tertiary: 232 227 211;
+    --bg-elevated: 255 253 245;
+    --bg-hover: 232 227 211;
+    --bg-active: 223 217 199;
+    --border-subtle: 60 50 40;
+    --border-default: 60 50 40;
+    --border-strong: 60 50 40;
+    --text-primary: 60 50 40;
+    --text-secondary: 90 78 66;
+    --text-tertiary: 120 108 92;
+    --text-accent: 60 50 40;
+    --accent-violet: 98 72 156;
+    --accent-violet-light: 119 92 178;
+    --accent-blue: 64 104 168;
+    --accent-emerald: 58 131 92;
+    --accent-amber: 178 117 34;
+    --accent-rose: 172 65 86;
+    --glass-bg: 247 244 235;
+    --glass-border: 60 50 40;
+  }
+
+  /* ============================================
+   EXCALIDRAW CUSTOMIZATIONS
+   ============================================ */
+  .panvas-excalidraw-wrapper .App-toolbar {
+    display: none !important; /* Hides top toolbar */
+  }
+  /* We keep the properties panel and library open if we want, or we can hide them all: */
+  .panvas-excalidraw-wrapper .layer-ui__wrapper .App-menu_top {
+    display: none !important;
+  }
+
   * {
     @apply border-panvas-border-subtle;
   }
@@ -69,7 +155,10 @@
 
   /* Focus ring */
   .focus-ring {
-    @apply focus:outline-none focus:ring-2 focus:ring-panvas-accent-violet/40 focus:ring-offset-0;
+    @apply focus:outline-none focus:ring-offset-0;
+  }
+  .focus-ring:focus {
+    box-shadow: 0 0 0 2px rgba(var(--accent-violet), 0.4);
   }
 
   /* Gradient text */
@@ -102,8 +191,11 @@
     @apply w-full px-3 py-2 rounded-lg
            bg-panvas-bg-primary border border-panvas-border-default
            text-panvas-text-primary text-sm placeholder:text-panvas-text-tertiary
-           focus:border-panvas-accent-violet/50 focus:ring-1 focus:ring-panvas-accent-violet/30
            focus:outline-none transition-all duration-200;
+  }
+  .input-field:focus {
+    border-color: rgba(var(--accent-violet), 0.5);
+    box-shadow: 0 0 0 1px rgba(var(--accent-violet), 0.3);
   }
 
   /* Tooltip */
@@ -218,7 +310,8 @@
 }
 
 .markdown-content blockquote {
-  @apply pl-4 border-l-2 border-panvas-accent-violet/50 text-panvas-text-secondary italic my-2;
+  @apply pl-4 border-l-2 text-panvas-text-secondary italic my-2;
+  border-color: rgba(var(--accent-violet), 0.5);
 }
 
 .markdown-content a {
@@ -249,8 +342,42 @@
   @apply text-panvas-text-secondary italic;
 }
 
-/* PDF block styles */
 .pdf-container canvas {
   @apply rounded-lg;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+}
+
+/* TipTap Editor Styles */
+.ProseMirror p.is-editor-empty:first-child::before {
+  color: #adb5bd;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+.prose pre {
+  background-color: rgba(var(--bg-secondary), 1) !important;
+  color: rgba(var(--text-primary), 1) !important;
+  border: 1px solid rgba(var(--border-default), 1);
+  border-radius: 0.375rem;
+  padding: 1rem;
+  margin-top: 1rem;
+  margin-bottom: 1rem;
+}
+
+.prose pre code {
+  background-color: transparent !important;
+  color: inherit !important;
+  border-width: 0;
+  padding: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.prose code {
+  background-color: rgba(var(--bg-secondary), 1);
+  color: rgba(var(--text-accent), 1);
+  border: 1px solid rgba(var(--border-subtle), 1);
+  border-radius: 0.25rem;
+  padding: 0.125rem 0.25rem;
 }

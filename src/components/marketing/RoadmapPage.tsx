@@ -61,7 +61,7 @@ export function RoadmapPage() {
       {/* Top Nav */}
       <nav className="fixed top-0 inset-x-0 h-16 border-b border-white/5 bg-[#050505]/80 backdrop-blur-2xl z-50 flex items-center justify-between px-8">
         <Link href="/" className="flex items-center gap-2.5 group cursor-pointer">
-          <img src="/panvas-logo-1.png" alt="Panvas Logo" className="w-8 h-8 rounded-lg shadow-glass-sm group-hover:scale-105 transition-transform" />
+          <img src="./panvas-logo-1.1.png" alt="Panvas Logo" className="w-8 h-8 rounded-lg shadow-glass-sm group-hover:scale-105 transition-transform" />
           <span className="font-sketch text-xl tracking-tight text-[#E8E8E8] group-hover:text-white transition-colors">
             Panvas
           </span>

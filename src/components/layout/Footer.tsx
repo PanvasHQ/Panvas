@@ -47,7 +47,7 @@ export function Footer() {
           {/* Brand Column */}
           <div className="col-span-2 lg:col-span-2 flex flex-col items-start">
             <Link href="/" className="flex items-center gap-2.5 mb-4 group cursor-pointer select-none">
-              <img src="/panvas-logo-1.png" alt="Panvas" className="w-7 h-7 rounded-md border border-white/5 shadow-[0_4px_12px_rgba(0,0,0,0.5)] group-hover:scale-105 transition-transform" />
+              <img src="./panvas-logo-1.1.png" alt="Panvas" className="w-7 h-7 rounded-md border border-white/5 shadow-[0_4px_12px_rgba(0,0,0,0.5)] group-hover:scale-105 transition-transform" />
               <span className="font-sketch text-xl text-[#E8E8E8] tracking-wide group-hover:text-white transition-colors">
                 Panvas
               </span>

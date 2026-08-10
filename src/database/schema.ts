@@ -5,8 +5,10 @@
 
 import Dexie, { type Table } from 'dexie';
 import type { Workspace, Folder, CanvasFile } from '@/types/workspace';
-import type { CanvasData, CustomBlock, PdfFileData } from '@/types/canvas';
+import type { CanvasData, CustomBlock, PdfFileData, ImageFileData } from '@/types/canvas';
 import type { SyncQueueItem } from '@/types/sync';
+import type { Notebook, NotebookSection, NotebookPage } from '@/types/notebook';
+import type { PdfAnnotation } from '@/types/pdfAnnotation';
 import { generateId } from '@/lib/utils/id';
 
 export class PanvasDB extends Dexie {
@@ -17,6 +19,10 @@ export class PanvasDB extends Dexie {
   customBlocks!: Table<CustomBlock>;
   pdfFiles!: Table<PdfFileData>;
   syncQueue!: Table<SyncQueueItem>;
+  notebooks!: Table<Notebook>;
+  notebookSections!: Table<NotebookSection>;
+  notebookPages!: Table<NotebookPage>;
+  imageFiles!: Table<ImageFileData>;
 
   constructor() {
     super('panvas');
@@ -99,6 +105,21 @@ export class PanvasDB extends Dexie {
           pdf.userId = canvasMap.get(pdf.canvasFileId) ?? null;
         }
       });
+    });
+
+    // Version 4: Add notebooks and imageFiles tables
+    this.version(4).stores({
+      workspaces: 'id, name, updatedAt, isPinned, syncStatus, userId',
+      folders: 'id, workspaceId, parentId, order, syncStatus, userId',
+      canvasFiles: 'id, workspaceId, folderId, updatedAt, lastOpenedAt, isPinned, syncStatus, userId',
+      canvasData: 'canvasFileId, userId',
+      customBlocks: 'id, canvasFileId, type, userId',
+      pdfFiles: 'id, canvasFileId, userId',
+      syncQueue: '++id, entityType, entityId, status, createdAt',
+      notebooks: 'id, workspaceId, folderId, order, updatedAt, userId',
+      notebookSections: 'id, notebookId, order, updatedAt, userId',
+      notebookPages: 'id, notebookId, sectionId, order, updatedAt, userId',
+      imageFiles: 'id, canvasFileId, userId',
     });
   }
 }

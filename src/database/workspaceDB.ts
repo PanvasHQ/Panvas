@@ -75,7 +75,26 @@ export async function getAllWorkspaces(userId: string | null): Promise<Workspace
 
 export async function getWorkspaceById(userId: string | null, id: string): Promise<Workspace | undefined> {
   const ws = await db.workspaces.get(id);
+  return ws?.userId === userId && !ws.deletedAt ? ws : undefined;
+}
+
+export async function getAnyWorkspaceById(userId: string | null, id: string): Promise<Workspace | undefined> {
+  const ws = await db.workspaces.get(id);
   return ws?.userId === userId ? ws : undefined;
+}
+
+export async function restoreWorkspace(id: string): Promise<void> {
+  await db.transaction('rw', [db.workspaces, db.folders, db.canvasFiles], async () => {
+    await db.workspaces.update(id, { deletedAt: null, updatedAt: Date.now(), syncStatus: 'pending' });
+    const canvases = await db.canvasFiles.where('workspaceId').equals(id).toArray();
+    for (const canvas of canvases) {
+      if (canvas.deletedAt) await db.canvasFiles.update(canvas.id, { deletedAt: null, updatedAt: Date.now(), syncStatus: 'pending' });
+    }
+    const folders = await db.folders.where('workspaceId').equals(id).toArray();
+    for (const folder of folders) {
+      if (folder.deletedAt) await db.folders.update(folder.id, { deletedAt: null, updatedAt: Date.now(), syncStatus: 'pending' });
+    }
+  });
 }
 
 // ---- Folders ----
@@ -105,6 +124,21 @@ export async function createFolder(userId: string | null, workspaceId: string, p
 
 export async function renameFolder(id: string, name: string): Promise<void> {
   await db.folders.update(id, { name, updatedAt: Date.now(), syncStatus: 'pending' });
+}
+
+export async function moveFolder(id: string, newWorkspaceId: string, newParentId: string | null = null): Promise<void> {
+  // We must move the folder AND all its children (canvases & notebooks) to the new workspace/parent
+  await db.transaction('rw', [db.folders, db.canvasFiles, db.notebooks], async () => {
+    await db.folders.update(id, { workspaceId: newWorkspaceId, parentId: newParentId, updatedAt: Date.now(), syncStatus: 'pending' });
+    const canvases = await db.canvasFiles.where('folderId').equals(id).toArray();
+    for (const canvas of canvases) {
+      await db.canvasFiles.update(canvas.id, { workspaceId: newWorkspaceId, updatedAt: Date.now(), syncStatus: 'pending' });
+    }
+    const notebooks = await db.notebooks.where('folderId').equals(id).toArray();
+    for (const notebook of notebooks) {
+      await db.notebooks.update(notebook.id, { workspaceId: newWorkspaceId, updatedAt: Date.now() });
+    }
+  });
 }
 
 export async function deleteFolder(id: string, soft = true): Promise<void> {
@@ -152,6 +186,31 @@ export async function getFoldersByWorkspace(userId: string | null, workspaceId: 
     .where('workspaceId').equals(workspaceId)
     .filter(f => f.userId === userId && (f.deletedAt === null || f.deletedAt === undefined))
     .sortBy('order');
+}
+
+export async function getAllFolders(userId: string | null): Promise<Folder[]> {
+  return db.folders
+    .filter(f => f.userId === userId && (f.deletedAt === null || f.deletedAt === undefined))
+    .sortBy('order');
+}
+
+export async function getAnyFolderById(userId: string | null, id: string): Promise<Folder | undefined> {
+  const f = await db.folders.get(id);
+  return f?.userId === userId ? f : undefined;
+}
+
+export async function restoreFolder(id: string): Promise<void> {
+  await db.transaction('rw', [db.folders, db.canvasFiles], async () => {
+    await db.folders.update(id, { deletedAt: null, updatedAt: Date.now(), syncStatus: 'pending' });
+    const subfolders = await db.folders.where('parentId').equals(id).toArray();
+    for (const sub of subfolders) {
+      if (sub.deletedAt) await db.folders.update(sub.id, { deletedAt: null, updatedAt: Date.now(), syncStatus: 'pending' });
+    }
+    const canvases = await db.canvasFiles.where('folderId').equals(id).toArray();
+    for (const canvas of canvases) {
+      if (canvas.deletedAt) await db.canvasFiles.update(canvas.id, { deletedAt: null, updatedAt: Date.now(), syncStatus: 'pending' });
+    }
+  });
 }
 
 // ---- Canvas Files ----
@@ -214,6 +273,17 @@ export async function getCanvasFilesByWorkspace(userId: string | null, workspace
     .sortBy('order');
 }
 
+export async function getAnyCanvasFileById(userId: string | null, id: string): Promise<CanvasFile | undefined> {
+  const cf = await db.canvasFiles.get(id);
+  return cf?.userId === userId ? cf : undefined;
+}
+
+export async function getAllCanvasFiles(userId: string | null): Promise<CanvasFile[]> {
+  return db.canvasFiles
+    .filter(c => c.userId === userId && (c.deletedAt === null || c.deletedAt === undefined))
+    .sortBy('order');
+}
+
 export async function getCanvasFilesByFolder(userId: string | null, workspaceId: string, folderId: string | null): Promise<CanvasFile[]> {
   if (folderId) {
     return db.canvasFiles
@@ -248,6 +318,58 @@ export async function togglePinCanvas(id: string): Promise<void> {
   }
 }
 
+export async function moveCanvasFile(id: string, newWorkspaceId: string, newFolderId: string | null): Promise<void> {
+  await db.canvasFiles.update(id, { workspaceId: newWorkspaceId, folderId: newFolderId, updatedAt: Date.now(), syncStatus: 'pending' });
+}
+
+export async function duplicateCanvasFile(userId: string | null, originalId: string): Promise<CanvasFile | null> {
+  const originalCanvas = await db.canvasFiles.get(originalId);
+  const originalData = await db.canvasData.get(originalId);
+  const originalBlocks = await db.customBlocks.where('canvasFileId').equals(originalId).toArray();
+
+  if (!originalCanvas || !originalData) return null;
+
+  const now = Date.now();
+  const newCanvas: CanvasFile = {
+    ...originalCanvas,
+    id: generateId('canvas'),
+    name: `${originalCanvas.name} (Copy)`,
+    createdAt: now,
+    updatedAt: now,
+    lastOpenedAt: now,
+    syncStatus: userId ? 'pending' : 'local',
+  };
+
+  const newData: typeof originalData = {
+    ...originalData,
+    canvasFileId: newCanvas.id,
+    version: 1,
+    updatedAt: now,
+  };
+
+  await db.transaction('rw', [db.canvasFiles, db.canvasData, db.customBlocks], async () => {
+    await db.canvasFiles.add(newCanvas);
+    await db.canvasData.add(newData);
+    
+    for (const block of originalBlocks) {
+      const newBlock = {
+        ...block,
+        id: generateId('block'),
+        canvasFileId: newCanvas.id,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await db.customBlocks.add(newBlock);
+    }
+  });
+
+  return newCanvas;
+}
+
+export async function restoreCanvasFile(id: string): Promise<void> {
+  await db.canvasFiles.update(id, { deletedAt: null, updatedAt: Date.now(), syncStatus: 'pending' });
+}
+
 // ---- Purge soft-deleted items (call after sync confirms deletion) ----
 
 export async function purgeSoftDeleted(): Promise<void> {
@@ -267,4 +389,18 @@ export async function purgeSoftDeleted(): Promise<void> {
       await db.workspaces.delete(ws.id);
     }
   });
+}
+
+export async function getDeletedItems(userId: string | null): Promise<{ workspaces: Workspace[], folders: Folder[], canvasFiles: CanvasFile[] }> {
+  const workspaces = await db.workspaces
+    .filter(ws => ws.userId === userId && ws.deletedAt !== null && ws.deletedAt !== undefined)
+    .toArray();
+  const folders = await db.folders
+    .filter(f => f.userId === userId && f.deletedAt !== null && f.deletedAt !== undefined)
+    .toArray();
+  const canvasFiles = await db.canvasFiles
+    .filter(c => c.userId === userId && c.deletedAt !== null && c.deletedAt !== undefined)
+    .toArray();
+  
+  return { workspaces, folders, canvasFiles };
 }
