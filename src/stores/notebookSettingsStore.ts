@@ -53,9 +53,9 @@ export const useNotebookSettingsStore = create<NotebookSettingsState>((set) => (
     set({ margins });
     settingsRepository.set('notebook_margins', margins);
   },
-  setScrollDirection: (scrollDirection) => {
-    set({ scrollDirection });
-    settingsRepository.set('notebook_scrollDirection', scrollDirection);
+  setScrollDirection: (scrollDirection: ScrollDirection) => {
+    set({ scrollDirection: 'vertical' });
+    settingsRepository.set('notebook_scrollDirection', 'vertical');
   },
   loadSettings: async () => {
     const paperColor = await settingsRepository.get('notebook_paperColor');

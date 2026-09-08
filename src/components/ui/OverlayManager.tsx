@@ -25,66 +25,70 @@ export function OverlayManager({
     if (!isOpen) return;
 
     const updatePosition = () => {
-      if (!anchorRef.current || !overlayRef.current) return;
+      const anchor = anchorRef.current;
+      const overlay = overlayRef.current;
+      if (!anchor || !overlay) return;
       
-      const anchorRect = anchorRef.current.getBoundingClientRect();
-      const overlayRect = overlayRef.current.getBoundingClientRect();
+      const anchorRect = anchor.getBoundingClientRect();
+      const overlayRect = overlay.getBoundingClientRect();
       const viewportWidth = window.innerWidth;
       const viewportHeight = window.innerHeight;
+      const viewportPadding = 12;
 
       let top = 0;
       let left = 0;
 
-      // Vertical placement
-      if (placement.startsWith('bottom')) {
+      const overlayHeight = Math.min(overlayRect.height, viewportHeight - viewportPadding * 2);
+      const overlayWidth = Math.min(overlayRect.width, viewportWidth - viewportPadding * 2);
+      const spaceBelow = viewportHeight - anchorRect.bottom - offset.y - viewportPadding;
+      const spaceAbove = anchorRect.top - offset.y - viewportPadding;
+      const prefersBottom = placement.startsWith('bottom');
+      const shouldOpenBelow = prefersBottom
+        ? spaceBelow >= overlayHeight || spaceBelow >= spaceAbove
+        : !(spaceAbove >= overlayHeight || spaceAbove > spaceBelow);
+
+      // Choose the side with enough room where possible. For panels taller
+      // than either side, prefer the larger side and clamp them to the
+      // viewport. This prevents settings panels from flipping above the page
+      // and becoming inaccessible when opened near the top of a document.
+      if (shouldOpenBelow) {
         top = anchorRect.bottom + offset.y;
-        // Flip to top if not enough space below
-        if (top + overlayRect.height > viewportHeight) {
-          top = anchorRect.top - overlayRect.height - offset.y;
-        }
       } else {
         top = anchorRect.top - overlayRect.height - offset.y;
-        // Flip to bottom if not enough space above
-        if (top < 0) {
-          top = anchorRect.bottom + offset.y;
-        }
       }
+      top = Math.max(viewportPadding, Math.min(top, viewportHeight - overlayHeight - viewportPadding));
 
       // Horizontal placement
       if (placement.endsWith('start')) {
         left = anchorRect.left + offset.x;
-        // Shift if overflowing right
-        if (left + overlayRect.width > viewportWidth) {
-          left = Math.max(10, viewportWidth - overlayRect.width - 10);
-        }
       } else {
         left = anchorRect.right - overlayRect.width + offset.x;
-        // Shift if overflowing left
-        if (left < 0) {
-          left = Math.max(10, anchorRect.left + offset.x);
-        }
       }
+      left = Math.max(viewportPadding, Math.min(left, viewportWidth - overlayWidth - viewportPadding));
 
       setPosition({ top, left });
     };
 
     // Need a micro-delay for first render dimensions
     requestAnimationFrame(updatePosition);
+    const resizeObserver = new ResizeObserver(updatePosition);
+    if (overlayRef.current) resizeObserver.observe(overlayRef.current);
     window.addEventListener('resize', updatePosition);
     window.addEventListener('scroll', updatePosition, true);
 
     return () => {
       window.removeEventListener('resize', updatePosition);
       window.removeEventListener('scroll', updatePosition, true);
+      resizeObserver.disconnect();
     };
   }, [isOpen, anchorRef, placement, offset.x, offset.y]);
 
   useEffect(() => {
     if (!isOpen) return;
-    
+
     const handleClickOutside = (e: MouseEvent) => {
       if (
-        overlayRef.current && 
+        overlayRef.current &&
         !overlayRef.current.contains(e.target as Node) &&
         anchorRef.current &&
         !anchorRef.current.contains(e.target as Node)
@@ -92,9 +96,19 @@ export function OverlayManager({
         onClose();
       }
     };
-    
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
   }, [isOpen, onClose, anchorRef]);
 
   if (!isOpen) return null;
@@ -102,10 +116,12 @@ export function OverlayManager({
   return createPortal(
     <div 
       ref={overlayRef}
-      className="fixed z-[9999]"
+      className="panvas-overlay fixed overflow-auto"
       style={{
         top: position.top,
         left: position.left,
+        maxWidth: 'calc(100vw - 24px)',
+        maxHeight: 'calc(100vh - 24px)',
         visibility: position.top === -9999 ? 'hidden' : 'visible'
       }}
     >

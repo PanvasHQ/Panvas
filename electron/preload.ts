@@ -1,13 +1,8 @@
-import { contextBridge, ipcRenderer, webFrame } from 'electron';
-
-// Disable full-app zooming (Ctrl+Wheel / Ctrl+/-) so the UI doesn't shrink/grow unpredictably
-webFrame.setZoomLevel(0);
-webFrame.setVisualZoomLevelLimits(1, 1);
+import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('panvas', {
   workspace: {
     create: (name: string) => ipcRenderer.invoke('workspace:create', name),
-    open: (locationPath: string) => ipcRenderer.invoke('workspace:open', locationPath),
     openDialog: () => ipcRenderer.invoke('workspace:openDialog'),
     getAll: () => ipcRenderer.invoke('workspace:getAll'),
     update: (id: string, updates: any) => ipcRenderer.invoke('workspace:update', id, updates),
@@ -20,7 +15,7 @@ contextBridge.exposeInMainWorld('panvas', {
     getAll: (wsId: string) => ipcRenderer.invoke('folder:getAll', wsId),
   },
   canvasFile: {
-    create: (wsId: string, name: string, folderId: string | null) => ipcRenderer.invoke('canvasFile:create', wsId, name, folderId),
+    create: (wsId: string, name: string, folderId: string | null, notebookId: string | null, sectionId: string | null) => ipcRenderer.invoke('canvasFile:create', wsId, name, folderId, notebookId, sectionId),
     update: (wsId: string, canvasId: string, updates: any) => ipcRenderer.invoke('canvasFile:update', wsId, canvasId, updates),
     delete: (wsId: string, canvasId: string) => ipcRenderer.invoke('canvasFile:delete', wsId, canvasId),
     getAll: (wsId: string) => ipcRenderer.invoke('canvasFile:getAll', wsId),
@@ -28,6 +23,11 @@ contextBridge.exposeInMainWorld('panvas', {
   canvas: {
     save: (wsId: string, canvasId: string, data: any) => ipcRenderer.invoke('canvas:save', wsId, canvasId, data),
     load: (wsId: string, canvasId: string) => ipcRenderer.invoke('canvas:load', wsId, canvasId),
+  },
+  library: {
+    getAll: (wsId: string) => ipcRenderer.invoke('library:getAll', wsId),
+    import: (wsId: string, fileName: string, contents: string) => ipcRenderer.invoke('library:import', wsId, fileName, contents),
+    delete: (wsId: string, fileName: string) => ipcRenderer.invoke('library:delete', wsId, fileName),
   },
   notebook: {
     create: (wsId: string, name: string, folderId: string | null) => ipcRenderer.invoke('notebook:create', wsId, name, folderId),
@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld('panvas', {
     loadPage: (wsId: string, notebookId: string, pageId: string) => ipcRenderer.invoke('notebook:loadPage', wsId, notebookId, pageId),
     saveDrawing: (wsId: string, notebookId: string, pageId: string, drawingData: any) => ipcRenderer.invoke('notebook:saveDrawing', wsId, notebookId, pageId, drawingData),
     loadDrawing: (wsId: string, notebookId: string, pageId: string) => ipcRenderer.invoke('notebook:loadDrawing', wsId, notebookId, pageId),
+    applyPageDefaults: (wsId: string, notebookId: string, updates: Partial<import('../src/types/notebook').PagePropertySet>) => ipcRenderer.invoke('notebook:applyPageDefaults', wsId, notebookId, updates),
+    restorePageDefaults: (wsId: string, snapshot: import('../src/types/notebook').NotebookPropertyBatchSnapshot) => ipcRenderer.invoke('notebook:restorePageDefaults', wsId, snapshot),
   },
   notebookSection: {
     create: (wsId: string, notebookId: string, name: string) => ipcRenderer.invoke('notebookSection:create', wsId, notebookId, name),
@@ -58,5 +60,67 @@ contextBridge.exposeInMainWorld('panvas', {
   },
   migration: {
     importWorkspace: (workspaceObj: any, canvasDataList: any[]) => ipcRenderer.invoke('migration:importWorkspace', workspaceObj, canvasDataList),
-  }
+  },
+  binary: {
+    storePdf: (id: string, fileName: string, data: ArrayBuffer) => ipcRenderer.invoke('binary:storePdf', id, fileName, data),
+    getPdf: (id: string) => ipcRenderer.invoke('binary:getPdf', id) as Promise<{ id: string; fileName: string; createdAt: number; data: ArrayBuffer } | null>,
+    storeImage: (id: string, fileName: string, mimeType: string, data: ArrayBuffer) => ipcRenderer.invoke('binary:storeImage', id, fileName, mimeType, data),
+    getImage: (id: string) => ipcRenderer.invoke('binary:getImage', id) as Promise<{ id: string; fileName: string; mimeType: string; createdAt: number; data: ArrayBuffer } | null>,
+    storeAudio: (id: string, fileName: string, mimeType: string, data: ArrayBuffer) => ipcRenderer.invoke('binary:storeAudio', id, fileName, mimeType, data),
+    getAudio: (id: string) => ipcRenderer.invoke('binary:getAudio', id) as Promise<{ id: string; fileName: string; mimeType: string; createdAt: number; data: ArrayBuffer } | null>,
+    deleteAudio: (id: string) => ipcRenderer.invoke('binary:deleteAudio', id),
+  },
+  trash: {
+    getAll: (wsId?: string | null) => ipcRenderer.invoke('trash:getAll', wsId ?? null),
+    permanentlyDelete: (workspaceId: string, id: string, kind: 'workspace' | 'folder' | 'canvas' | 'notebook' | 'section' | 'page') => ipcRenderer.invoke('trash:permanentlyDelete', workspaceId, id, kind),
+  },
+  backup: {
+    export: (workspaceId: string) => ipcRenderer.invoke('backup:export', workspaceId),
+    import: (backup: import('../src/services/backup/backupService').WorkspaceBackup) => ipcRenderer.invoke('backup:import', backup),
+    importDialog: () => ipcRenderer.invoke('backup:importDialog'),
+  },
+  recognition: {
+    recognize: (strokes: import('../src/components/notebook/engine/drawingTypes').Stroke[], options?: import('../src/services/recognition/types').RecognitionOptions) => ipcRenderer.invoke('recognition:recognizeStrokes', strokes, options),
+  },
+  print: {
+    pdf: (bytes: Uint8Array) => ipcRenderer.invoke(
+      'print:pdf',
+      Uint8Array.from(bytes).buffer,
+    ) as Promise<import('../src/services/pdf/nativePrintLifecycle').NativePdfPrintResult>,
+  },
+  knowledge: {
+    search_knowledge: (input: import('../src/types/knowledge').KnowledgeSearchInput) => ipcRenderer.invoke('knowledge:search', input),
+    get_note_context: (input: import('../src/types/knowledge').KnowledgeReferenceInput) => ipcRenderer.invoke('knowledge:getNoteContext', input),
+    find_related: (input: import('../src/types/knowledge').FindRelatedInput) => ipcRenderer.invoke('knowledge:findRelated', input),
+    knowledge_health: () => ipcRenderer.invoke('knowledge:health'),
+    get_note_ref: (input: import('../src/types/knowledge').KnowledgeReferenceInput) => ipcRenderer.invoke('knowledge:getNoteRef', input),
+  },
+  cloudsync: {
+    connect: (provider: string) => ipcRenderer.invoke('cloudsync:connect', provider),
+    disconnect: (provider: string) => ipcRenderer.invoke('cloudsync:disconnect', provider),
+    getConnection: (provider: string) => ipcRenderer.invoke('cloudsync:getConnection', provider),
+    drive: {
+      ensureAppRoot: () => ipcRenderer.invoke('cloudsync:drive:ensureAppRoot'),
+      listRemoteWorkspaces: () => ipcRenderer.invoke('cloudsync:drive:listRemoteWorkspaces'),
+      readManifest: (workspaceId: string) => ipcRenderer.invoke('cloudsync:drive:readManifest', workspaceId),
+      writeManifest: (workspaceId: string, manifest: import('../src/services/cloudsync/types').SyncManifestV1, ifMatch: string | null) => ipcRenderer.invoke('cloudsync:drive:writeManifest', workspaceId, manifest, ifMatch),
+      getObject: (workspaceId: string, hash: string) => ipcRenderer.invoke('cloudsync:drive:getObject', workspaceId, hash),
+      putObjectIfAbsent: (workspaceId: string, upload: import('../src/services/cloudsync/types').ObjectUpload) => ipcRenderer.invoke('cloudsync:drive:putObjectIfAbsent', workspaceId, upload),
+      deleteObject: (workspaceId: string, hash: string) => ipcRenderer.invoke('cloudsync:drive:deleteObject', workspaceId, hash),
+      moveObject: (workspaceId: string, fromHash: string, toHash: string) => ipcRenderer.invoke('cloudsync:drive:moveObject', workspaceId, fromHash, toHash),
+      getMetadata: (workspaceId: string, hash: string) => ipcRenderer.invoke('cloudsync:drive:getMetadata', workspaceId, hash),
+    },
+    driveV2: {
+      readRootJson: (name: string) => ipcRenderer.invoke('cloudsync:driveV2:readRootJson', name),
+      writeRootJson: (name: string, value: unknown, ifMatch: string | null) => ipcRenderer.invoke('cloudsync:driveV2:writeRootJson', name, value, ifMatch),
+      readWorkspaceJson: (workspaceId: string, name: string) => ipcRenderer.invoke('cloudsync:driveV2:readWorkspaceJson', workspaceId, name),
+      writeWorkspaceJson: (workspaceId: string, name: string, value: unknown, ifMatch: string | null) => ipcRenderer.invoke('cloudsync:driveV2:writeWorkspaceJson', workspaceId, name, value, ifMatch),
+      getObject: (_workspaceId: string, hash: string) => ipcRenderer.invoke('cloudsync:driveV2:getObject', hash),
+      putObjectIfAbsent: (_workspaceId: string, upload: import('../src/services/cloudsync/types').ObjectUpload) => ipcRenderer.invoke('cloudsync:driveV2:putObjectIfAbsent', upload),
+      getMetadata: (_workspaceId: string, hash: string) => ipcRenderer.invoke('cloudsync:driveV2:getMetadata', hash),
+    },
+    applyRemoteRecord: (workspaceId: string, record: { kind: import('../src/services/cloudsync/types').SyncEntityKind; id: string; payload: unknown; tombstone: boolean }) => ipcRenderer.invoke('cloudsync:applyRemoteRecord', workspaceId, record),
+    listPageDrawingRecords: (workspaceId: string) => ipcRenderer.invoke('cloudsync:listPageDrawingRecords', workspaceId) as Promise<Array<{ id: string; notebookId: string; ownerPageId: string }>>,
+    logDiagnostic: (diagnostic: import('../src/services/cloudsync/types').SafeCloudDiagnostic) => ipcRenderer.send('cloudsync:diagnostic', diagnostic),
+  },
 });

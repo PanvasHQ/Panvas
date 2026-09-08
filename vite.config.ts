@@ -2,25 +2,77 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import electron from 'vite-plugin-electron/simple';
 import path from 'path';
+import { cpSync, createReadStream, existsSync, statSync } from 'node:fs';
+import { applyDevelopmentBrowserCsp } from './src/config/browserCsp';
 
-export default defineConfig({
-  base: './',
-  plugins: [
-    react(),
-    electron({
-      main: {
-        entry: 'electron/main.ts',
+const excalidrawAssetsDir = path.resolve(__dirname, 'node_modules/@excalidraw/excalidraw/dist/excalidraw-assets');
+
+function localExcalidrawAssets() {
+  return {
+    name: 'panvas-local-excalidraw-assets',
+    configureServer(server: { middlewares: { use: (route: string, handler: (request: any, response: any, next: () => void) => void) => void } }) {
+      server.middlewares.use('/excalidraw-assets', (request, response, next) => {
+        try {
+          const relativePath = decodeURIComponent((request.url ?? '/').split('?')[0]).replace(/^[/\\]+/, '');
+          const assetPath = path.resolve(excalidrawAssetsDir, relativePath);
+          if (!assetPath.startsWith(`${excalidrawAssetsDir}${path.sep}`) || !existsSync(assetPath) || !statSync(assetPath).isFile()) {
+            next();
+            return;
+          }
+          const extension = path.extname(assetPath);
+          response.setHeader('Content-Type', extension === '.js' ? 'text/javascript'
+            : extension === '.woff2' ? 'font/woff2'
+              : extension === '.json' ? 'application/json' : 'application/octet-stream');
+          createReadStream(assetPath).pipe(response);
+        } catch {
+          next();
+        }
+      });
+    },
+    writeBundle(outputOptions: { dir?: string }) {
+      const outputDir = path.resolve(__dirname, outputOptions.dir ?? 'dist');
+      cpSync(excalidrawAssetsDir, path.join(outputDir, 'excalidraw-assets'), { recursive: true });
+    },
+  };
+}
+
+export default defineConfig(({ command, mode }) => {
+  const isWebOnly = mode === 'web' || mode === 'landing' || process.env.PANVAS_DEV_WEB === 'true' || Boolean(process.env.VERCEL);
+
+  return {
+    base: './',
+    plugins: [
+      react(),
+      {
+        name: 'panvas-browser-development-csp',
+        transformIndexHtml: html => applyDevelopmentBrowserCsp(html, command === 'serve'),
       },
-      preload: {
-        input: 'electron/preload.ts',
-      },
-      renderer: {},
-    }),
-  ],
+      localExcalidrawAssets(),
+      ...(!isWebOnly
+        ? [
+            electron({
+              main: {
+                entry: 'electron/main.ts',
+              },
+              preload: {
+                input: 'electron/preload.ts',
+              },
+              renderer: {},
+            }),
+          ]
+        : []),
+    ],
   resolve: {
+    dedupe: ['react', 'react-dom'],
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+  },
+  worker: {
+    // The neural recognition worker uses dynamic imports (transformers.js is
+    // only fetched when local recognition is first used), which requires ES
+    // module worker output instead of the default IIFE bundle.
+    format: 'es',
   },
   define: {
     'process.env': {
@@ -37,6 +89,16 @@ export default defineConfig({
   },
   build: {
     target: 'esnext',
-    sourcemap: true,
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        // Keep the shared runtime explicit; let dynamic route imports determine
+        // editor ownership instead of hoisting shared utilities into editor chunks.
+        manualChunks(id) {
+          if (/node_modules[/\\](react|react-dom|scheduler)[/\\]/.test(id)) return 'vendor-react';
+        },
+      },
+    },
   },
+};
 });

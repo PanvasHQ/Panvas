@@ -46,6 +46,7 @@ export default {
         sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
         mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
         sketch: ['Caveat', 'cursive'],
+        editorial: ['Newsreader', 'Georgia', 'serif'],
       },
       fontSize: {
         '2xs': ['0.65rem', { lineHeight: '0.85rem' }],

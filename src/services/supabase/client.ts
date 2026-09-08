@@ -3,26 +3,23 @@
 // ============================================
 
 import { createClient } from '@supabase/supabase-js';
+import { CLOUD_SYNC_ENABLED } from '@/config/features';
+import { resolveSupabaseConfiguration } from './config';
 
-function normalizeSupabaseUrl(rawUrl: string): string {
-  const trimmed = rawUrl.trim().replace(/\/+$/, '');
+const configuration = resolveSupabaseConfiguration({
+  cloudEnabled: CLOUD_SYNC_ENABLED,
+  url: import.meta.env.VITE_SUPABASE_URL || '',
+  anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || '',
+});
 
-  return trimmed
-    .replace(/\/rest\/v1$/, '')
-    .replace(/\/auth\/v1$/, '')
-    .replace(/\/storage\/v1$/, '');
-}
-
-const supabaseUrl = normalizeSupabaseUrl(import.meta.env.VITE_SUPABASE_URL || '');
-const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
-const isValidSupabaseUrl = /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(supabaseUrl);
-
-// Only create client if credentials are configured
-export const supabase = supabaseUrl && supabaseAnonKey && isValidSupabaseUrl
-  ? createClient(supabaseUrl, supabaseAnonKey, {
+// Local builds never construct a remote client merely because stale credentials
+// remain in an environment file. Automatic token refresh is also disabled at
+// construction time so an expired browser token cannot block application boot.
+export const supabase = configuration.enabled
+  ? createClient(configuration.url, configuration.anonKey, {
       auth: {
         flowType: 'pkce',
-        autoRefreshToken: true,
+        autoRefreshToken: false,
         persistSession: true,
         detectSessionInUrl: true,
       },
@@ -30,8 +27,4 @@ export const supabase = supabaseUrl && supabaseAnonKey && isValidSupabaseUrl
   : null;
 
 export const isSupabaseConfigured = !!supabase;
-export const supabaseConfigError = !supabaseUrl || !supabaseAnonKey
-  ? 'Supabase URL and anon key are required for cloud sync.'
-  : !isValidSupabaseUrl
-    ? 'Supabase URL must be your project root, for example https://project-id.supabase.co.'
-    : null;
+export const supabaseConfigError = configuration.error;

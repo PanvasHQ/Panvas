@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Grid2X2, ListFilter, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { ChevronDown, ChevronUp, Download, Grid2X2, ListFilter, MoreHorizontal, PanelLeftClose, PanelLeftOpen, RotateCcw, RotateCw } from 'lucide-react';
+import type { PdfPageRotation } from '@/types/notebook';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { NotebookEngine } from '@/components/notebook/engine/NotebookEngine';
 
@@ -11,9 +12,14 @@ interface PdfThumbnailSidebarProps {
   isSidebarOpen: boolean;
   setIsSidebarOpen: React.Dispatch<React.SetStateAction<boolean>>;
   engine: NotebookEngine;
+  pageOrder?: number[];
+  rotations?: Record<number, PdfPageRotation>;
+  onRotatePage?: (page: number, direction: 1 | -1) => void;
+  onExtractPage?: (page: number) => void;
+  onMovePage?: (from: number, to: number) => void;
 }
 
-export function PdfThumbnailSidebar({ pdfDocument, numPages, currentPage, onPageChange, isSidebarOpen, setIsSidebarOpen, engine }: PdfThumbnailSidebarProps) { 
+export function PdfThumbnailSidebar({ pdfDocument, numPages, currentPage, onPageChange, isSidebarOpen, setIsSidebarOpen, engine, pageOrder, rotations = {}, onRotatePage, onExtractPage, onMovePage }: PdfThumbnailSidebarProps) { 
   const [activeTab, setActiveTab] = useState<'Thumbnails' | 'Outline'>('Thumbnails'); 
   const [outline, setOutline] = useState<any[] | null>(null);
 
@@ -69,21 +75,21 @@ export function PdfThumbnailSidebar({ pdfDocument, numPages, currentPage, onPage
       </div>
       {activeTab === 'Thumbnails' ? (
         <div className="space-y-3 px-4 pb-4 overflow-y-auto flex-1">
-          {Array.from({ length: numPages }).map((_, i) => {
-            const pageNum = i + 1;
+          {(pageOrder?.length === numPages ? pageOrder : Array.from({ length: numPages }, (_, index) => index + 1)).map((pageNum, index, order) => {
             return (
-              <button 
-                key={pageNum} 
-                type="button" 
-                onClick={() => onPageChange(pageNum)} 
-                aria-pressed={currentPage === pageNum} 
-                className={`w-full rounded-lg p-1.5 text-left transition-colors focus-ring ${currentPage === pageNum ? 'bg-panvas-bg-active' : 'hover:bg-panvas-bg-hover'}`}
-              >
-                <Thumbnail page={pageNum} pdfDocument={pdfDocument} />
-                <span className={`mt-1.5 block text-center text-2xs ${currentPage === pageNum ? 'font-medium text-panvas-text-primary' : 'text-panvas-text-tertiary'}`}>
-                  {pageNum}
-                </span>
-              </button>
+              <div key={pageNum} className={`group rounded-lg p-1.5 transition-colors ${currentPage === pageNum ? 'bg-panvas-bg-active' : 'hover:bg-panvas-bg-hover'}`}>
+                <button type="button" onClick={() => onPageChange(pageNum)} aria-pressed={currentPage === pageNum} className="w-full text-left focus-ring rounded-md">
+                  <Thumbnail page={pageNum} pdfDocument={pdfDocument} rotation={rotations[pageNum] ?? 0} />
+                  <span className={`mt-1.5 block text-center text-2xs ${currentPage === pageNum ? 'font-medium text-panvas-text-primary' : 'text-panvas-text-tertiary'}`}>Page {index + 1}</span>
+                </button>
+                {(onRotatePage || onExtractPage || onMovePage) && <div className="mt-1 flex items-center justify-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                  <MiniButton label="Rotate counter-clockwise" onClick={() => onRotatePage?.(pageNum, -1)}><RotateCcw size={12} /></MiniButton>
+                  <MiniButton label="Rotate clockwise" onClick={() => onRotatePage?.(pageNum, 1)}><RotateCw size={12} /></MiniButton>
+                  <MiniButton label="Extract page" onClick={() => onExtractPage?.(pageNum)}><Download size={12} /></MiniButton>
+                  <MiniButton label="Move page earlier" disabled={index === 0} onClick={() => onMovePage?.(index, index - 1)}><ChevronUp size={12} /></MiniButton>
+                  <MiniButton label="Move page later" disabled={index === order.length - 1} onClick={() => onMovePage?.(index, index + 1)}><ChevronDown size={12} /></MiniButton>
+                </div>}
+              </div>
             );
           })}
         </div>
@@ -127,9 +133,9 @@ function OutlineTree({ items, level, onNavigate }: { items: any[]; level: number
 }
 
 function Tab({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) { return <button type="button" onClick={onClick} className={`h-8 border-b-2 px-1.5 text-2xs transition-colors focus-ring ${active ? 'border-panvas-text-primary text-panvas-text-primary' : 'border-transparent text-panvas-text-tertiary hover:text-panvas-text-secondary'}`}>{label}</button>; }
-function MiniButton({ label, children }: { label: string; children: React.ReactNode }) { return <button type="button" title={label} aria-label={label} className="flex h-6 w-6 items-center justify-center rounded text-panvas-text-tertiary hover:bg-panvas-bg-hover hover:text-panvas-text-primary focus-ring">{children}</button>; }
+function MiniButton({ label, children, onClick, disabled }: { label: string; children: React.ReactNode; onClick?: () => void; disabled?: boolean }) { return <button type="button" title={label} aria-label={label} disabled={disabled} onClick={onClick} className="flex h-6 w-6 items-center justify-center rounded text-panvas-text-tertiary hover:bg-panvas-bg-hover hover:text-panvas-text-primary focus-ring disabled:opacity-35">{children}</button>; }
 
-function Thumbnail({ page, pdfDocument }: { page: number, pdfDocument: PDFDocumentProxy | null }) { 
+function Thumbnail({ page, pdfDocument, rotation }: { page: number, pdfDocument: PDFDocumentProxy | null, rotation: number }) { 
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -144,9 +150,9 @@ function Thumbnail({ page, pdfDocument }: { page: number, pdfDocument: PDFDocume
         if (!isMounted) return;
 
         // Render at a small fixed scale for thumbnail (width roughly ~150px)
-        const unscaledViewport = pdfPage.getViewport({ scale: 1.0 });
+        const unscaledViewport = pdfPage.getViewport({ scale: 1.0, rotation });
         const scale = 150 / unscaledViewport.width;
-        const viewport = pdfPage.getViewport({ scale });
+        const viewport = pdfPage.getViewport({ scale, rotation });
 
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -184,7 +190,7 @@ function Thumbnail({ page, pdfDocument }: { page: number, pdfDocument: PDFDocume
         renderTask.cancel();
       }
     };
-  }, [pdfDocument, page]);
+  }, [pdfDocument, page, rotation]);
 
   return (
     <div className="overflow-hidden rounded-md border border-panvas-border-subtle bg-white shadow-sm flex items-center justify-center min-h-[200px]">

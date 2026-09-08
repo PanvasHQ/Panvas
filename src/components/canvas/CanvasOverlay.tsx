@@ -7,6 +7,7 @@ import type { CustomBlock } from '@/types/canvas';
 import { MarkdownBlock } from './MarkdownBlock';
 import { LatexBlock } from './LatexBlock';
 import { PdfBlock } from './PdfBlock';
+import { CanvasVoiceNote } from './CanvasVoiceNote';
 
 interface CanvasOverlayProps {
   blocks: CustomBlock[];
@@ -22,7 +23,7 @@ export function CanvasOverlay({ blocks, excalidrawAPI }: CanvasOverlayProps) {
 
   return (
     <div
-      className="absolute inset-0 pointer-events-none z-10"
+      className="panvas-layer-canvas-decoration absolute inset-0 pointer-events-none"
       style={{ overflow: 'hidden' }}
     >
       {blocks.map(block => {
@@ -49,6 +50,7 @@ export function CanvasOverlay({ blocks, excalidrawAPI }: CanvasOverlayProps) {
             {block.type === 'markdown' && <MarkdownBlock block={block} />}
             {block.type === 'latex' && <LatexBlock block={block} />}
             {block.type === 'pdf' && <PdfBlock block={block} />}
+            {block.type === 'audio' && <CanvasVoiceNote block={block} zoom={zoom} />}
           </div>
         );
       })}

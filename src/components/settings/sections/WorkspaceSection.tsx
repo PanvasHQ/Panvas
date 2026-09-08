@@ -8,6 +8,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { useSyncStore } from '@/stores/syncStore';
 import { HardDrive, Database, LayoutGrid, Cloud, History } from 'lucide-react';
 import { StorageService, type StorageMetrics } from '@/services/storage/StorageService';
+import { CLOUD_SYNC_ENABLED } from '@/config/features';
 
 function timeAgo(timestamp: number) {
   const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
@@ -67,7 +68,7 @@ export function WorkspaceSection() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="p-5 bg-panvas-bg-secondary rounded-xl border border-panvas-border-subtle flex flex-col gap-3">
+        <div className="panvas-surface flex flex-col gap-3 p-5">
           <div className="w-10 h-10 rounded-full bg-panvas-bg-tertiary flex items-center justify-center text-panvas-text-secondary">
             <LayoutGrid size={18} />
           </div>
@@ -77,7 +78,7 @@ export function WorkspaceSection() {
           </div>
         </div>
 
-        <div className="p-5 bg-panvas-bg-secondary rounded-xl border border-panvas-border-subtle flex flex-col gap-3">
+        <div className="panvas-surface flex flex-col gap-3 p-5">
           <div className="w-10 h-10 rounded-full bg-panvas-bg-tertiary flex items-center justify-center text-panvas-text-secondary">
             <Database size={18} />
           </div>
@@ -91,7 +92,7 @@ export function WorkspaceSection() {
       <div className="grid gap-6">
         <div className="flex flex-col gap-2">
           <label className="text-xs font-semibold uppercase tracking-wider text-panvas-text-muted">Storage Details</label>
-          <div className="bg-panvas-bg-secondary rounded-xl border border-panvas-border-subtle overflow-hidden">
+          <div className="panvas-surface overflow-hidden">
             
             {/* Storage Usage Row */}
             <div className="flex flex-col p-4 border-b border-panvas-border-subtle gap-3">
@@ -131,7 +132,7 @@ export function WorkspaceSection() {
                 <>
                   <div className="flex items-center justify-between mt-2">
                     <span className="text-sm text-panvas-text-secondary">Storage Backend</span>
-                    <span className="text-sm text-panvas-text-primary">Local + Supabase Sync</span>
+                    <span className="text-sm text-panvas-text-primary">Local workspace storage</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-panvas-text-secondary">Storage Limit</span>
@@ -150,11 +151,11 @@ export function WorkspaceSection() {
                 <Cloud size={16} className="text-panvas-text-secondary" />
                 <span className="text-sm text-panvas-text-secondary">Cloud Sync</span>
               </div>
-              <span className={`text-sm font-medium px-2 py-0.5 rounded-full ${user ? 'text-panvas-accent-emerald bg-panvas-accent-emerald/10' : 'text-panvas-text-muted bg-panvas-bg-tertiary'}`}>
-                {user ? 'Enabled' : 'Disabled'}
+              <span className={`rounded-full px-2 py-0.5 text-sm font-medium ${CLOUD_SYNC_ENABLED && user ? 'bg-panvas-accent-emerald/10 text-panvas-accent-emerald' : 'bg-panvas-bg-tertiary text-panvas-text-muted'}`}>
+                {CLOUD_SYNC_ENABLED && user ? 'Enabled' : CLOUD_SYNC_ENABLED ? 'Not connected' : 'Disabled'}
               </span>
             </div>
-            {user && (
+            {CLOUD_SYNC_ENABLED && user && (
               <div className="flex items-center justify-between p-4 border-b border-panvas-border-subtle">
                 <div className="flex items-center gap-3">
                   <Cloud size={16} className="text-panvas-text-secondary" />
@@ -163,7 +164,7 @@ export function WorkspaceSection() {
                 <span className="text-sm font-medium text-panvas-text-primary capitalize">{syncStatusMap[status] || status}</span>
               </div>
             )}
-            {user && lastSyncedAt && (
+            {CLOUD_SYNC_ENABLED && user && lastSyncedAt && (
               <div className="flex items-center justify-between p-4">
                 <div className="flex items-center gap-3">
                   <History size={16} className="text-panvas-text-secondary" />

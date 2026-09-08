@@ -52,14 +52,13 @@ export function PdfBlock({ block }: PdfBlockProps) {
         const pdfjsWorkerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
         pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 
-        const blob = new Blob([pdfFile.data], { type: 'application/pdf' });
-        const url = URL.createObjectURL(blob);
-        const loadingTask = pdfjsLib.getDocument({ url });
+        // Bytes are passed directly: a blob object URL would need fetch(),
+        // which is unavailable on the file:// origin of the packaged app.
+        // slice(0) copies: pdf.js takes ownership of the buffer.
+        const bytes = new Uint8Array(pdfFile.data.slice(0));
+        const loadingTask = pdfjsLib.getDocument({ data: bytes });
         const doc = await loadingTask.promise;
-        
-        // Don't revoke URL immediately, PDF.js might need it for lazy loading
-        // In a real app we'd track and cleanup, but for now we'll let GC handle it or add cleanup later
-        
+
         setPdfDoc(doc);
         setTotalPages(doc.numPages);
         updateBlock(block.id, {

@@ -1,74 +1,12 @@
-import React from 'react';
-import { Footer } from '@/components/layout/Footer';
-import { ShieldCheck, HardDrive, Cloud, Lock } from 'lucide-react';
+import { PublicDocument, PublicPageShell } from '@/components/marketing/PublicPageShell';
+import { PANVAS_RELEASE } from '@/components/marketing/releaseMetadata';
 
-export function SecurityPage() {
-  return (
-    <div className="min-h-screen bg-[#0D1117] text-white flex flex-col font-sans">
-      <div className="max-w-[800px] mx-auto px-6 py-24 flex-1 w-full">
-        <div className="flex items-center gap-4 mb-6">
-          <ShieldCheck size={40} className="text-panvas-accent-emerald" />
-          <h1 className="text-4xl font-bold font-handwritten tracking-tight">Security at Panvas</h1>
-        </div>
-        <p className="text-panvas-text-secondary text-lg mb-12 max-w-2xl">
-          We built Panvas on a local-first architecture. This fundamentally changes how your data is secured, 
-          giving you absolute ownership while still providing the convenience of cloud sync.
-        </p>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-16">
-          <div className="bg-[#111111] border border-white/5 p-6 rounded-2xl">
-            <HardDrive className="text-[#A3A3A3] mb-4" size={24} />
-            <h3 className="text-lg font-semibold mb-2">Local First</h3>
-            <p className="text-sm text-[#737373] leading-relaxed">
-              Your device is the source of truth. Data is written immediately to IndexedDB in your browser. 
-              If the cloud goes down, your workspace keeps functioning flawlessly.
-            </p>
-          </div>
-
-          <div className="bg-[#111111] border border-white/5 p-6 rounded-2xl">
-            <Lock className="text-[#A3A3A3] mb-4" size={24} />
-            <h3 className="text-lg font-semibold mb-2">Data Ownership</h3>
-            <p className="text-sm text-[#737373] leading-relaxed">
-              You aren't renting space on our servers; you are running Panvas on your machine. We cannot 
-              access your offline data, and we do not scan your synced data.
-            </p>
-          </div>
-
-          <div className="bg-[#111111] border border-white/5 p-6 rounded-2xl">
-            <Cloud className="text-[#A3A3A3] mb-4" size={24} />
-            <h3 className="text-lg font-semibold mb-2">Secure Cloud Sync</h3>
-            <p className="text-sm text-[#737373] leading-relaxed">
-              When you opt-in to sync, data is transmitted securely via TLS to our Supabase infrastructure. 
-              The Sync Engine ensures changes are seamlessly merged across devices.
-            </p>
-          </div>
-
-          <div className="bg-[#111111] border border-white/5 p-6 rounded-2xl">
-            <ShieldCheck className="text-[#A3A3A3] mb-4" size={24} />
-            <h3 className="text-lg font-semibold mb-2">Row Level Security</h3>
-            <p className="text-sm text-[#737373] leading-relaxed">
-              Our PostgreSQL database uses strict Row Level Security (RLS). Cryptographic session tokens 
-              guarantee that your data can only be queried by your authenticated user ID.
-            </p>
-          </div>
-        </div>
-
-        <div className="prose prose-invert prose-p:text-[#A3A3A3] prose-headings:text-white max-w-none">
-          <h2 className="text-2xl font-semibold mb-4">Authentication</h2>
-          <p>
-            Panvas uses Supabase Auth, an enterprise-grade authentication system. We do not store passwords 
-            in plain text; all credentials are salted and hashed using standard cryptographic algorithms (bcrypt).
-          </p>
-
-          <h2 className="text-2xl font-semibold mt-12 mb-4">Vulnerability Reporting</h2>
-          <p>
-            If you believe you have found a security vulnerability in Panvas, please report it immediately 
-            to <a href="mailto:security@panvas.com" className="text-panvas-accent-primary hover:underline">security@panvas.com</a>. 
-            We take all reports seriously and will work with you to resolve the issue promptly.
-          </p>
-        </div>
-      </div>
-      <Footer />
-    </div>
-  );
-}
+export function SecurityPage(){return <PublicPageShell label="Trust / Security" title="Security architecture." intro="Panvas reduces unnecessary data movement through a local-first design. This page documents controls visible in the repository and does not claim certification or absolute security." aside={<>ARCHITECTURE SNAPSHOT<br/>Local authority<br/>Optional network features</>}>
+  <PublicDocument>
+    <section><span className="pp-section-index">01</span><div><h2>Local-first boundary</h2><p>The Windows desktop build keeps its authoritative workspace in a local filesystem directory. The browser build uses origin-scoped IndexedDB. Ordinary editing does not require a hosted Panvas workspace service or an account.</p></div></section>
+    <section><span className="pp-section-index">02</span><div><h2>Desktop and Electron</h2><p>The main application window enables context isolation, renderer sandboxing and web security while disabling Node integration. The preload bridge exposes named capabilities rather than general Node or filesystem access. Navigation and new-window requests are restricted to trusted renderer URLs or sent to the system browser.</p><p>Privileged workspace operations run through Electron IPC handlers with input validation and path checks. Automated integrity tests cover these boundaries.</p></div></section>
+    <section><span className="pp-section-index">03</span><div><h2>Authentication and Google Drive</h2><p>Optional account authentication uses Supabase when configured; Panvas does not implement or describe the provider’s password hashing internals. Google Drive authorization requests only <code>drive.file</code>. Browser access tokens are memory-only, while desktop tokens require Electron secure storage. Cloud sync is opt-in, release-gated and disabled by default.</p></div></section>
+    <section><span className="pp-section-index">04</span><div><h2>Content and imports</h2><p>Rich-text HTML passes through a sanitizer before insertion. PDF and backup workflows apply application-level validation, but imported files should still be treated as untrusted input. Diagnostic handling is designed to return bounded public errors and sanitize cloud-sync diagnostics.</p></div></section>
+    <section><span className="pp-section-index">05</span><div><h2>Reporting a vulnerability</h2><p>Please use the repository’s private security reporting facility if available, or contact the maintainer through the address listed in the project metadata: <a href={PANVAS_RELEASE.project.creatorEmailUrl}>sksumitahmed007@gmail.com</a>. Avoid including sensitive workspace content in an initial report.</p><p>Response times and disclosure SLAs have not yet been formally published.</p></div></section>
+  </PublicDocument>
+</PublicPageShell>}

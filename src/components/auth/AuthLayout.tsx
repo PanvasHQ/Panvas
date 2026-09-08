@@ -7,7 +7,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { Link } from 'wouter';
-import LandingPageImage from '@/Background Images/Landingpage.png';
 
 // Reusable notebook texture (same pattern as landing page)
 function AuthTexture({ gridOpacity = 0.02, dotOpacity = 0.012 }: { gridOpacity?: number; dotOpacity?: number }) {
@@ -51,7 +50,7 @@ export function AuthLayout({ children, title, subtitle }: AuthLayoutProps) {
         {/* Ambient background artwork */}
         <div 
           className="absolute inset-0 bg-cover bg-center bg-no-repeat"
-          style={{ backgroundImage: `url("${LandingPageImage}")` }}
+          style={{ backgroundImage: `url("/app-screenshots/HeroResearchWorkSpace.png")` }}
         />
         <div className="absolute inset-0 bg-[#0D0D0D]/70" />
         <AuthTexture gridOpacity={0.025} dotOpacity={0.015} />

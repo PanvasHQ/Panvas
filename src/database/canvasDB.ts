@@ -73,6 +73,19 @@ export async function getBlocksByCanvas(userId: string | null, canvasFileId: str
     .toArray();
 }
 
+/**
+ * Restores complete custom blocks from a canonical Canvas JSON payload
+ * (Electron filesystem parity / backup restore). Preserves original ids and
+ * timestamps; only fills gaps — existing Dexie rows for the canvas are never
+ * overwritten.
+ */
+export async function importCustomBlocks(userId: string | null, blocks: readonly CustomBlock[]): Promise<number> {
+  if (blocks.length === 0) return 0;
+  const stamped = blocks.map(block => ({ ...block, userId: block.userId ?? userId ?? '' }));
+  await db.customBlocks.bulkPut(stamped);
+  return stamped.length;
+}
+
 // ---- PDF Files ----
 
 export async function storePdfFile(userId: string | null, canvasFileId: string, fileName: string, data: ArrayBuffer): Promise<PdfFileData> {
@@ -82,15 +95,19 @@ export async function storePdfFile(userId: string | null, canvasFileId: string, 
     fileName,
     data,
     createdAt: Date.now(),
-    userId: userId,
+    userId: userId ?? '',
   };
-  await db.pdfFiles.add(pdfFile);
+  await db.pdfFiles.put(pdfFile);
   return pdfFile;
 }
 
 export async function getPdfFile(userId: string | null, id: string): Promise<PdfFileData | undefined> {
   const pdf = await db.pdfFiles.get(id);
-  return pdf?.userId === userId ? pdf : undefined;
+  if (!pdf) return undefined;
+  if (userId && pdf.userId && pdf.userId !== '' && pdf.userId !== userId) {
+    return undefined;
+  }
+  return pdf;
 }
 
 export async function deletePdfFile(id: string): Promise<void> {
@@ -107,9 +124,9 @@ export async function storeImageFile(userId: string | null, canvasFileId: string
     mimeType,
     data,
     createdAt: Date.now(),
-    userId,
+    userId: userId ?? '',
   };
-  await db.imageFiles.add(imageFile);
+  await db.imageFiles.put(imageFile);
   return imageFile;
 }
 

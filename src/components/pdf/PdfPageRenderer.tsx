@@ -2,14 +2,16 @@ import React, { useEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import { TextLayer } from 'pdfjs-dist';
 import 'pdfjs-dist/web/pdf_viewer.css';
+import { resolveCanvasBackingScale } from '@/components/notebook/engine/ViewportManager';
 
 interface PdfPageRendererProps {
   pdfDocument: PDFDocumentProxy;
   pageNumber: number;
   scale: number;
+  rotation?: number;
 }
 
-export function PdfPageRenderer({ pdfDocument, pageNumber, scale }: PdfPageRendererProps) {
+export function PdfPageRenderer({ pdfDocument, pageNumber, scale, rotation = 0 }: PdfPageRendererProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<Error | null>(null);
@@ -17,32 +19,37 @@ export function PdfPageRenderer({ pdfDocument, pageNumber, scale }: PdfPageRende
   useEffect(() => {
     let isMounted = true;
     let renderTask: any = null;
+    setError(null);
 
     const renderPage = async () => {
       try {
         const page = await pdfDocument.getPage(pageNumber);
         if (!isMounted) return;
 
-        const viewport = page.getViewport({ scale });
+        const baseViewport = page.getViewport({ scale: 1, rotation });
+        const viewport = page.getViewport({ scale, rotation });
         const canvas = canvasRef.current;
         if (!canvas) return;
 
         const context = canvas.getContext('2d');
         if (!context) return;
 
-        // Support high-DPI displays
         const outputScale = window.devicePixelRatio || 1;
-        canvas.width = Math.floor(viewport.width * outputScale);
-        canvas.height = Math.floor(viewport.height * outputScale);
+        const backingScale = resolveCanvasBackingScale(
+          outputScale,
+          scale,
+          baseViewport.width,
+          baseViewport.height,
+        );
+        const renderViewport = page.getViewport({ scale: backingScale, rotation });
+        canvas.width = Math.floor(renderViewport.width);
+        canvas.height = Math.floor(renderViewport.height);
         canvas.style.width = Math.floor(viewport.width) + 'px';
         canvas.style.height = Math.floor(viewport.height) + 'px';
 
-        const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined;
-
         const renderContext = {
           canvasContext: context,
-          transform,
-          viewport: viewport,
+          viewport: renderViewport,
         };
 
         renderTask = page.render(renderContext);
@@ -77,7 +84,7 @@ export function PdfPageRenderer({ pdfDocument, pageNumber, scale }: PdfPageRende
         renderTask.cancel();
       }
     };
-  }, [pdfDocument, pageNumber, scale]);
+  }, [pdfDocument, pageNumber, rotation, scale]);
 
   if (error) {
     return (

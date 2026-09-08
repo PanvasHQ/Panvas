@@ -10,20 +10,28 @@ import {
   type PageMarginOption,
   useNotebookSettingsStore
 } from '@/stores/notebookSettingsStore';
-import type { PageProperties, PageTemplate, ScrollDirection } from './engine/drawingTypes';
-import { Palette, CheckCheck, LayoutGrid, AlertCircle } from 'lucide-react';
+import type { PageProperties, PageTemplate } from './engine/drawingTypes';
+import { Palette, CheckCheck, LayoutGrid, AlertCircle, X, UnfoldVertical } from 'lucide-react';
 import { TEMPLATE_CATEGORIES, TEMPLATE_REGISTRY } from './templates/TemplateRegistry.tsx';
 import { TemplateGalleryModal } from './templates/TemplateGalleryModal';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { useUIStore } from '@/stores/uiStore';
-import { notebookRepository } from '@/repositories/NotebookRepository';
-import { createEmptyDrawingData } from './engine/drawingTypes';
+import type { NotebookPropertyBatchSnapshot } from '@/types/notebook';
+import { WorkspaceViewInspector } from '@/components/workspace/WorkspaceViewControls';
 
 interface NotebookToolPropertiesPanelProps {
   viewportEngine: ViewportManager;
   zoom: number;
   properties: PageProperties;
   onUpdateProperties: (updates: Partial<PageProperties>) => void;
+  onApplyPropertiesToAll: (updates: Partial<PageProperties>) => Promise<NotebookPropertyBatchSnapshot>;
+  onRestorePropertiesBatch: (snapshot: NotebookPropertyBatchSnapshot) => Promise<void>;
+  /**
+   * Optional: called when zoom buttons are clicked with a zoom factor (e.g. 0.9 or 1.1).
+   * The caller anchors the zoom around the notebook viewport's own center
+   * (container-relative), enabling anchor-based scroll correction.
+   */
+  onZoom?: (factor: number) => void;
 }
 
 const colorSwatches: { label: string; color: string }[] = [
@@ -43,11 +51,13 @@ export const NotebookToolPropertiesPanel: React.FC<NotebookToolPropertiesPanelPr
   viewportEngine, 
   zoom, 
   properties, 
-  onUpdateProperties 
+  onUpdateProperties,
+  onApplyPropertiesToAll,
+  onRestorePropertiesBatch,
+  onZoom,
 }) => {
-  const { activeWorkspaceId, activeNotebookId, activePageId, notebookPages } = useWorkspaceStore();
-  const { showToast, theme } = useUIStore();
-  const { scrollDirection, setScrollDirection } = useNotebookSettingsStore();
+  const { activeWorkspaceId, activeNotebookId, notebookPages } = useWorkspaceStore();
+  const { showToast, theme, togglePropertiesPanel } = useUIStore();
   const isDark = theme === 'dark';
 
   const [recentColors, setRecentColors] = useState<string[]>([]);
@@ -55,11 +65,14 @@ export const NotebookToolPropertiesPanel: React.FC<NotebookToolPropertiesPanelPr
 
   // User-controlled scope toggle: unchecked by default
   const [applyToAllPages, setApplyToAllPages] = useState<boolean>(false);
+  const [lastBatch, setLastBatch] = useState<NotebookPropertyBatchSnapshot | null>(null);
+  const [isApplying, setIsApplying] = useState(false);
 
   const handleUpdate = (updates: Partial<PageProperties>) => {
-    onUpdateProperties(updates);
     if (applyToAllPages) {
-      executeBatchApply(updates);
+      void executeBatchApply(updates);
+    } else {
+      onUpdateProperties(updates);
     }
   };
 
@@ -98,34 +111,47 @@ export const NotebookToolPropertiesPanel: React.FC<NotebookToolPropertiesPanelPr
     }
 
     try {
+      setIsApplying(true);
       showToast(`Applying changes to ${pagesInNotebook.length} pages...`, 'info');
-
-      for (const page of pagesInNotebook) {
-        // Skip updating the currently active page because onUpdateProperties already updates its state in memory,
-        // and the NotebookRenderer saves it to disk on its next cycle.
-        // Wait, to be safe, we can just update the disk data for all of them.
-        let drawingData = await notebookRepository.loadDrawingData(activeWorkspaceId, activeNotebookId, page.id);
-        if (!drawingData) {
-          drawingData = createEmptyDrawingData();
-        }
-
-        drawingData.properties = { ...drawingData.properties, ...updates };
-
-        await notebookRepository.saveDrawingData(activeWorkspaceId, activeNotebookId, page.id, drawingData);
-      }
-
+      const snapshot = await onApplyPropertiesToAll(updates);
+      setLastBatch(snapshot);
       showToast(`Successfully updated all ${pagesInNotebook.length} pages!`, 'success');
     } catch (err) {
       console.error('Failed batch apply:', err);
       showToast('Failed to apply to all pages', 'error');
+    } finally {
+      setIsApplying(false);
     }
   };
 
   return (
     <>
-      <aside className="hidden w-72 flex-shrink-0 border-l border-panvas-border-subtle bg-panvas-bg-primary xl:flex flex-col overflow-y-auto select-none">
-        <div className="p-4 border-b border-panvas-border-subtle">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-panvas-text-tertiary">Page Properties</div>
+      {/* The dim layer stays below the notebook's pinned floating header,
+          while the properties sheet uses the next deliberate elevation. The
+          toolbar and workspace controls stay clickable while the
+          drawer is open on sub-xl windows. */}
+      <button
+        type="button"
+        className="panvas-layer-scrim absolute inset-0 bg-black/20 xl:hidden max-[599px]:fixed"
+        onClick={togglePropertiesPanel}
+        aria-label="Close Page Properties"
+      />
+      <aside className="panvas-properties-panel panvas-layer-sheet absolute inset-y-0 right-0 flex w-72 flex-shrink-0 flex-col overflow-y-auto border-l border-panvas-border-subtle bg-panvas-bg-primary shadow-2xl select-none xl:static xl:z-auto xl:shadow-none max-[599px]:fixed max-[599px]:inset-x-0 max-[599px]:top-auto max-[599px]:bottom-0 max-[599px]:h-auto max-[599px]:max-h-[70vh] max-[599px]:w-full max-[599px]:rounded-t-2xl max-[599px]:border-l-0 max-[599px]:border-t">
+        <div className="flex items-center justify-between border-b border-panvas-border-subtle p-4">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-panvas-text-tertiary">Page &amp; view</div>
+          <button
+            type="button"
+            onClick={togglePropertiesPanel}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-panvas-text-secondary transition-colors hover:bg-panvas-bg-hover hover:text-panvas-text-primary xl:hidden"
+            aria-label="Close Page Properties"
+            title="Close Page Properties"
+          >
+            <X size={15} />
+          </button>
+        </div>
+
+        <div className="border-b border-panvas-border-subtle p-4">
+          <WorkspaceViewInspector />
         </div>
         
         <div className="p-4 space-y-5 text-xs">
@@ -137,19 +163,38 @@ export const NotebookToolPropertiesPanel: React.FC<NotebookToolPropertiesPanelPr
             </div>
             <div className="flex gap-2">
               <button 
-                onClick={() => viewportEngine.zoomBy(0.9, window.innerWidth / 2, window.innerHeight / 2)}
+                onClick={() => {
+                  if (onZoom) {
+                    onZoom(0.9);
+                  } else {
+                    viewportEngine.zoomBy(0.9, window.innerWidth / 2, window.innerHeight / 2);
+                  }
+                }}
                 className="flex-1 rounded-md border border-panvas-border-default bg-panvas-bg-secondary px-2 py-1.5 text-xs text-panvas-text-primary hover:bg-panvas-bg-hover hover:border-panvas-border-strong active:bg-panvas-bg-active transition-colors focus-ring"
               >
                 Out
               </button>
               <button 
-                onClick={() => viewportEngine.reset()}
+                onClick={() => {
+                  if (onZoom) {
+                    // Reach exactly 100% while still anchoring around the viewport center.
+                    onZoom(1 / zoom);
+                  } else {
+                    viewportEngine.reset();
+                  }
+                }}
                 className="flex-1 rounded-md border border-panvas-border-default bg-panvas-bg-secondary px-2 py-1.5 text-xs text-panvas-text-primary hover:bg-panvas-bg-hover hover:border-panvas-border-strong active:bg-panvas-bg-active transition-colors focus-ring"
               >
                 100%
               </button>
               <button 
-                onClick={() => viewportEngine.zoomBy(1.1, window.innerWidth / 2, window.innerHeight / 2)}
+                onClick={() => {
+                  if (onZoom) {
+                    onZoom(1.1);
+                  } else {
+                    viewportEngine.zoomBy(1.1, window.innerWidth / 2, window.innerHeight / 2);
+                  }
+                }}
                 className="flex-1 rounded-md border border-panvas-border-default bg-panvas-bg-secondary px-2 py-1.5 text-xs text-panvas-text-primary hover:bg-panvas-bg-hover hover:border-panvas-border-strong active:bg-panvas-bg-active transition-colors focus-ring"
               >
                 In
@@ -163,8 +208,18 @@ export const NotebookToolPropertiesPanel: React.FC<NotebookToolPropertiesPanelPr
             <button
               type="button"
               role="switch"
+              aria-label="Apply to all pages"
               aria-checked={applyToAllPages}
-              onClick={() => setApplyToAllPages(!applyToAllPages)}
+              onClick={() => {
+                if (applyToAllPages) {
+                  setApplyToAllPages(false);
+                  return;
+                }
+                if (window.confirm('Apply subsequent page-property changes to every non-PDF page in this notebook? Each change can be undone from this panel.')) {
+                  setApplyToAllPages(true);
+                }
+              }}
+              disabled={isApplying}
               className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ease-in-out focus-ring ${
                 applyToAllPages ? 'bg-panvas-text-primary' : 'bg-[#e0e0e0] dark:bg-[#444]'
               }`}
@@ -177,6 +232,28 @@ export const NotebookToolPropertiesPanel: React.FC<NotebookToolPropertiesPanelPr
               />
             </button>
           </div>
+          {lastBatch && (
+            <button
+              type="button"
+              className="w-full rounded-md border border-panvas-border-default bg-panvas-bg-secondary px-2 py-1.5 text-xs font-medium text-panvas-text-primary hover:bg-panvas-bg-hover focus-ring"
+              onClick={async () => {
+                try {
+                  setIsApplying(true);
+                  await onRestorePropertiesBatch(lastBatch);
+                  setLastBatch(null);
+                  showToast('Restored the previous page properties', 'success');
+                } catch (error) {
+                  console.error('Failed to restore page properties:', error);
+                  showToast('Failed to restore the previous page properties', 'error');
+                } finally {
+                  setIsApplying(false);
+                }
+              }}
+              disabled={isApplying}
+            >
+              Undo last Apply to all
+            </button>
+          )}
 
           {/* Paper Color */}
           <div>
@@ -336,66 +413,14 @@ export const NotebookToolPropertiesPanel: React.FC<NotebookToolPropertiesPanelPr
             </select>
           </div>
 
-          {/* Scroll Direction */}
-          <div className="mt-6 pt-4 border-t border-panvas-border-subtle">
-            <div className="mb-3 font-medium text-panvas-text-primary">Scroll direction</div>
-            <div className="grid grid-cols-3 gap-1.5 p-1.5 rounded-xl bg-panvas-bg-secondary border border-panvas-border-subtle shadow-inner">
-              
-              <button
-                type="button"
-                onClick={() => setScrollDirection('vertical')}
-                className={`flex flex-col items-center justify-between gap-2 px-1 py-3 rounded-lg hover:bg-panvas-bg-hover transition-colors group focus-ring ${scrollDirection === 'vertical' ? 'bg-panvas-bg-hover' : ''}`}
-              >
-                {/* Vertical Icon */}
-                <div className={`h-6 flex flex-col items-center justify-center transition-opacity ${scrollDirection === 'vertical' ? 'opacity-100' : 'opacity-60 group-hover:opacity-100'}`}>
-                  <div className="w-3.5 h-1 rounded-t-sm bg-panvas-text-secondary opacity-50 mb-[1px]" />
-                  <div className="w-3.5 h-[14px] rounded-[3px] border border-panvas-text-primary" />
-                  <div className="w-3.5 h-1 rounded-b-sm bg-panvas-text-secondary opacity-50 mt-[1px]" />
-                </div>
-                <span className={`text-[10px] font-medium ${scrollDirection === 'vertical' ? 'text-panvas-text-primary' : 'text-panvas-text-secondary'}`}>Vertical</span>
-                <div className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center mt-1 ${scrollDirection === 'vertical' ? 'border-[#ff6b4a]' : 'border-panvas-border-strong'}`}>
-                  {scrollDirection === 'vertical' && <div className="w-2 h-2 rounded-full bg-[#ff6b4a]" />}
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setScrollDirection('horizontal')}
-                className={`flex flex-col items-center justify-between gap-2 px-1 py-3 rounded-lg hover:bg-panvas-bg-hover transition-colors group focus-ring ${scrollDirection === 'horizontal' ? 'bg-panvas-bg-hover' : ''}`}
-              >
-                {/* Horizontal Icon */}
-                <div className={`h-6 flex items-center justify-center transition-opacity ${scrollDirection === 'horizontal' ? 'opacity-100' : 'opacity-60 group-hover:opacity-100'}`}>
-                  <div className="w-1 h-3.5 rounded-l-sm bg-panvas-text-secondary opacity-50 mr-[1px]" />
-                  <div className="w-5 h-3.5 rounded-[3px] border border-panvas-text-primary" />
-                  <div className="w-1 h-3.5 rounded-r-sm bg-panvas-text-secondary opacity-50 ml-[1px]" />
-                </div>
-                <span className={`text-[10px] font-medium ${scrollDirection === 'horizontal' ? 'text-panvas-text-primary' : 'text-panvas-text-secondary'}`}>Horizontal</span>
-                <div className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center mt-1 ${scrollDirection === 'horizontal' ? 'border-[#ff6b4a]' : 'border-panvas-border-strong'}`}>
-                  {scrollDirection === 'horizontal' && <div className="w-2 h-2 rounded-full bg-[#ff6b4a]" />}
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setScrollDirection('two-page-horizontal')}
-                className={`flex flex-col items-center justify-between gap-2 px-1 py-3 rounded-lg hover:bg-panvas-bg-hover transition-colors group focus-ring ${scrollDirection === 'two-page-horizontal' ? 'bg-panvas-bg-hover' : ''}`}
-              >
-                {/* 2-page horizontal Icon */}
-                <div className={`h-6 flex items-center justify-center transition-opacity ${scrollDirection === 'two-page-horizontal' ? 'opacity-100' : 'opacity-60 group-hover:opacity-100'}`}>
-                  <div className="w-1 h-3.5 rounded-l-sm bg-panvas-text-secondary opacity-40 mr-[1px]" />
-                  <div className={`flex rounded-[3px] overflow-hidden border ${scrollDirection === 'two-page-horizontal' ? 'border-[#ff6b4a]/80 bg-[#ff6b4a]/10' : 'border-panvas-text-primary/70 bg-panvas-bg-primary'}`}>
-                    <div className={`w-[11px] h-3.5 border-r ${scrollDirection === 'two-page-horizontal' ? 'border-[#ff6b4a]/40' : 'border-panvas-text-primary/30'}`} />
-                    <div className="w-[11px] h-3.5" />
-                  </div>
-                  <div className="w-1 h-3.5 rounded-r-sm bg-panvas-text-secondary opacity-40 ml-[1px]" />
-                </div>
-                <span className={`text-[10px] font-medium text-center leading-[1.1] ${scrollDirection === 'two-page-horizontal' ? 'text-panvas-text-primary' : 'text-panvas-text-secondary'}`}>2-page<br/>horizontal</span>
-                <div className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center mt-1 ${scrollDirection === 'two-page-horizontal' ? 'border-[#ff6b4a]' : 'border-panvas-border-strong'}`}>
-                  {scrollDirection === 'two-page-horizontal' && <div className="w-2 h-2 rounded-full bg-[#ff6b4a]" />}
-                </div>
-              </button>
-
+          <div className="rounded-lg border border-panvas-border-subtle bg-panvas-bg-secondary/55 p-3">
+            <div className="flex items-center gap-2 font-medium text-panvas-text-primary"><UnfoldVertical size={15} />Expand Page</div>
+            <p className="mt-1 text-2xs leading-4 text-panvas-text-tertiary">Add permanent writable space below this page.</p>
+            <div className="mt-2 flex items-center gap-2">
+              <button type="button" onClick={() => handleUpdate({ extraHeight: Math.min(6000, (properties.extraHeight ?? 0) + 280) })} className="flex-1 rounded-md border border-panvas-border-default bg-panvas-bg-primary px-2 py-1.5 text-xs font-medium text-panvas-text-primary hover:bg-panvas-bg-hover focus-ring">Add space below</button>
+              {(properties.extraHeight ?? 0) > 0 && <button type="button" onClick={() => handleUpdate({ extraHeight: 0 })} className="rounded-md px-2 py-1.5 text-xs text-panvas-text-secondary hover:bg-panvas-bg-hover focus-ring">Reset</button>}
             </div>
+            {(properties.extraHeight ?? 0) > 0 && <div className="mt-2 font-mono text-2xs text-panvas-text-tertiary">+{Math.round(properties.extraHeight ?? 0)} px writable</div>}
           </div>
         </div>
       </aside>

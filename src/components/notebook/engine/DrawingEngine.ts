@@ -4,11 +4,17 @@
 // Renders strokes onto an HTML5 Canvas.
 // No React dependency — pure TypeScript class.
 
-import type { Stroke, StrokePoint, DrawingToolId } from './drawingTypes';
-import { ViewportManager } from './ViewportManager';
-import { ShapeManager } from './ShapeManager';
-import { ImageManager } from './ImageManager';
-import { SelectionEngine } from './SelectionEngine';
+import type { Stroke, StrokePoint, DrawingToolId, StrokePattern } from './drawingTypes.ts';
+import { DEFAULT_PAGE_LAYER_ID } from './drawingTypes.ts';
+import { ViewportManager } from './ViewportManager.ts';
+import { ShapeManager } from './ShapeManager.ts';
+import { ImageManager } from './ImageManager.ts';
+import { SelectionEngine } from './SelectionEngine.ts';
+import { getPencilRenderPoint, getStrokeRenderHalfWidth } from './strokeGeometry.ts';
+import { traceInkClip, strokeRegion, eraserCapsule, regionIntersects } from './inkRegion.ts';
+import { LayerManager } from './LayerManager.ts';
+import { RulerManager } from './RulerManager.ts';
+import { LaserManager } from './LaserManager.ts';
 
 export class DrawingEngine {
   private strokes: Stroke[] = [];
@@ -18,11 +24,48 @@ export class DrawingEngine {
   private imageManager: ImageManager;
   private selectionEngine?: SelectionEngine;
   private canvas: HTMLCanvasElement | null = null;
+  private layerManager: LayerManager;
+  private rulerManager: RulerManager;
+  private laserManager: LaserManager;
+  private _scaleMultiplier = 1;
+  private canvasCssWidth = 0;
+  private canvasCssHeight = 0;
+  private layerCanvases = new Map<string, CanvasRenderingContext2D>();
 
-  constructor(viewport: ViewportManager, shapeManager: ShapeManager, imageManager: ImageManager) {
+  attachLayerCanvas(id: string, canvas: HTMLCanvasElement, width: number, height: number, scale: number): () => void {
+    const ctx = this.viewport.configureCanvas(canvas, width, height, scale / Math.sqrt(Math.max(1, this.layerManager.getLayers().length)));
+    this.layerCanvases.set(id, ctx);
+    this.redraw();
+    return () => { if (this.layerCanvases.get(id) === ctx) this.layerCanvases.delete(id); this.redraw(); };
+  }
+
+  constructor(
+    viewport: ViewportManager,
+    shapeManager: ShapeManager,
+    imageManager: ImageManager,
+    layerManager: LayerManager = new LayerManager(),
+    rulerManager: RulerManager = new RulerManager(),
+    laserManager: LaserManager = new LaserManager(),
+  ) {
     this.viewport = viewport;
     this.shapeManager = shapeManager;
     this.imageManager = imageManager;
+    this.layerManager = layerManager;
+    this.rulerManager = rulerManager;
+    this.laserManager = laserManager;
+    this.laserManager.setRedrawCallback(() => this.redraw());
+  }
+
+  setScaleMultiplier(mult: number) {
+    this._scaleMultiplier = mult;
+  }
+
+  getRulerManager(): RulerManager {
+    return this.rulerManager;
+  }
+
+  getLaserManager(): LaserManager {
+    return this.laserManager;
   }
   
   setSelectionEngine(selectionEngine: SelectionEngine) {
@@ -32,13 +75,25 @@ export class DrawingEngine {
   /** Bind to a canvas element. Call after mount. */
   setCanvas(canvas: HTMLCanvasElement, cssWidth: number, cssHeight: number): void {
     this.canvas = canvas;
-    this.ctx = this.viewport.configureCanvas(canvas, cssWidth, cssHeight);
+    this.canvasCssWidth = cssWidth;
+    this.canvasCssHeight = cssHeight;
+    this.ctx = this.viewport.configureCanvas(canvas, cssWidth, cssHeight, this._scaleMultiplier);
+  }
+
+  /** Detach from canvas element. */
+  detachCanvas(): void {
+    this.canvas = null;
+    this.ctx = null;
+    this.canvasCssWidth = 0;
+    this.canvasCssHeight = 0;
   }
 
   /** Resize the canvas (e.g., on window resize). */
   resize(cssWidth: number, cssHeight: number): void {
     if (!this.canvas) return;
-    this.ctx = this.viewport.configureCanvas(this.canvas, cssWidth, cssHeight);
+    this.canvasCssWidth = cssWidth;
+    this.canvasCssHeight = cssHeight;
+    this.ctx = this.viewport.configureCanvas(this.canvas, cssWidth, cssHeight, this._scaleMultiplier);
     this.redraw();
   }
 
@@ -55,7 +110,22 @@ export class DrawingEngine {
 
   /** Add a completed stroke. Does NOT redraw — caller should call redraw() or render incrementally. */
   addStroke(stroke: Stroke): void {
+    stroke.layerId ??= this.layerManager.getActiveLayerId();
     this.strokes.push(stroke);
+  }
+
+  canEditActiveLayer(): boolean {
+    return this.layerManager.isEditable(this.layerManager.getActiveLayerId());
+  }
+
+  /** Place reusable content in the visible part of this mounted page. */
+  getInsertionPoint(width = 220, height = 180): { x: number; y: number } {
+    if (!this.canvas) return { x: 40, y: 40 };
+    const rect = this.canvas.getBoundingClientRect();
+    const x = (Math.max(0, rect.left) + Math.min(window.innerWidth, rect.right)) / 2 - rect.left;
+    const y = (Math.max(0, rect.top) + Math.min(window.innerHeight, rect.bottom)) / 2 - rect.top;
+    const point = this.viewport.canvasToPage(x * this.canvasCssWidth / rect.width, y * this.canvasCssHeight / rect.height);
+    return { x: Math.max(20, point.x - width / 2), y: Math.max(20, point.y - height / 2) };
   }
 
   /** Remove a stroke by ID. Returns the removed stroke or undefined. */
@@ -89,25 +159,29 @@ export class DrawingEngine {
   /** Full redraw of all strokes. */
   redraw(): void {
     if (!this.ctx || !this.canvas) return;
-    const dpr = this.viewport.getDevicePixelRatio();
-    const cssWidth = this.canvas.width / dpr;
-    const cssHeight = this.canvas.height / dpr;
-
-    this.ctx.clearRect(0, 0, cssWidth, cssHeight);
+    this.ctx.clearRect(0, 0, this.canvasCssWidth, this.canvasCssHeight);
     
     // Save context state before applying viewport transform
     this.ctx.save();
     this.viewport.applyTransform(this.ctx);
 
-    // Render images first (bottom layer)
-    this.imageManager.renderImages(this.ctx);
+    this.ctx.imageSmoothingEnabled = true;
+    this.ctx.imageSmoothingQuality = 'high';
 
-    for (const stroke of this.strokes) {
-      this.renderStroke(this.ctx, stroke);
+    for (const layer of this.layerManager.getLayers()) {
+      const layerCtx = this.layerCanvases.get(layer.id);
+      if (layerCtx) layerCtx.clearRect(0, 0, this.canvasCssWidth, this.canvasCssHeight);
+      if (!layer.visible) continue;
+      const ctx = layerCtx ?? this.ctx;
+      if (layerCtx) { ctx.save(); this.viewport.applyTransform(ctx); }
+      this.imageManager.renderImages(ctx, layer.id);
+      for (const stroke of this.strokes) {
+        const strokeLayerId = stroke.layerId ?? DEFAULT_PAGE_LAYER_ID;
+        if (strokeLayerId === layer.id) this.renderStroke(ctx, stroke);
+      }
+      this.shapeManager.renderShapes(ctx, layer.id);
+      if (layerCtx) ctx.restore();
     }
-    
-    // Render shapes
-    this.shapeManager.renderShapes(this.ctx);
 
     // Restore context to undo viewport transform before rendering selection boxes
     // Actually SelectionEngine handles viewport transform internally, so we restore first.
@@ -116,27 +190,76 @@ export class DrawingEngine {
     if (this.selectionEngine) {
       this.selectionEngine.renderSelection(this.ctx);
     }
+    this.renderTransientOverlays();
+  }
+
+  private renderTransientOverlays(): void {
+    this.renderRulerOverlay();
+    this.renderLaserOverlay();
+  }
+
+  private renderRulerOverlay(): void {
+    if (!this.ctx || !this.rulerManager.getState().enabled) return;
+    const darkMode = typeof document !== 'undefined'
+      && document.documentElement.classList.contains('dark');
+    this.ctx.save();
+    this.viewport.applyTransform(this.ctx);
+    this.rulerManager.render(this.ctx, this.viewport.getState().scale, darkMode);
+    this.ctx.restore();
+  }
+
+  private renderLaserOverlay(): void {
+    if (!this.ctx || this.laserManager.getActiveTrail().length === 0) return;
+    this.ctx.save();
+    this.viewport.applyTransform(this.ctx);
+    this.laserManager.render(this.ctx, this.viewport.getState().scale);
+    this.ctx.restore();
   }
 
   /**
    * Render a single stroke onto a context.
    * Used for both full redraws and live drawing previews.
    */
+  private pencilSurface?: HTMLCanvasElement;
+
   renderStroke(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
     const { points, color, thickness, opacity, tool } = stroke;
     if (points.length < 2) return;
 
     ctx.save();
+    traceInkClip(ctx, stroke);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.globalAlpha = opacity;
+    this.applyStrokePattern(ctx, stroke.pattern ?? 'solid', thickness);
 
     switch (tool) {
       case 'pen':
         this.renderPenStroke(ctx, points, color, thickness);
         break;
       case 'pencil':
-        this.renderPencilStroke(ctx, points, color, thickness);
+        // Rasterize the original grain before applying the retained vector domain.
+        // Skia clips stroked thin lines before rasterizing, changing their grain
+        // even far inside a clip. This transient surface keeps that coverage stable;
+        // only vector contours (never this bitmap) are persisted.
+        this.pencilSurface ??= document.createElement('canvas');
+        if (this.pencilSurface.width !== ctx.canvas.width) this.pencilSurface.width = ctx.canvas.width;
+        if (this.pencilSurface.height !== ctx.canvas.height) this.pencilSurface.height = ctx.canvas.height;
+        {
+          const pencil = this.pencilSurface.getContext('2d')!;
+          pencil.resetTransform();
+          pencil.clearRect(0, 0, pencil.canvas.width, pencil.canvas.height);
+          pencil.save();
+          pencil.setTransform(ctx.getTransform());
+          pencil.globalAlpha = opacity;
+          pencil.lineCap = 'round';
+          pencil.lineJoin = 'round';
+          this.renderPencilStroke(pencil, points, color, thickness);
+          pencil.restore();
+          ctx.resetTransform();
+          ctx.globalAlpha = 1;
+          ctx.drawImage(this.pencilSurface, 0, 0);
+        }
         break;
       case 'highlighter':
         this.renderHighlighterStroke(ctx, points, color, thickness);
@@ -147,9 +270,18 @@ export class DrawingEngine {
       case 'eraser':
         this.renderEraserStroke(ctx, points, thickness);
         break;
+      case 'laser':
+        // Laser trails are rendered only by LaserManager and are never strokes.
+        break;
     }
 
     ctx.restore();
+  }
+
+  private applyStrokePattern(ctx: CanvasRenderingContext2D, pattern: StrokePattern, thickness: number): void {
+    if (pattern === 'dashed') ctx.setLineDash([Math.max(5, thickness * 3), Math.max(4, thickness * 2)]);
+    else if (pattern === 'dotted') ctx.setLineDash([0.01, Math.max(4, thickness * 2.2)]);
+    else ctx.setLineDash([]);
   }
 
   // ---- Pen: smooth pressure-variable strokes ----
@@ -193,20 +325,19 @@ export class DrawingEngine {
     const passes = 2;
     for (let pass = 0; pass < passes; pass++) {
       ctx.beginPath();
-      const jitterScale = 0.5 * (pass + 1);
       for (let i = 0; i < points.length; i++) {
         const p = points[i];
         const width = baseThickness * p.pressure * 1.5;
         ctx.lineWidth = Math.max(0.3, width / passes);
 
-        // Deterministic jitter based on index and pass
-        const jx = p.x + Math.sin(i * 7.3 + pass * 13.7) * jitterScale;
-        const jy = p.y + Math.cos(i * 11.1 + pass * 17.3) * jitterScale;
+        // Point identity, not the local array index, owns the grain. Splitting a stroke
+        // therefore cannot change the appearance of points outside the erased region.
+        const jittered = getPencilRenderPoint(p, pass);
 
         if (i === 0) {
-          ctx.moveTo(jx, jy);
+          ctx.moveTo(jittered.x, jittered.y);
         } else {
-          ctx.lineTo(jx, jy);
+          ctx.lineTo(jittered.x, jittered.y);
         }
       }
       ctx.stroke();
@@ -283,16 +414,17 @@ export class DrawingEngine {
    * Call this during pointermove for live feedback.
    * After pointerup, call addStroke() and redraw().
    */
-  renderLiveStroke(points: StrokePoint[], tool: DrawingToolId, color: string, thickness: number, opacity: number): void {
+  renderLiveStroke(points: StrokePoint[], tool: DrawingToolId, color: string, thickness: number, opacity: number, pattern: StrokePattern = 'solid'): void {
     if (!this.ctx || !this.canvas) return;
 
     // Redraw everything first (clears the previous live preview)
     this.redraw();
 
     // Then draw the live stroke on top
-    this.ctx.save();
-    this.viewport.applyTransform(this.ctx);
-    this.renderStroke(this.ctx, {
+    const ctx = this.layerCanvases.get(this.layerManager.getActiveLayerId()) ?? this.ctx;
+    ctx.save();
+    this.viewport.applyTransform(ctx);
+    this.renderStroke(ctx, {
       id: '__live__',
       type: 'stroke',
       tool,
@@ -300,28 +432,94 @@ export class DrawingEngine {
       color,
       thickness,
       opacity,
+      pattern,
       createdAt: 0,
     });
+    ctx.restore();
+    this.renderTransientOverlays();
+  }
+
+  /** Render the transient freehand selection enclosure without persisting page content. */
+  renderLasso(points: StrokePoint[]): void {
+    if (!this.ctx || !this.canvas) return;
+
+    this.redraw();
+    if (points.length < 2) return;
+
+    const scale = this.viewport.getState().scale;
+    this.ctx.save();
+    this.viewport.applyTransform(this.ctx);
+    this.ctx.beginPath();
+    this.ctx.moveTo(points[0].x, points[0].y);
+    for (const point of points.slice(1)) {
+      this.ctx.lineTo(point.x, point.y);
+    }
+    this.ctx.closePath();
+    this.ctx.fillStyle = 'rgba(59, 130, 246, 0.08)';
+    this.ctx.strokeStyle = '#3b82f6';
+    this.ctx.lineWidth = 1.5 / scale;
+    this.ctx.setLineDash([4 / scale, 4 / scale]);
+    this.ctx.fill();
+    this.ctx.stroke();
     this.ctx.restore();
+    this.renderTransientOverlays();
   }
 
   // ---- Hit Testing (for eraser and selection) ----
 
   /**
-   * Find all stroke IDs that are within `radius` CSS pixels of the given point.
+   * Find all stroke IDs that are within `radius` CSS pixels of the given point,
+   * checking proximity to each line segment plus the stroke's half-thickness.
    */
   findStrokesNearPoint(x: number, y: number, radius: number): string[] {
-    const radiusSq = radius * radius;
     const hits: string[] = [];
 
     for (const stroke of this.strokes) {
-      for (const point of stroke.points) {
-        const dx = point.x - x;
-        const dy = point.y - y;
-        if (dx * dx + dy * dy <= radiusSq) {
+      if (!this.layerManager.isEditable(stroke.layerId)) continue;
+      if (stroke.inkClip && !regionIntersects(strokeRegion(stroke), eraserCapsule({ x, y }, { x, y }, Math.max(radius, 0.01)))) continue;
+      const effectiveRadius = radius + getStrokeRenderHalfWidth(stroke);
+      const effRadiusSq = effectiveRadius * effectiveRadius;
+      const pts = stroke.points;
+      if (!pts || pts.length === 0) continue;
+
+      if (pts.length === 1) {
+        const dx = pts[0].x - x;
+        const dy = pts[0].y - y;
+        if (dx * dx + dy * dy <= effRadiusSq) {
           hits.push(stroke.id);
-          break; // Only need to hit one point per stroke
         }
+        continue;
+      }
+
+      let hit = false;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p1 = pts[i];
+        const p2 = pts[i + 1];
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const lenSq = dx * dx + dy * dy;
+
+        let dpx: number;
+        let dpy: number;
+
+        if (lenSq === 0) {
+          dpx = x - p1.x;
+          dpy = y - p1.y;
+        } else {
+          let t = ((x - p1.x) * dx + (y - p1.y) * dy) / lenSq;
+          t = Math.max(0, Math.min(1, t));
+          dpx = x - (p1.x + t * dx);
+          dpy = y - (p1.y + t * dy);
+        }
+
+        if (dpx * dpx + dpy * dpy <= effRadiusSq) {
+          hit = true;
+          break;
+        }
+      }
+
+      if (hit) {
+        hits.push(stroke.id);
       }
     }
 
@@ -337,6 +535,7 @@ export class DrawingEngine {
     const hits: string[] = [];
 
     for (const stroke of this.strokes) {
+      if (!this.layerManager.isEditable(stroke.layerId)) continue;
       for (const point of stroke.points) {
         if (point.x >= x && point.x <= x2 && point.y >= y && point.y <= y2) {
           hits.push(stroke.id);

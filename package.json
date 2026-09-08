@@ -9,38 +9,60 @@
     "prestart": "npm run build",
     "start": "electron .",
     "dev": "vite",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview",
-    "lint": "eslint ."
+    "dev:landing": "vite --mode landing",
+    "dev:web": "vite --mode web",
+    "test": "node --test tests/layers.test.ts tests/panvas-interactions.test.ts tests/page-properties.test.ts tests/release-readiness.test.ts tests/search-pdf.test.ts tests/pdf-annotation.test.ts tests/notebook-export.test.ts tests/notebook-export-ui.test.ts tests/toolbar-layout.test.ts tests/canvas-capabilities.test.ts tests/audio-notes.test.ts tests/handwriting-recognition.test.ts tests/library.test.ts tests/library-data.test.ts tests/library-lifecycle.test.ts tests/browser-bootstrap.test.ts tests/default-landing.test.ts tests/mobile-presentation.test.ts tests/rich-text.test.ts tests/neural-handwriting.test.ts tests/model-lifecycle.test.ts tests/canvas-persistence.test.ts tests/cloud-sync-core.test.ts tests/cloud-sync-stability.test.ts tests/cloud-workspace-unification.test.ts tests/cloud-sync-v2.test.ts tests/trash-purge.test.ts tests/sticky-notes.test.ts tests/sticky-notes-runtime.test.ts tests/layers-runtime.test.ts tests/local-elements-runtime.test.ts",
+    "test": "node --test tests/layers.test.ts tests/panvas-interactions.test.ts tests/page-properties.test.ts tests/release-readiness.test.ts tests/search-pdf.test.ts tests/pdf-annotation.test.ts tests/notebook-export.test.ts tests/notebook-export-ui.test.ts tests/toolbar-layout.test.ts tests/canvas-capabilities.test.ts tests/audio-notes.test.ts tests/handwriting-recognition.test.ts tests/library.test.ts tests/library-data.test.ts tests/library-lifecycle.test.ts tests/browser-bootstrap.test.ts tests/default-landing.test.ts tests/mobile-presentation.test.ts tests/rich-text.test.ts tests/neural-handwriting.test.ts tests/model-lifecycle.test.ts tests/canvas-persistence.test.ts tests/cloud-sync-core.test.ts tests/cloud-sync-stability.test.ts tests/cloud-workspace-unification.test.ts tests/cloud-sync-v2.test.ts tests/trash-purge.test.ts tests/sticky-notes.test.ts tests/sticky-notes-runtime.test.ts tests/layers-runtime.test.ts tests/local-elements-runtime.test.ts tests/discord-rpc.test.ts",
+    "test:resize": "node --test tests/toolbar-resize.test.ts",
+    "test:electron": "node --test tests/electron-pipeline.test.ts",
+    "test:integrity": "node --test tests/electron-integrity.test.ts",
+    "test:browser-integrity": "node --test tests/browser-integrity.test.ts",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "build": "npm run typecheck && vite build",
+    "check:release": "node scripts/check-release.mjs",
+    "audit:sync": "node scripts/audit-sync-coverage.mjs",
+    "package:win": "npm run build && node scripts/package-windows.mjs",
+    "package:dir": "npm run build && node scripts/package-windows.mjs --dir",
+    "preview": "vite preview"
   },
   "dependencies": {
+    "@base-ui/react": "^1.7.0",
     "@excalidraw/excalidraw": "^0.17.6",
     "@hookform/resolvers": "^5.4.0",
+    "@huggingface/transformers": "^4.2.0",
     "@supabase/supabase-js": "^2.49.0",
-    "@tiptap/extension-color": "^3.29.2",
-    "@tiptap/extension-font-family": "^3.29.2",
-    "@tiptap/extension-highlight": "^3.29.2",
-    "@tiptap/extension-image": "^3.29.2",
-    "@tiptap/extension-link": "^3.29.2",
-    "@tiptap/extension-placeholder": "^3.29.2",
-    "@tiptap/extension-task-item": "^3.29.2",
-    "@tiptap/extension-task-list": "^3.29.2",
-    "@tiptap/extension-text-align": "^3.29.2",
-    "@tiptap/extension-text-style": "^3.29.2",
-    "@tiptap/extension-underline": "^3.29.2",
-    "@tiptap/pm": "^3.29.2",
-    "@tiptap/react": "^3.29.2",
-    "@tiptap/starter-kit": "^3.29.2",
-    "@tiptap/suggestion": "^3.29.2",
+    "@tiptap/extension-code-block-lowlight": "3.30.2",
+    "@tiptap/extension-color": "3.30.2",
+    "@tiptap/extension-font-family": "3.30.2",
+    "@tiptap/extension-highlight": "3.30.2",
+    "@tiptap/extension-image": "3.30.2",
+    "@tiptap/extension-link": "3.30.2",
+    "@tiptap/extension-placeholder": "3.30.2",
+    "@tiptap/extension-table": "3.30.2",
+    "@tiptap/extension-table-cell": "3.30.2",
+    "@tiptap/extension-table-header": "3.30.2",
+    "@tiptap/extension-table-row": "3.30.2",
+    "@tiptap/extension-task-item": "3.30.2",
+    "@tiptap/extension-task-list": "3.30.2",
+    "@tiptap/extension-text-align": "3.30.2",
+    "@tiptap/extension-text-style": "3.30.2",
+    "@tiptap/extension-underline": "3.30.2",
+    "@tiptap/pm": "3.30.2",
+    "@tiptap/react": "3.30.2",
+    "@tiptap/starter-kit": "3.30.2",
+    "@tiptap/suggestion": "3.30.2",
     "dexie": "^4.0.11",
     "dexie-react-hooks": "^1.1.7",
     "framer-motion": "^12.40.0",
+    "highlight.js": "11.11.2",
     "katex": "^0.16.21",
+    "lowlight": "^3.3.0",
     "lucide-react": "^0.469.0",
-    "nanoid": "^5.1.0",
+    "nanoid": "^5.1.16",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^4.10.38",
-    "posthog-js": "^1.376.4",
+    "polygon-clipping": "^0.15.7",
+    "posthog-js": "^1.380.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.76.1",
@@ -49,12 +71,15 @@
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.0",
     "remark-math": "^6.0.0",
+    "three": "^0.134.0",
     "tippy.js": "^6.3.7",
+    "vanta": "^0.5.24",
     "wouter": "^3.10.0",
     "zod": "^4.4.3",
     "zustand": "^5.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@tailwindcss/typography": "^0.5.20",
     "@types/katex": "^0.16.7",
     "@types/react": "^18.3.18",
@@ -65,11 +90,47 @@
     "electron": "^43.3.0",
     "electron-builder": "^26.15.3",
     "playwright": "^1.60.0",
-    "postcss": "^8.5.1",
+    "postcss": "^8.5.23",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",
-    "vite": "^6.1.0",
+    "vite": "^6.4.3",
     "vite-plugin-electron": "^1.1.1",
     "vite-plugin-electron-renderer": "^1.0.0"
+  },
+  "build": {
+    "appId": "com.panvas.app",
+    "productName": "Panvas",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json",
+      "!**/*.map"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/*.node"
+    ],
+    "win": {
+      "icon": "public/panvas-logo-1.1.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "uninstallDisplayName": "Panvas"
+    }
   }
 }

@@ -38,12 +38,12 @@ export function usePdfDocument(pdfDataId?: string) {
           throw new Error(`PDF data not found for id: ${pdfDataId}`);
         }
 
-        const blob = new Blob([pdfData.data], { type: 'application/pdf' });
-        const url = URL.createObjectURL(blob);
-        loadingTask = pdfjsLib.getDocument({ url });
-        
-        // Store URL on task for cleanup
-        (loadingTask as any)._objectUrl = url;
+        // Pass the bytes directly. A blob object URL would require the worker
+        // to fetch() it, and fetch is unavailable on the file:// origin the
+        // packaged Electron app runs on ("Failed to load PDF").
+        // slice(0) copies: pdf.js takes ownership of the buffer it receives.
+        const bytes = new Uint8Array(pdfData.data.slice(0));
+        loadingTask = pdfjsLib.getDocument({ data: bytes });
 
         const doc = await loadingTask.promise;
 
@@ -68,10 +68,7 @@ export function usePdfDocument(pdfDataId?: string) {
     return () => {
       isMounted = false;
       if (loadingTask && !loadingTask.destroyed) {
-        const url = (loadingTask as any)._objectUrl;
-        loadingTask.destroy().catch(() => {}).finally(() => {
-          if (url) URL.revokeObjectURL(url);
-        });
+        loadingTask.destroy().catch(() => {});
       }
     };
   }, [pdfDataId, userId]);

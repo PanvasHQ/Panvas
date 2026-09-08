@@ -17,7 +17,7 @@ export interface CanvasData {
   userId: string | null;
 }
 
-export type BlockType = 'markdown' | 'latex' | 'pdf';
+export type BlockType = 'markdown' | 'latex' | 'pdf' | 'audio';
 
 export interface CustomBlock {
   id: string;

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   BookOpen,
   FileText,
@@ -23,8 +23,13 @@ import { WorkspaceTree } from '@/components/workspace/WorkspaceTree';
 import { TrashSection } from './TrashSection';
 import { canvasRepository } from '@/repositories/CanvasRepository';
 import { notebookRepository } from '@/repositories/NotebookRepository';
+import { useLocation } from 'wouter';
+import { validatePdfImport } from '@/services/pdf/validatePdfImport';
+import { useDismissibleLayer } from '@/components/ui/useDismissibleLayer';
+import { navigateToLibraryView } from '@/services/library/libraryRouteState';
 
 export function Sidebar() {
+  const [, navigate] = useLocation();
   const {
     workspaces,
     activeWorkspaceId,
@@ -41,6 +46,7 @@ export function Sidebar() {
     activePageId,
     setActivePage,
     setActiveNotebookSection,
+    loadWorkspaceContents,
     notebooks,
     canvasFiles,
     deletedWorkspaces,
@@ -52,6 +58,9 @@ export function Sidebar() {
   const { openCreateDialog, openContextMenu, showToast } = useUIStore();
   const { user } = useAuthStore();
   const [isNewMenuOpen, setIsNewMenuOpen] = useState(false);
+  const newMenuRef = useRef<HTMLDivElement>(null);
+
+  useDismissibleLayer(isNewMenuOpen, newMenuRef, () => setIsNewMenuOpen(false));
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const importTargetSectionId = React.useRef<string | null>(null);
 
@@ -59,16 +68,15 @@ export function Sidebar() {
     const section = notebookSections.find(s => s.id === sectionId);
     if (!section) return;
     
-    const workspaceId = workspaces.find(w => w.id === activeWorkspaceId)?.id || sectionId; 
-    // ^ just a fallback, workspaceId should really be found from notebook
     const notebook = notebooks.find(n => n.id === section.notebookId);
     if (!notebook) return;
 
     try {
       showToast('Importing PDF...', 'info');
       const buffer = await file.arrayBuffer();
+      await validatePdfImport(buffer);
       const pdfData = await canvasRepository.storePdf(user?.id || null, 'temp', file.name, buffer);
-      
+
       const page = await notebookRepository.createPage(
         user?.id || null,
         notebook.workspaceId,
@@ -79,9 +87,7 @@ export function Sidebar() {
         pdfData.id
       );
 
-      // Navigate to the newly imported page
-      setActiveNotebook(notebook.id);
-      setActiveNotebookSection(section.id);
+      await loadWorkspaceContents(notebook.workspaceId);
       setActivePage(page.id);
       showToast(`Imported ${file.name}`, 'success');
     } catch (err: any) {
@@ -90,10 +96,11 @@ export function Sidebar() {
     }
   };
 
-  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file && file.type === 'application/pdf' && importTargetSectionId.current) {
-      handlePdfImport(file, importTargetSectionId.current);
+    const isPdf = file && (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'));
+    if (isPdf && importTargetSectionId.current) {
+      await handlePdfImport(file, importTargetSectionId.current);
     } else if (file) {
       showToast('Only PDF files are supported right now.', 'error');
     }
@@ -102,13 +109,13 @@ export function Sidebar() {
   };
 
   useEffect(() => {
-    const handleImportEvent = (e: Event) => {
+    const handleImportEvent = async (e: Event) => {
       const customEvent = e as CustomEvent;
       if (customEvent.detail.sectionId) {
         importTargetSectionId.current = customEvent.detail.sectionId;
         if (customEvent.detail.file) {
           // Direct file drop
-          handlePdfImport(customEvent.detail.file, customEvent.detail.sectionId);
+          await handlePdfImport(customEvent.detail.file, customEvent.detail.sectionId);
           importTargetSectionId.current = null;
         } else {
           // Open file picker
@@ -131,7 +138,7 @@ export function Sidebar() {
   }, [loadRecentFiles, loadTrash]);
 
   return (
-    <aside className="h-full w-full flex-shrink-0 flex flex-col bg-panvas-bg-primary border-r border-panvas-border-subtle text-xs">
+    <aside className="panvas-sidebar h-full w-full flex-shrink-0 flex flex-col bg-panvas-bg-primary border-r border-panvas-border-subtle text-xs">
       <input 
         type="file" 
         accept="application/pdf" 
@@ -145,38 +152,47 @@ export function Sidebar() {
           <span className="text-[10px] font-semibold tracking-[0.13em] text-panvas-text-tertiary uppercase">Library</span>
           <span className="text-2xs text-panvas-text-tertiary">Local</span>
         </div>
-        <button
-          onClick={() => setIsNewMenuOpen(open => !open)}
-          className="w-full h-8 flex items-center justify-center gap-1.5 px-2 rounded-md
+        <div ref={newMenuRef} className="relative">
+          <button
+            type="button"
+            onClick={() => setIsNewMenuOpen(open => !open)}
+            aria-expanded={isNewMenuOpen}
+            aria-haspopup="menu"
+            className="w-full h-8 flex items-center justify-center gap-1.5 px-2 rounded-md
                      border border-panvas-border-default bg-panvas-bg-secondary text-panvas-text-primary font-medium
                      hover:bg-panvas-bg-hover hover:border-panvas-border-strong active:bg-panvas-bg-active
                      transition-colors duration-150 focus-ring"
-        >
-          <Plus size={14} />
-          <span>New item</span>
-          <ChevronDown size={13} className="ml-0.5 text-panvas-text-tertiary" />
-        </button>
-        {isNewMenuOpen && (
-          <div className="relative">
-            <div className="absolute left-0 right-0 top-1 z-30 rounded-md border border-panvas-border-default bg-panvas-bg-elevated p-1 shadow-glass-sm">
-              <NewItemAction icon={<Folder size={14} />} label="New Folder" onClick={() => openCreateDialog('folder')} close={() => setIsNewMenuOpen(false)} />
-              <NewItemAction icon={<BookOpen size={14} />} label="New Notebook" onClick={() => openCreateDialog('notebook')} close={() => setIsNewMenuOpen(false)} />
-              <NewItemAction icon={<ListTree size={14} />} label="New Section" onClick={() => activeNotebookId ? openCreateDialog('section', activeNotebookId) : showToast('Select a notebook first', 'info')} close={() => setIsNewMenuOpen(false)} />
-              <NewItemAction icon={<FileText size={14} />} label="New Page" onClick={() => activeNotebookSectionId ? openCreateDialog('page', activeNotebookSectionId) : showToast('Select a section first', 'info')} close={() => setIsNewMenuOpen(false)} />
+          >
+            <Plus size={14} />
+            <span>New item</span>
+            <ChevronDown size={13} className="ml-0.5 text-panvas-text-tertiary" />
+          </button>
+          {isNewMenuOpen && (
+            <div role="menu" aria-label="Create new item" className="panvas-overlay panvas-menu absolute left-0 right-0 top-[calc(100%+0.25rem)] w-64 p-1.5">
+              <NewItemAction icon={<Folder size={14} />} label="New Folder" description="Organize related work" onClick={() => openCreateDialog('folder')} close={() => setIsNewMenuOpen(false)} />
+              <NewItemAction icon={<BookOpen size={14} />} label="New Notebook" description="Pages, sections, and handwriting" onClick={() => openCreateDialog('notebook')} close={() => setIsNewMenuOpen(false)} />
+              <NewItemAction icon={<ListTree size={14} />} label="New Section" description="Add a section to this notebook" onClick={() => activeNotebookId ? openCreateDialog('section', activeNotebookId) : showToast('Select a notebook first', 'info')} close={() => setIsNewMenuOpen(false)} />
+              <NewItemAction icon={<FileText size={14} />} label="New Page" description="Start a page in this section" onClick={() => activeNotebookSectionId ? openCreateDialog('page', activeNotebookSectionId) : showToast('Select a section first', 'info')} close={() => setIsNewMenuOpen(false)} />
               <div className="my-1 h-px bg-panvas-border-subtle" />
-              <NewItemAction icon={<FileText size={14} />} label="New Canvas" onClick={() => openCreateDialog('canvas')} close={() => setIsNewMenuOpen(false)} />
+              <NewItemAction icon={<FileText size={14} />} label="New Canvas" description="An infinite visual workspace" onClick={() => openCreateDialog('canvas')} close={() => setIsNewMenuOpen(false)} />
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-2.5 pb-3 space-y-4">
         <nav aria-label="Library navigation" className="space-y-0.5">
           <SidebarNavItem 
             icon={<Home size={16} />} 
-            label="Home" 
+            label="Library" 
             isActive={!activeCanvasId && !activePageId} 
-            onClick={() => { setActiveCanvas(null); setActivePage(null); setActiveNotebook(null); }} 
+            onClick={() => {
+              setActiveCanvas(null);
+              setActivePage(null);
+              setActiveNotebook(null);
+              navigateToLibraryView('library');
+              navigate('/app/library');
+            }} 
           />
         </nav>
 
@@ -205,6 +221,9 @@ export function Sidebar() {
                 }
                 actions={
                   <button
+                    type="button"
+                    aria-label={`Workspace actions for ${workspace.name}`}
+                    title={`Workspace actions for ${workspace.name}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       openContextMenu(e.clientX, e.clientY, workspace.id, 'workspace');
@@ -228,6 +247,7 @@ export function Sidebar() {
           </div>
         </section>
 
+        <TrashSection />
 
       </div>
 
@@ -241,8 +261,10 @@ export function Sidebar() {
   );
 }
 
-function NewItemAction({ icon, label, onClick, close }: { icon: React.ReactNode; label: string; onClick: () => void; close: () => void }) {
-  return <button onClick={() => { onClick(); close(); }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-panvas-text-secondary hover:bg-panvas-bg-hover hover:text-panvas-text-primary"><span className="text-panvas-text-tertiary">{icon}</span>{label}</button>;
+function NewItemAction({ icon, label, description, onClick, close }: { icon: React.ReactNode; label: string; description: string; onClick: () => void; close: () => void }) {
+  // Keep native button semantics so keyboard and existing automation can
+  // discover the action consistently inside the menu.
+  return <button type="button" aria-label={label} onClick={() => { onClick(); close(); }} className="panvas-menu-item items-start"><span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-panvas-bg-secondary text-panvas-text-tertiary">{icon}</span><span className="min-w-0"><span className="block text-xs font-medium text-panvas-text-primary">{label}</span><span className="mt-0.5 block text-2xs leading-4 text-panvas-text-tertiary">{description}</span></span></button>;
 }
 
 function SidebarNavItem({ icon, label, isActive, onClick, badge, placeholder = false }: { icon: React.ReactNode, label: string, isActive?: boolean, onClick?: () => void, badge?: number, placeholder?: boolean }) {
@@ -335,7 +357,7 @@ function SidebarSection({
       if (data.type === 'folder') {
         await moveFolder(data.id, workspaceId);
       } else if (data.type === 'canvas') {
-        await moveCanvas(data.id, workspaceId, null);
+        await moveCanvas(data.id, workspaceId, null, null, null);
       }
     } catch (err) {
       console.warn('Invalid drop payload', err);

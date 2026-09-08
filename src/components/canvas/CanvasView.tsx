@@ -8,13 +8,35 @@ import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { useUIStore } from '@/stores/uiStore';
 import { CanvasOverlay } from './CanvasOverlay';
 import { CanvasToolbar } from './CanvasToolbar';
+import { CanvasLibraryDrawer } from './CanvasLibraryDrawer';
 import { WelcomeScreen as PanvasWelcomeScreen } from './WelcomeScreen';
-import { Excalidraw, MainMenu, WelcomeScreen as ExcalidrawWelcomeScreen } from '@excalidraw/excalidraw';
-import { loadFromBlob } from '@excalidraw/excalidraw';
+import { DefaultSidebar, convertToExcalidrawElements, loadFromBlob } from '@excalidraw/excalidraw';
 import { useAutosave } from '@/hooks/useAutosave';
 import { UniversalDropRouter } from '@/services/drop/UniversalDropRouter';
 import { canvasRepository } from '@/repositories/CanvasRepository';
 import { useAuthStore } from '@/stores/authStore';
+import {
+  deleteCanvasLibrary,
+  getCanvasLibraries,
+  importCanvasLibrary,
+  saveCanvasLibrary,
+} from '@/services/canvas/canvasLibraryRepository';
+import { PERSONAL_LIBRARY_FILE, type CanvasLibraryRecord } from '@/services/canvas/canvasLibraryModel';
+import {
+  captureCanvasSceneElementIds,
+  createExcalidrawShapeSkeleton,
+  findCurrentGestureFreedrawElement,
+  recognizeCanvasGesture,
+} from './canvasGestureRecognition';
+import { normalizeCanvasColor } from './canvasBackgrounds';
+import type { StrokePoint } from '../notebook/engine/drawingTypes';
+
+type LibraryItems = readonly any[];
+type CanvasPointerPayload = {
+  pointer: { x: number; y: number; tool: 'pointer' | 'laser' };
+  button: 'down' | 'up';
+  pointersMap?: unknown;
+};
 
 // Lazy-loaded Excalidraw
 let ExcalidrawComponent: React.ComponentType<any> | null = null;
@@ -29,7 +51,7 @@ const EXCALIDRAW_UI_OPTIONS = {
 };
 
 export function CanvasView() {
-  const { activeCanvasId } = useWorkspaceStore();
+  const { activeCanvasId, activeWorkspaceId } = useWorkspaceStore();
   const {
     currentData,
     loadCanvasData,
@@ -40,12 +62,37 @@ export function CanvasView() {
     updateBlock,
   } = useCanvasStore();
 
-  const [Excalidraw, setExcalidraw] = useState<React.ComponentType<any> | null>(ExcalidrawComponent);
-  const [MainMenu, setMainMenu] = useState<any>(MainMenuComponent);
-  const [ExcalidrawWelcomeScreen, setExcalidrawWelcomeScreen] = useState<any>(WelcomeScreenComponent);
+  // NOTE: the `() =>` wrappers are load-bearing, not stylistic. `useState(fn)` treats a
+  // function argument as a LAZY INITIALIZER and calls it during render. `MainMenu` is a
+  // plain React.FC and `WelcomeScreen` is a callable object, so passing them bare made
+  // React invoke them outside the <Excalidraw> provider on any remount where these
+  // module-level caches were already warm. Excalidraw's TunnelsContext defaults to null,
+  // so useTunnels() then threw "Cannot destructure property 'jotaiScope' of ... as it is null".
+  // Keep the extra arrow so the component is stored as a VALUE.
+  const [Excalidraw, setExcalidraw] = useState<React.ComponentType<any> | null>(() => ExcalidrawComponent);
+  const [MainMenu, setMainMenu] = useState<any>(() => MainMenuComponent);
+  const [ExcalidrawWelcomeScreen, setExcalidrawWelcomeScreen] = useState<any>(() => WelcomeScreenComponent);
   const [isLoading, setIsLoading] = useState(true);
   const [isCanvasDataReady, setIsCanvasDataReady] = useState(false);
+  const [libraryManagerOpen, setLibraryManagerOpen] = useState(false);
+  const [libraryRecords, setLibraryRecords] = useState<CanvasLibraryRecord[]>([]);
+  const [librariesLoading, setLibrariesLoading] = useState(false);
+  const [drawToShapeEnabled, setDrawToShapeEnabled] = useState(() => {
+    try {
+      return window.localStorage.getItem('panvas.canvas.drawToShape') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const isInitialLoad = useRef(true);
+  const isHydratingLibrary = useRef(false);
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
+  const preGestureElementIdsRef = useRef<Set<string> | null>(null);
+  const gestureRef = useRef<{
+    active: boolean;
+    points: StrokePoint[];
+    existingElementIds: Set<string>;
+  }>({ active: false, points: [], existingElementIds: new Set() });
 
   // Load Excalidraw dynamically
   useEffect(() => {
@@ -77,7 +124,7 @@ export function CanvasView() {
       isInitialLoad.current = true;
       setIsCanvasDataReady(false);
 
-      loadCanvasData(activeCanvasId).finally(() => {
+      loadCanvasData(activeCanvasId, activeWorkspaceId ?? undefined).finally(() => {
         if (!cancelled) {
           setIsCanvasDataReady(true);
         }
@@ -89,7 +136,7 @@ export function CanvasView() {
     return () => {
       cancelled = true;
     };
-  }, [activeCanvasId, loadCanvasData]);
+  }, [activeCanvasId, activeWorkspaceId, loadCanvasData]);
 
   useEffect(() => {
     if (!isCanvasDataReady) return;
@@ -102,6 +149,16 @@ export function CanvasView() {
       window.clearTimeout(initialLoadTimer);
     };
   }, [activeCanvasId, isCanvasDataReady]);
+
+  // Clean up excalidrawAPI when component unmounts OR when Excalidraw is hidden
+  useEffect(() => {
+    if (!isCanvasDataReady) {
+      setExcalidrawAPI(null);
+    }
+    return () => {
+      setExcalidrawAPI(null);
+    };
+  }, [isCanvasDataReady, setExcalidrawAPI]);
   useEffect(() => {
     if (!excalidrawAPI) return;
 
@@ -168,7 +225,221 @@ export function CanvasView() {
     };
   }, [excalidrawAPI]);
 
+  useEffect(() => {
+    if (!excalidrawAPI || !activeWorkspaceId) return;
+    let cancelled = false;
+    setLibrariesLoading(true);
+    void getCanvasLibraries(activeWorkspaceId)
+      .then(async (records) => {
+        if (cancelled) return;
+        setLibraryRecords(records);
+        const libraryItems = records.flatMap((record) => [...record.libraryItems]);
+        if (libraryItems.length > 0) {
+          isHydratingLibrary.current = true;
+          try {
+            await excalidrawAPI.updateLibrary({ libraryItems: libraryItems as LibraryItems, merge: true, prompt: false });
+          } finally {
+            isHydratingLibrary.current = false;
+          }
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load canvas libraries:', error);
+        useUIStore.getState().showToast('Could not load canvas libraries', 'error');
+      })
+      .finally(() => { if (!cancelled) setLibrariesLoading(false); });
+    return () => { cancelled = true; };
+  }, [activeWorkspaceId, excalidrawAPI]);
+
+  const handleLibraryChange = useCallback(async (libraryItems: LibraryItems) => {
+    if (!activeWorkspaceId || isHydratingLibrary.current) return;
+    try {
+      const personal = await saveCanvasLibrary(activeWorkspaceId, PERSONAL_LIBRARY_FILE, libraryItems);
+      setLibraryRecords((records) => [...records.filter((record) => record.fileName !== PERSONAL_LIBRARY_FILE), personal]);
+    } catch (error) {
+      console.error('Failed to persist personal canvas library:', error);
+      useUIStore.getState().showToast('Could not save the personal library', 'error');
+    }
+  }, [activeWorkspaceId]);
+
+  const handleLibraryImport = useCallback(async (file: File) => {
+    if (!activeWorkspaceId || !excalidrawAPI) return;
+    try {
+      const record = await importCanvasLibrary(activeWorkspaceId, file.name, await file.text());
+      isHydratingLibrary.current = true;
+      try {
+        await excalidrawAPI.updateLibrary({ libraryItems: record.libraryItems as LibraryItems, merge: true, prompt: false });
+      } finally {
+        isHydratingLibrary.current = false;
+      }
+      setLibraryRecords((records) => [...records.filter((item) => item.fileName !== record.fileName), record]);
+      useUIStore.getState().showToast(`Imported ${record.name}`, 'success');
+    } catch (error) {
+      console.error('Failed to import canvas library:', error);
+      useUIStore.getState().showToast(error instanceof Error ? error.message : 'Could not import library', 'error');
+    }
+  }, [activeWorkspaceId, excalidrawAPI]);
+
+  const handleLibraryLoad = useCallback(async (record: CanvasLibraryRecord) => {
+    if (!excalidrawAPI) return;
+    isHydratingLibrary.current = true;
+    try {
+      await excalidrawAPI.updateLibrary({ libraryItems: record.libraryItems as LibraryItems, merge: true, prompt: false });
+      setLibraryManagerOpen(false);
+      excalidrawAPI.toggleSidebar({ name: 'default', tab: 'library', force: true });
+    } finally {
+      isHydratingLibrary.current = false;
+    }
+  }, [excalidrawAPI]);
+
+  const handleLibraryDelete = useCallback(async (record: CanvasLibraryRecord) => {
+    if (!activeWorkspaceId || !excalidrawAPI) return;
+    await deleteCanvasLibrary(activeWorkspaceId, record.fileName);
+    const remaining = libraryRecords.filter((item) => item.fileName !== record.fileName);
+    isHydratingLibrary.current = true;
+    try {
+      await excalidrawAPI.updateLibrary({ libraryItems: remaining.flatMap((item) => [...item.libraryItems]) as LibraryItems, merge: false, prompt: false });
+    } finally {
+      isHydratingLibrary.current = false;
+    }
+    setLibraryRecords(remaining);
+    useUIStore.getState().showToast(`Removed ${record.name}`, 'success');
+  }, [activeWorkspaceId, excalidrawAPI, libraryRecords]);
+
   const { triggerAutosave } = useAutosave(activeCanvasId);
+
+  const handleToggleDrawToShape = useCallback(() => {
+    setDrawToShapeEnabled((enabled) => {
+      const next = !enabled;
+      try {
+        window.localStorage.setItem('panvas.canvas.drawToShape', String(next));
+      } catch {
+        // Local preference persistence is best-effort in restricted browser profiles.
+      }
+      return next;
+    });
+  }, []);
+
+  const handleBackgroundColorChange = useCallback(async (color: string) => {
+    const api = useCanvasStore.getState().excalidrawAPI as any;
+    const normalizedColor = normalizeCanvasColor(color);
+    if (!api || !activeCanvasId || !normalizedColor) return;
+
+    api.updateScene({ appState: { viewBackgroundColor: normalizedColor }, commitToHistory: false });
+    const state = api.getAppState?.() ?? {};
+    const activeBackgroundColor = normalizeCanvasColor(state.viewBackgroundColor ?? '') ?? normalizedColor;
+    const persistedAppState = useCanvasStore.getState().currentData?.appState ?? {};
+    await useCanvasStore.getState().saveCanvasData({
+      canvasFileId: activeCanvasId,
+      elements: api.getSceneElements?.() ?? [],
+      appState: {
+        ...persistedAppState,
+        viewBackgroundColor: activeBackgroundColor,
+        zoom: state.zoom,
+        scrollX: state.scrollX,
+        scrollY: state.scrollY,
+      },
+      files: api.getFiles?.() ?? {},
+    }, activeWorkspaceId ?? undefined);
+  }, [activeCanvasId, activeWorkspaceId]);
+
+  const replaceRecognizedGesture = useCallback((points: StrokePoint[], existingElementIds: Set<string>) => {
+    const api = useCanvasStore.getState().excalidrawAPI as any;
+    if (!api || !drawToShapeEnabled || points.length < 4) return;
+
+    const appState = api.getAppState?.() ?? {};
+    const recognition = recognizeCanvasGesture(points, {
+      snapToAngles: Boolean(appState.objectsSnapModeEnabled),
+      snapEqualSides: Boolean(appState.objectsSnapModeEnabled),
+    });
+    if (!recognition) return;
+
+    const elements = [...(api.getSceneElements?.() ?? [])] as any[];
+    const source = findCurrentGestureFreedrawElement(elements, existingElementIds);
+    if (!source) return;
+
+    const style = {
+      strokeColor: appState.currentItemStrokeColor ?? '#1e1e1e',
+      backgroundColor: appState.currentItemBackgroundColor ?? 'transparent',
+      fillStyle: appState.currentItemFillStyle ?? 'solid',
+      strokeWidth: appState.currentItemStrokeWidth ?? 2,
+      strokeStyle: appState.currentItemStrokeStyle ?? 'solid',
+      roughness: appState.currentItemRoughness ?? 1,
+      opacity: appState.currentItemOpacity ?? 100,
+    };
+    const skeleton = createExcalidrawShapeSkeleton(recognition, style);
+    const [replacement] = convertToExcalidrawElements([skeleton as any]);
+    if (!replacement) return;
+
+    api.updateScene({
+      elements: [...elements.filter((element) => element.id !== source.id), replacement],
+      commitToHistory: true,
+    });
+  }, [drawToShapeEnabled]);
+
+  useEffect(() => {
+    const container = canvasContainerRef.current;
+    if (!container || !excalidrawAPI || !drawToShapeEnabled) {
+      preGestureElementIdsRef.current = null;
+      return;
+    }
+    const capturePreGestureScene = () => {
+      const api = useCanvasStore.getState().excalidrawAPI as any;
+      preGestureElementIdsRef.current = api?.getAppState?.()?.activeTool?.type === 'freedraw'
+        ? captureCanvasSceneElementIds(api.getSceneElements?.() ?? [])
+        : null;
+    };
+    container.addEventListener('pointerdown', capturePreGestureScene, true);
+    return () => {
+      container.removeEventListener('pointerdown', capturePreGestureScene, true);
+      preGestureElementIdsRef.current = null;
+    };
+  }, [drawToShapeEnabled, excalidrawAPI]);
+
+  const handlePointerUpdate = useCallback((payload: CanvasPointerPayload) => {
+    if (!drawToShapeEnabled || payload.pointer.tool !== 'pointer') {
+      if (payload.button === 'up') gestureRef.current = { active: false, points: [], existingElementIds: new Set() };
+      return;
+    }
+
+    const point: StrokePoint = {
+      x: payload.pointer.x,
+      y: payload.pointer.y,
+      pressure: 1,
+      t: typeof performance === 'undefined' ? Date.now() : performance.now(),
+    };
+    const pointerUp = payload.button === 'up';
+
+    if (!gestureRef.current.active) {
+      if (pointerUp) return;
+      const api = useCanvasStore.getState().excalidrawAPI as any;
+      const activeTool = api?.getAppState?.()?.activeTool?.type;
+      if (activeTool !== 'freedraw') return;
+
+      const existingElementIds = preGestureElementIdsRef.current ?? (() => {
+        const elements = (api?.getSceneElements?.() ?? []).filter((e: any) => !e.isDeleted);
+        const ids = captureCanvasSceneElementIds(elements);
+        const editingId = api?.getAppState?.()?.editingElement?.id;
+        if (editingId) ids.delete(editingId);
+        return ids;
+      })();
+      preGestureElementIdsRef.current = null;
+      if (!existingElementIds) return;
+      gestureRef.current = { active: true, points: [point], existingElementIds };
+      return;
+    }
+
+    // Gesture is active: collect trajectory points
+    gestureRef.current.points.push(point);
+
+    if (!pointerUp) return;
+    const points = gestureRef.current.points;
+    const existingElementIds = gestureRef.current.existingElementIds;
+    gestureRef.current = { active: false, points: [], existingElementIds: new Set() };
+    // Excalidraw commits its freehand element during pointer-up. Defer one task
+    // so the replacement removes exactly that newly-created element.
+    window.setTimeout(() => replaceRecognizedGesture(points, existingElementIds), 0);
+  }, [drawToShapeEnabled, replaceRecognizedGesture]);
 
   const handleChange = useCallback(
     (elements: readonly any[], appState: any, files: any) => {
@@ -265,18 +536,32 @@ export function CanvasView() {
       }}
     >
       {/* Custom Panvas Toolbar */}
-      {excalidrawAPI && <CanvasToolbar />}
-
+      {excalidrawAPI && (
+        <CanvasToolbar
+          libraryManagerOpen={libraryManagerOpen}
+          onToggleLibraryManager={() => setLibraryManagerOpen((open) => !open)}
+          drawToShapeEnabled={drawToShapeEnabled}
+          onToggleDrawToShape={handleToggleDrawToShape}
+          onLassoSelect={() => {
+            const api = useCanvasStore.getState().excalidrawAPI as any;
+            api?.setActiveTool?.({ type: 'selection', locked: false });
+          }}
+          onBackgroundColorChange={handleBackgroundColorChange}
+        />
+      )}
       {/* Excalidraw Canvas */}
-      <div className="w-full h-full panvas-excalidraw-wrapper" id="excalidraw-container">
+      <div ref={canvasContainerRef} className="w-full h-full panvas-excalidraw-wrapper" id="excalidraw-container">
         <Excalidraw
           key={activeCanvasId}
           excalidrawAPI={setExcalidrawAPI}
           initialData={initialExcalidrawData}
           onChange={handleChange}
+          onPointerUpdate={handlePointerUpdate}
+          onLibraryChange={handleLibraryChange}
           theme="dark"
           UIOptions={EXCALIDRAW_UI_OPTIONS}
         >
+          <DefaultSidebar />
           {MainMenu && (
             <MainMenu>
               <MainMenu.DefaultItems.LoadScene />
@@ -317,7 +602,7 @@ export function CanvasView() {
                         try {
                           const wsId = useWorkspaceStore.getState().activeWorkspaceId;
                           if (wsId) {
-                            const canvas = await useWorkspaceStore.getState().createCanvas(null, 'New Diagram');
+                            const canvas = await useWorkspaceStore.getState().createCanvas(null, null, null, 'New Diagram');
                             useWorkspaceStore.getState().setActiveCanvas(canvas.id);
                           }
                         } catch (e) {
@@ -332,12 +617,12 @@ export function CanvasView() {
 
                     <button 
                       onClick={() => {
-                        useUIStore.getState().showToast('Notes feature is coming soon!', 'info');
+                        useUIStore.getState().openCreateDialog('notebook');
                       }}
-                      className="group flex items-center gap-3 w-full px-4 py-3 rounded-xl bg-panvas-bg-tertiary/50 hover:bg-panvas-bg-elevated border border-white/5 hover:border-white/10 transition-all text-sm font-medium text-panvas-text-primary text-left opacity-70"
+                      className="group flex items-center gap-3 w-full px-4 py-3 rounded-xl bg-panvas-bg-tertiary/50 hover:bg-panvas-bg-elevated border border-white/5 hover:border-white/10 transition-all text-sm font-medium text-panvas-text-primary text-left"
                     >
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-panvas-accent-teal"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
-                      Create Note
+                      New Notebook
                     </button>
 
                     <button 
@@ -378,6 +663,21 @@ export function CanvasView() {
       {/* Custom Blocks Overlay */}
       {customBlocks.length > 0 && excalidrawAPI && (
         <CanvasOverlay blocks={customBlocks} excalidrawAPI={excalidrawAPI} />
+      )}
+
+      {libraryManagerOpen && excalidrawAPI && (
+        <CanvasLibraryDrawer
+          records={libraryRecords}
+          loading={librariesLoading}
+          onClose={() => setLibraryManagerOpen(false)}
+          onOpenPersonalLibrary={() => {
+            setLibraryManagerOpen(false);
+            excalidrawAPI.toggleSidebar({ name: 'default', tab: 'library', force: true });
+          }}
+          onImport={handleLibraryImport}
+          onLoad={handleLibraryLoad}
+          onDelete={handleLibraryDelete}
+        />
       )}
     </div>
   );

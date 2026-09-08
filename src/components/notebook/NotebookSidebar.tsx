@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { useUIStore } from '@/stores/uiStore';
-import { Plus, ChevronRight, BookOpen } from 'lucide-react';
+import { Plus, ChevronRight, BookOpen, Grid2X2, ListTree } from 'lucide-react';
 import { NotebookPageThumbnail } from './NotebookPageThumbnail';
 import { canvasRepository } from '@/repositories/CanvasRepository';
 import { notebookRepository } from '@/repositories/NotebookRepository';
 import { useAuthStore } from '@/stores/authStore';
+import { extractNotebookOutline, type OutlinePage, type NotebookOutlineEntry } from './outlineModel';
+import { createPageExportTarget } from '@/services/pdf/notebookExportTargets';
 
 export function NotebookSidebar() {
   const { 
@@ -34,8 +36,42 @@ export function NotebookSidebar() {
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragTargetIndex, setDragTargetIndex] = useState<number | null>(null);
   const [dragTargetPosition, setDragTargetPosition] = useState<'top' | 'bottom' | null>(null);
+  const [sidebarView, setSidebarView] = useState<'thumbnails' | 'outlines'>('thumbnails');
+  const [pagePayloads, setPagePayloads] = useState<Record<string, { content: unknown; drawing: unknown }>>({});
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const { user } = useAuthStore();
+
+  const outlinePages = useMemo<OutlinePage[]>(() => notebookPages
+    .filter(page => page.notebookId === activeNotebookId && !page.deletedAt)
+    .map(page => ({ ...page, ...(pagePayloads[page.id] ?? {}) })), [activeNotebookId, notebookPages, pagePayloads]);
+  const outlineSections = useMemo(() => notebookSections.filter(section => section.notebookId === activeNotebookId && !section.deletedAt), [activeNotebookId, notebookSections]);
+  const outline = useMemo(() => extractNotebookOutline(outlinePages, outlineSections), [outlinePages, outlineSections]);
+  const hasHeadings = outline.some(item => item.kind === 'heading');
+
+  useEffect(() => {
+    if (!activeNotebookId || !activeWorkspaceId) return;
+    let cancelled = false;
+    const notebookPagesForOutline = notebookPages.filter(page => page.notebookId === activeNotebookId && !page.deletedAt);
+    const loadPagePayload = async (pageId: string) => {
+      const page = notebookPagesForOutline.find(item => item.id === pageId);
+      if (!page) return;
+      const [content, drawing] = await Promise.all([
+        notebookRepository.loadPageData(activeWorkspaceId, activeNotebookId, page.id).catch(() => null),
+        notebookRepository.loadDrawingData(activeWorkspaceId, activeNotebookId, page.id).catch(() => null),
+      ]);
+      if (!cancelled) setPagePayloads(previous => ({ ...previous, [page.id]: { content, drawing } }));
+    };
+    void Promise.all(notebookPagesForOutline.map(page => loadPagePayload(page.id)));
+    const handleContentChanged = (event: Event) => {
+      const pageId = (event as CustomEvent<{ pageId?: string }>).detail?.pageId;
+      if (pageId) void loadPagePayload(pageId);
+    };
+    window.addEventListener('panvas:notebook-content-changed', handleContentChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('panvas:notebook-content-changed', handleContentChanged);
+    };
+  }, [activeNotebookId, activeWorkspaceId, notebookPages]);
 
   const handlePdfImport = async (file: File, sectionId: string) => {
     if (!activeNotebookId || !activeWorkspaceId) {
@@ -80,7 +116,8 @@ export function NotebookSidebar() {
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     const sectionId = e.target.dataset.targetSectionId;
-    if (file && file.type === 'application/pdf' && sectionId) {
+    const isPdf = file && (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'));
+    if (isPdf && sectionId) {
       handlePdfImport(file, sectionId);
     }
     // reset input
@@ -208,11 +245,15 @@ export function NotebookSidebar() {
           <Plus size={14} />
           <span>Add Page</span>
         </button>
+        <div className="mt-3 grid grid-cols-2 gap-1 rounded-md bg-panvas-bg-secondary p-1" role="tablist" aria-label="Notebook navigation view">
+          <button type="button" role="tab" aria-selected={sidebarView === 'thumbnails'} onClick={() => setSidebarView('thumbnails')} className={`flex h-7 items-center justify-center gap-1 rounded px-2 text-2xs font-medium transition-colors focus-ring ${sidebarView === 'thumbnails' ? 'bg-panvas-bg-primary text-panvas-text-primary shadow-sm' : 'text-panvas-text-tertiary hover:text-panvas-text-secondary'}`}><Grid2X2 size={13} />Thumbnails</button>
+          <button type="button" role="tab" aria-selected={sidebarView === 'outlines'} onClick={() => setSidebarView('outlines')} className={`flex h-7 items-center justify-center gap-1 rounded px-2 text-2xs font-medium transition-colors focus-ring ${sidebarView === 'outlines' ? 'bg-panvas-bg-primary text-panvas-text-primary shadow-sm' : 'text-panvas-text-tertiary hover:text-panvas-text-secondary'}`}><ListTree size={13} />Outlines</button>
+        </div>
       </div>
 
       {/* Page Sorter List */}
       <div className="flex-1 overflow-y-auto px-3 py-3 space-y-1">
-        {currentPages.map((page, index) => (
+        {sidebarView === 'thumbnails' && currentPages.map((page, index) => (
           <NotebookPageThumbnail
             key={page.id}
             page={page}
@@ -221,7 +262,15 @@ export function NotebookSidebar() {
             onClick={() => setActivePage(page.id)}
             onContextMenu={(e) => {
               e.preventDefault();
-              openContextMenu(e.clientX, e.clientY, page.id, 'page');
+              openContextMenu(
+                e.clientX,
+                e.clientY,
+                page.id,
+                'page',
+                activeNotebook && activeSection
+                  ? createPageExportTarget(page, activeSection, activeNotebook)
+                  : null,
+              );
             }}
             onDragStart={handleDragStart}
             onDragOver={handleDragOver}
@@ -232,12 +281,27 @@ export function NotebookSidebar() {
             dragTargetPosition={dragTargetPosition}
           />
         ))}
-        {currentPages.length === 0 && (
+        {sidebarView === 'thumbnails' && currentPages.length === 0 && (
           <div className="text-center text-panvas-text-tertiary mt-8">
             No pages in this section.
           </div>
         )}
+        {sidebarView === 'outlines' && <NotebookOutlineList outline={outline} hasHeadings={hasHeadings} activePageId={activePageId} onSelectPage={setActivePage} />}
       </div>
     </aside>
   );
+}
+
+function NotebookOutlineList({ outline, hasHeadings, activePageId, onSelectPage }: { outline: NotebookOutlineEntry[]; hasHeadings: boolean; activePageId: string | null; onSelectPage: (pageId: string) => void }) {
+  if (!hasHeadings) {
+    return <div className="mt-8 px-2 text-center text-panvas-text-tertiary"><ListTree size={20} className="mx-auto opacity-60" /><p className="mt-2 text-xs leading-relaxed">No headings found. Add H1, H2, or H3 in notes to generate an outline.</p></div>;
+  }
+  return <div className="space-y-0.5" role="tree" aria-label="Notebook outline">{outline.map(item => {
+    const isPage = item.kind === 'page';
+    const indent = isPage ? 'pl-1' : item.level === 1 ? 'pl-2' : item.level === 2 ? 'pl-4' : 'pl-6';
+    return <button key={item.id} type="button" role="treeitem" onClick={() => onSelectPage(item.pageId)} className={`flex min-h-8 w-full items-center gap-1.5 rounded-md pr-2 text-left transition-colors focus-ring ${indent} ${item.pageId === activePageId ? 'bg-panvas-accent-blue/10 text-panvas-accent-blue' : 'text-panvas-text-secondary hover:bg-panvas-bg-hover hover:text-panvas-text-primary'}`} title={`Page ${item.pageNumber}: ${item.title}`}>
+      {isPage ? <BookOpen size={13} className="flex-shrink-0 opacity-70" /> : <span className="flex h-4 min-w-6 items-center justify-center rounded border border-current/20 px-1 text-[9px] font-semibold uppercase">H{item.level}</span>}
+      <span className="w-5 flex-shrink-0 text-right font-mono text-2xs opacity-60">{item.pageNumber}</span><span className="min-w-0 flex-1 truncate text-xs">{item.title}</span>
+    </button>;
+  })}</div>;
 }

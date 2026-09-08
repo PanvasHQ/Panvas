@@ -1,10 +1,13 @@
 import React from 'react';
-import { BookOpen, ChevronRight, FileText, Folder, FolderOpen, MoreHorizontal, Plus, Star } from 'lucide-react';
+import { ChevronRight, FileText, Folder, FolderOpen, MoreHorizontal, Plus, Star } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
+import { useLocation } from 'wouter';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { useUIStore } from '@/stores/uiStore';
 import type { Notebook, NotebookPage, NotebookSection } from '@/types/notebook';
 import type { CanvasFile, Folder as WorkspaceFolder } from '@/types/workspace';
+import { createNotebookExportTarget, createPageExportTarget, createSectionExportTarget } from '@/services/pdf/notebookExportTargets';
+import { NotebookCoverThumbnail } from '@/components/library/NotebookCoverThumbnail';
 
 export type DropPosition = 'before' | 'inside' | 'after';
 
@@ -24,7 +27,7 @@ export function WorkspaceTree({ workspaceId }: { workspaceId: string }) {
 
   const rootFolders = folders.filter(folder => folder.workspaceId === workspaceId && folder.parentId === null);
   const rootNotebooks = notebooks.filter(notebook => notebook.workspaceId === workspaceId && notebook.folderId === null);
-  const rootCanvases = canvasFiles.filter(canvas => canvas.workspaceId === workspaceId && canvas.folderId === null);
+  const rootCanvases = canvasFiles.filter(canvas => canvas.workspaceId === workspaceId && canvas.folderId === null && !canvas.notebookId && !canvas.sectionId);
 
   const handleRootDrop = async (event: React.DragEvent) => {
     event.preventDefault();
@@ -35,7 +38,7 @@ export function WorkspaceTree({ workspaceId }: { workspaceId: string }) {
       const data = JSON.parse(raw);
       if (data.type === 'canvas') {
         const item = canvasFiles.find(c => c.id === data.id);
-        if (item && item.folderId !== null) await moveCanvas(data.id, workspaceId, null);
+        if (item && (item.folderId !== null || item.notebookId !== null || item.sectionId !== null)) await moveCanvas(data.id, workspaceId, null, null, null);
       }
       else if (data.type === 'notebook') {
         const item = notebooks.find(n => n.id === data.id);
@@ -74,12 +77,12 @@ function FolderNode({ folder, depth }: { folder: WorkspaceFolder; depth: number 
 
   const childFolders = folders.filter(item => item.parentId === folder.id);
   const childNotebooks = notebooks.filter(item => item.folderId === folder.id);
-  const childCanvases = canvasFiles.filter(item => item.folderId === folder.id);
+  const childCanvases = canvasFiles.filter(item => item.folderId === folder.id && !item.notebookId && !item.sectionId);
   const isExpanded = folder.isExpanded !== false;
 
   const handleDropItem = async (data: any, position: DropPosition) => {
     if (position === 'inside') {
-      if (data.type === 'canvas') await moveCanvas(data.id, folder.workspaceId, folder.id);
+      if (data.type === 'canvas') await moveCanvas(data.id, folder.workspaceId, folder.id, null, null);
       else if (data.type === 'notebook') await moveNotebook(data.id, folder.workspaceId, folder.id);
       else if (data.type === 'folder' && data.id !== folder.id) await moveFolder(data.id, folder.workspaceId, folder.id);
     } else {
@@ -97,6 +100,7 @@ function FolderNode({ folder, depth }: { folder: WorkspaceFolder; depth: number 
   return (
     <div>
       <TreeRow
+        itemId={folder.id}
         depth={depth}
         expanded={isExpanded}
         badge={childFolders.length + childNotebooks.length + childCanvases.length || undefined}
@@ -120,7 +124,8 @@ function FolderNode({ folder, depth }: { folder: WorkspaceFolder; depth: number 
 }
 
 function NotebookNode({ notebook, depth }: { notebook: Notebook; depth: number }) {
-  const { notebooks, notebookSections, notebookPages, toggleNotebookExpanded, setActiveNotebook, renameNotebook, activeNotebookId, moveNotebookSection, reorderItems, moveNotebook } = useWorkspaceStore();
+  const [, navigate] = useLocation();
+  const { notebooks, notebookSections, notebookPages, canvasFiles, toggleNotebookExpanded, setActiveNotebook, renameNotebook, activeNotebookId, moveNotebookSection, moveCanvas, reorderItems, moveNotebook } = useWorkspaceStore();
   const { openContextMenu, renamingId, setRenamingId } = useUIStore();
   const [value, setValue] = React.useState(notebook.name);
   const isRenaming = renamingId === notebook.id;
@@ -128,17 +133,20 @@ function NotebookNode({ notebook, depth }: { notebook: Notebook; depth: number }
   const save = async () => { if (value.trim() && value !== notebook.name) await renameNotebook(notebook.id, value.trim()); setRenamingId(null); };
   
   const sections = notebookSections.filter(section => section.notebookId === notebook.id);
+  const childCanvases = canvasFiles.filter(canvas => canvas.notebookId === notebook.id && !canvas.sectionId);
 
   const handleNotebookClick = () => {
     setActiveNotebook(notebook.id);
     if (!notebook.isExpanded) {
       toggleNotebookExpanded(notebook.id);
     }
+    navigate('/app');
   };
 
   const handleDropItem = async (data: any, position: DropPosition) => {
     if (position === 'inside') {
       if (data.type === 'section') await moveNotebookSection(data.id, notebook.workspaceId, notebook.id);
+      else if (data.type === 'canvas') await moveCanvas(data.id, notebook.workspaceId, null, notebook.id, null);
     } else {
       if (data.type !== 'notebook') return;
       const siblings = notebooks.filter(n => n.workspaceId === notebook.workspaceId && n.folderId === notebook.folderId);
@@ -154,30 +162,40 @@ function NotebookNode({ notebook, depth }: { notebook: Notebook; depth: number }
   return (
     <div>
       <TreeRow
+        itemId={notebook.id}
         depth={depth}
         active={isActive}
         expanded={notebook.isExpanded}
         badge={sections.length || undefined}
         onClick={handleNotebookClick}
         onToggle={() => { setActiveNotebook(notebook.id); toggleNotebookExpanded(notebook.id); }}
-        onContextMenu={(event) => openContextMenu(event.clientX, event.clientY, notebook.id, 'notebook')}
+        onContextMenu={(event) => openContextMenu(
+          event.clientX,
+          event.clientY,
+          notebook.id,
+          'notebook',
+          createNotebookExportTarget(notebook),
+        )}
         draggable
         onDragStart={(event) => event.dataTransfer.setData('application/json', JSON.stringify({ type: 'notebook', id: notebook.id }))}
         onDropItem={handleDropItem}
         acceptsDropInside
-        icon={<BookOpen size={15} className="text-panvas-text-secondary" />}
+        icon={<NotebookCoverThumbnail title={notebook.name} cover={notebook.cover} variant="mini" />}
         label={isRenaming ? <input autoFocus value={value} onChange={event => setValue(event.target.value)} onBlur={save} onKeyDown={event => { if (event.key === 'Enter') save(); if (event.key === 'Escape') setRenamingId(null); }} onClick={event => event.stopPropagation()} className="w-full bg-transparent outline-none" /> : notebook.name}
+        trailing={notebook.isPinned ? <Star size={12} className="text-panvas-accent-amber fill-panvas-accent-amber" /> : undefined}
       />
       <Collapsible open={notebook.isExpanded}>
         {sections.map(section => <SectionNode key={section.id} section={section} pages={notebookPages.filter(page => page.sectionId === section.id)} depth={depth + 1} />)}
-        {sections.length === 0 && <TreeEmptyState depth={depth + 1} label="No sections" />}
+        {childCanvases.map(canvas => <CanvasNode key={canvas.id} canvas={canvas} depth={depth + 1} />)}
+        {sections.length === 0 && childCanvases.length === 0 && <TreeEmptyState depth={depth + 1} label="No items" />}
       </Collapsible>
     </div>
   );
 }
 
 function SectionNode({ section, pages, depth }: { section: NotebookSection; pages: NotebookPage[]; depth: number }) {
-  const { notebooks, notebookSections, notebookPages, toggleNotebookSectionExpanded, setActiveNotebookSection, renameNotebookSection, activeNotebookSectionId, moveNotebookPage, reorderItems, moveNotebookSection } = useWorkspaceStore();
+  const [, navigate] = useLocation();
+  const { notebooks, notebookSections, notebookPages, canvasFiles, toggleNotebookSectionExpanded, setActiveNotebookSection, renameNotebookSection, activeNotebookSectionId, moveNotebookPage, moveCanvas, reorderItems, moveNotebookSection } = useWorkspaceStore();
   const { openContextMenu, renamingId, setRenamingId } = useUIStore();
   const [value, setValue] = React.useState(section.name);
   const isRenaming = renamingId === section.id;
@@ -185,17 +203,23 @@ function SectionNode({ section, pages, depth }: { section: NotebookSection; page
   const save = async () => { if (value.trim() && value !== section.name) await renameNotebookSection(section.id, value.trim()); setRenamingId(null); };
 
   const workspaceId = notebooks.find(n => n.id === section.notebookId)?.workspaceId || '';
+  const childCanvases = canvasFiles.filter(canvas => canvas.sectionId === section.id);
 
   const handleSectionClick = () => {
     setActiveNotebookSection(section.id);
     if (!section.isExpanded) {
       toggleNotebookSectionExpanded(section.id);
     }
+    navigate('/app');
   };
 
   const handleDropItem = async (data: any, position: DropPosition) => {
     if (position === 'inside') {
       if (data.type === 'page') await moveNotebookPage(data.id, workspaceId, section.id);
+      else if (data.type === 'canvas') {
+        const notebook = notebooks.find(n => n.id === section.notebookId);
+        await moveCanvas(data.id, workspaceId, null, null, section.id); // For section canvases, Notebook ancestry is derived
+      }
     } else {
       if (data.type !== 'section') return;
       const siblings = notebookSections.filter(s => s.notebookId === section.notebookId);
@@ -211,13 +235,23 @@ function SectionNode({ section, pages, depth }: { section: NotebookSection; page
   return (
     <div>
       <TreeRow
+        itemId={section.id}
         depth={depth}
         active={isActive}
         expanded={section.isExpanded}
         badge={pages.length || undefined}
         onClick={handleSectionClick}
         onToggle={() => { setActiveNotebookSection(section.id); toggleNotebookSectionExpanded(section.id); }}
-        onContextMenu={(event) => openContextMenu(event.clientX, event.clientY, section.id, 'section')}
+        onContextMenu={(event) => {
+          const notebook = notebooks.find(item => item.id === section.notebookId);
+          openContextMenu(
+            event.clientX,
+            event.clientY,
+            section.id,
+            'section',
+            notebook ? createSectionExportTarget(section, notebook) : null,
+          );
+        }}
         draggable
         onDragStart={(event) => event.dataTransfer.setData('application/json', JSON.stringify({ type: 'section', id: section.id, notebookId: section.notebookId }))}
         onDropItem={handleDropItem}
@@ -227,13 +261,15 @@ function SectionNode({ section, pages, depth }: { section: NotebookSection; page
       />
       <Collapsible open={section.isExpanded}>
         {pages.map(page => <PageNode key={page.id} page={page} depth={depth + 1} />)}
-        {pages.length === 0 && <TreeEmptyState depth={depth + 1} label="No pages" />}
+        {childCanvases.map(canvas => <CanvasNode key={canvas.id} canvas={canvas} depth={depth + 1} />)}
+        {pages.length === 0 && childCanvases.length === 0 && <TreeEmptyState depth={depth + 1} label="No items" />}
       </Collapsible>
     </div>
   );
 }
 
 function PageNode({ page, depth }: { page: NotebookPage; depth: number }) {
+  const [, navigate] = useLocation();
   const { notebooks, notebookSections, notebookPages, activePageId, setActivePage, renameNotebookPage, moveNotebookPage, reorderItems } = useWorkspaceStore();
   const { openContextMenu, renamingId, setRenamingId } = useUIStore();
   const [value, setValue] = React.useState(page.title);
@@ -241,7 +277,8 @@ function PageNode({ page, depth }: { page: NotebookPage; depth: number }) {
   const save = async () => { if (value.trim() && value !== page.title) await renameNotebookPage(page.id, value.trim()); setRenamingId(null); };
 
   const section = notebookSections.find(s => s.id === page.sectionId);
-  const workspaceId = section ? notebooks.find(n => n.id === section.notebookId)?.workspaceId || '' : '';
+  const notebook = section ? notebooks.find(n => n.id === section.notebookId) : undefined;
+  const workspaceId = notebook?.workspaceId || '';
 
   const handleDropItem = async (data: any, position: DropPosition) => {
     if (position === 'inside') return;
@@ -257,10 +294,20 @@ function PageNode({ page, depth }: { page: NotebookPage; depth: number }) {
 
   return (
     <TreeRow
+      itemId={page.id}
       depth={depth}
       active={activePageId === page.id}
-      onClick={() => setActivePage(page.id)}
-      onContextMenu={(event) => openContextMenu(event.clientX, event.clientY, page.id, 'page')}
+      onClick={() => {
+        setActivePage(page.id);
+        navigate('/app');
+      }}
+      onContextMenu={(event) => openContextMenu(
+        event.clientX,
+        event.clientY,
+        page.id,
+        'page',
+        section && notebook ? createPageExportTarget(page, section, notebook) : null,
+      )}
       draggable
       onDragStart={(event) => event.dataTransfer.setData('application/json', JSON.stringify({ type: 'page', id: page.id, sectionId: page.sectionId }))}
       onDropItem={handleDropItem}
@@ -271,6 +318,7 @@ function PageNode({ page, depth }: { page: NotebookPage; depth: number }) {
 }
 
 function CanvasNode({ canvas, depth }: { canvas: CanvasFile; depth: number }) {
+  const [, navigate] = useLocation();
   const { canvasFiles, activeCanvasId, setActiveCanvas, renameCanvas, moveCanvas, reorderItems } = useWorkspaceStore();
   const { openContextMenu, renamingId, setRenamingId } = useUIStore();
   const [value, setValue] = React.useState(canvas.name);
@@ -280,20 +328,24 @@ function CanvasNode({ canvas, depth }: { canvas: CanvasFile; depth: number }) {
   const handleDropItem = async (data: any, position: DropPosition) => {
     if (position === 'inside') return;
     if (data.type !== 'canvas') return;
-    const siblings = canvasFiles.filter(c => c.workspaceId === canvas.workspaceId && c.folderId === canvas.folderId);
+    const siblings = canvasFiles.filter(c => c.workspaceId === canvas.workspaceId && c.folderId === canvas.folderId && c.notebookId === canvas.notebookId && c.sectionId === canvas.sectionId);
     const reorderedIds = getReorderedIds(siblings, data.id, canvas.id, position);
     const draggedItem = canvasFiles.find(c => c.id === data.id);
-    if (draggedItem && draggedItem.folderId !== canvas.folderId) {
-      await moveCanvas(data.id, canvas.workspaceId, canvas.folderId);
+    if (draggedItem && (draggedItem.folderId !== canvas.folderId || draggedItem.notebookId !== canvas.notebookId || draggedItem.sectionId !== canvas.sectionId)) {
+      await moveCanvas(data.id, canvas.workspaceId, canvas.folderId, canvas.notebookId || null, canvas.sectionId || null);
     }
     await reorderItems('canvas', reorderedIds);
   };
 
   return (
     <TreeRow
+      itemId={canvas.id}
       depth={depth}
       active={activeCanvasId === canvas.id}
-      onClick={() => setActiveCanvas(canvas.id)}
+      onClick={() => {
+        setActiveCanvas(canvas.id);
+        navigate('/app');
+      }}
       onContextMenu={(event) => openContextMenu(event.clientX, event.clientY, canvas.id, 'canvas')}
       draggable
       onDragStart={(event) => event.dataTransfer.setData('application/json', JSON.stringify({ type: 'canvas', id: canvas.id }))}
@@ -305,7 +357,7 @@ function CanvasNode({ canvas, depth }: { canvas: CanvasFile; depth: number }) {
   );
 }
 
-function TreeRow({ depth, label, icon, expanded, active = false, onClick, onToggle, onContextMenu, trailing, badge, draggable, onDragStart, onDropItem, acceptsDropInside = false }: { depth: number; label: React.ReactNode; icon: React.ReactNode; expanded?: boolean; active?: boolean; onClick?: () => void; onToggle?: () => void; onContextMenu?: (event: React.MouseEvent) => void; trailing?: React.ReactNode; badge?: number; draggable?: boolean; onDragStart?: (event: React.DragEvent) => void; onDropItem?: (data: any | null, position: DropPosition, files?: FileList) => void; acceptsDropInside?: boolean }) {
+function TreeRow({ itemId, depth, label, icon, expanded, active = false, onClick, onToggle, onContextMenu, trailing, badge, draggable, onDragStart, onDropItem, acceptsDropInside = false }: { itemId: string; depth: number; label: React.ReactNode; icon: React.ReactNode; expanded?: boolean; active?: boolean; onClick?: () => void; onToggle?: () => void; onContextMenu?: (event: React.MouseEvent) => void; trailing?: React.ReactNode; badge?: number; draggable?: boolean; onDragStart?: (event: React.DragEvent) => void; onDropItem?: (data: any | null, position: DropPosition, files?: FileList) => void; acceptsDropInside?: boolean }) {
   const activate = () => onClick?.();
   const [dragPosition, setDragPosition] = React.useState<DropPosition | null>(null);
   const ref = React.useRef<HTMLDivElement>(null);
@@ -346,6 +398,7 @@ function TreeRow({ depth, label, icon, expanded, active = false, onClick, onTogg
   return (
     <div
       ref={ref}
+      data-tree-id={itemId}
       role="button"
       tabIndex={0}
       onClick={activate}
@@ -362,6 +415,8 @@ function TreeRow({ depth, label, icon, expanded, active = false, onClick, onTogg
       {onToggle ? (
         <button
           type="button"
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} ${label}`}
+          title={`${expanded ? 'Collapse' : 'Expand'} ${label}`}
           onClick={event => { event.stopPropagation(); onToggle(); }}
           className="flex h-4 w-4 items-center justify-center rounded text-panvas-text-tertiary hover:text-panvas-text-primary"
         >

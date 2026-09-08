@@ -25,6 +25,28 @@ export class WorkspaceRepository {
       await window.panvas.workspace.reorder(workspaceId, type, itemIds);
       return;
     }
+    const updatedAt = Date.now();
+    if (type === 'folder') {
+      await db.transaction('rw', db.folders, async () => {
+        await Promise.all(itemIds.map((id, order) => db.folders.update(id, { order, updatedAt })));
+      });
+    } else if (type === 'canvas') {
+      await db.transaction('rw', db.canvasFiles, async () => {
+        await Promise.all(itemIds.map((id, order) => db.canvasFiles.update(id, { order, updatedAt })));
+      });
+    } else if (type === 'notebook') {
+      await db.transaction('rw', db.notebooks, async () => {
+        await Promise.all(itemIds.map((id, order) => db.notebooks.update(id, { order, updatedAt })));
+      });
+    } else if (type === 'section') {
+      await db.transaction('rw', db.notebookSections, async () => {
+        await Promise.all(itemIds.map((id, order) => db.notebookSections.update(id, { order, updatedAt })));
+      });
+    } else {
+      await db.transaction('rw', db.notebookPages, async () => {
+        await Promise.all(itemIds.map((id, order) => db.notebookPages.update(id, { order, updatedAt })));
+      });
+    }
   }
 
   async rename(userId: string | null, id: string, name: string): Promise<void> {
@@ -80,13 +102,18 @@ export class WorkspaceRepository {
   }
 
   async permanentlyDelete(id: string): Promise<void> {
+    if (typeof window !== 'undefined' && window.panvas?.trash) {
+      await window.panvas.trash.permanentlyDelete(id, id, 'workspace');
+      return;
+    }
     await workspaceDB.deleteWorkspace(id, false);
     await this.queueSync('workspace', id, 'delete', { id });
   }
 
   async getAll(userId: string | null): Promise<Workspace[]> {
     if (typeof window !== 'undefined' && window.panvas) {
-      return await window.panvas.workspace.getAll();
+      const workspaces = await window.panvas.workspace.getAll();
+      return workspaces.filter(workspace => !workspace.deletedAt);
     }
     return workspaceDB.getAllWorkspaces(userId);
   }

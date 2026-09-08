@@ -1,23 +1,34 @@
-// ============================================
-// Panvas — Entry Point
-// ============================================
+function showBootstrapFailure(error: unknown): void {
+  console.error('[Panvas] Renderer bootstrap failed:', error);
+  const root = document.getElementById('root');
+  if (!root) return;
+  root.replaceChildren();
 
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import { App } from '@/app/App';
-import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
-import '@/styles/index.css';
-import '@/styles/blocks.css';
+  const panel = document.createElement('main');
+  panel.className = 'panvas-bootstrap-failure';
+  const title = document.createElement('h1');
+  title.textContent = 'Panvas could not start';
+  const message = document.createElement('p');
+  message.textContent = 'Your local data is safe. Reload the page, or check the browser console for details.';
+  const reload = document.createElement('button');
+  reload.type = 'button';
+  reload.textContent = 'Reload Panvas';
+  reload.addEventListener('click', () => window.location.reload());
+  panel.append(title, message, reload);
+  root.append(panel);
+}
 
-import { initAnalytics } from '@/lib/analytics';
+let mounted = false;
+window.addEventListener('error', event => {
+  if (!mounted) showBootstrapFailure(event.error ?? event.message);
+});
+window.addEventListener('unhandledrejection', event => {
+  if (!mounted) showBootstrapFailure(event.reason);
+});
 
-// Initialize analytics
-initAnalytics();
-
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <ErrorBoundary>
-      <App />
-    </ErrorBoundary>
-  </React.StrictMode>,
-);
+void import('./bootstrap')
+  .then(({ mountPanvas }) => {
+    mountPanvas();
+    mounted = true;
+  })
+  .catch(showBootstrapFailure);

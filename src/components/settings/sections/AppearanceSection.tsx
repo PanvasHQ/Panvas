@@ -15,7 +15,7 @@ export function AppearanceSection() {
       <div className="grid gap-6 mt-4">
         <div className="flex flex-col gap-4">
           <label className="text-xs font-semibold uppercase tracking-wider text-panvas-text-tertiary">Theme</label>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 sm:gap-6">
             
             <ThemeCard 
               name="Dark Theme" 
@@ -48,20 +48,31 @@ export function AppearanceSection() {
   );
 }
 
-function ThemeCard({ name, active, icon, onClick, previewColor }: any) {
+interface ThemeCardProps {
+  name: string;
+  active: boolean;
+  icon: React.ReactNode;
+  onClick: () => void;
+  previewColor: string;
+}
+
+function ThemeCard({ name, active, icon, onClick, previewColor }: ThemeCardProps) {
   return (
-    <button 
+    <button
+      type="button"
       onClick={onClick}
-      className={`flex flex-col items-center gap-4 p-6 rounded-2xl border transition-all duration-300 ${
+      aria-pressed={active}
+      className={`flex flex-col items-center gap-4 rounded-2xl border p-6 text-left transition-all duration-200 focus-ring ${
         active 
-          ? 'bg-panvas-bg-secondary border-panvas-accent-violet text-panvas-text-primary shadow-[0_0_15px_rgba(var(--accent-violet),0.3)]' 
-          : 'bg-panvas-bg-primary border-panvas-border-subtle text-panvas-text-secondary hover:bg-panvas-bg-hover hover:border-panvas-border-strong hover:shadow-glass-sm'
+          ? 'border-panvas-accent-violet bg-panvas-bg-secondary text-panvas-text-primary shadow-[0_0_0_1px_rgba(var(--accent-violet),0.18),var(--shadow-surface)]'
+          : 'border-panvas-border-subtle bg-panvas-bg-primary text-panvas-text-secondary hover:border-panvas-border-strong hover:bg-panvas-bg-hover hover:shadow-[var(--shadow-surface)]'
       }`}
     >
-      <div className={`w-14 h-14 rounded-full border border-panvas-border-subtle flex items-center justify-center shadow-inner ${previewColor}`}>
+      <div className={`flex h-14 w-14 items-center justify-center rounded-full border border-panvas-border-subtle shadow-inner ${previewColor}`}>
         {React.cloneElement(icon as React.ReactElement, { className: active ? 'text-panvas-accent-violet' : 'text-panvas-text-tertiary' })}
       </div>
       <span className="text-sm font-semibold">{name}</span>
+      <span className="-mt-2 text-xs text-panvas-text-tertiary">{active ? 'Selected theme' : 'Switch theme'}</span>
     </button>
   );
 }

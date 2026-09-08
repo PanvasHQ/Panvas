@@ -1,0 +1,65 @@
+import { db } from '../../database/schema';
+import { generateId } from '../../lib/utils/id';
+import type { CanvasData } from '@/types/canvas';
+import type { Workspace, Folder, CanvasFile } from '@/types/workspace';
+import type { Notebook, NotebookSection, NotebookPage } from '@/types/notebook';
+import { buildWorkspaceBackup, remapWorkspaceBackup, type BackupPagePayload, type WorkspaceBackup, type BackupImportResult } from './backupService';
+
+const belongsToUser = (record: { userId?: string | null }, userId: string | null) => (record.userId ?? null) === userId;
+
+export async function collectBrowserWorkspaceBackup(workspaceId: string, userId: string | null): Promise<WorkspaceBackup> {
+  const workspace = await db.workspaces.get(workspaceId);
+  if (!workspace || !belongsToUser(workspace, userId)) throw new Error('Workspace not found in local storage.');
+  const [allFolders, allNotebooks, allSections, allPages, allCanvases] = await Promise.all([
+    db.folders.toArray(), db.notebooks.toArray(), db.notebookSections.toArray(), db.notebookPages.toArray(), db.canvasFiles.toArray(),
+  ]);
+  const folders = allFolders.filter(item => item.workspaceId === workspaceId && belongsToUser(item, userId));
+  const notebooks = allNotebooks.filter(item => item.workspaceId === workspaceId && belongsToUser(item, userId));
+  const notebookIds = new Set(notebooks.map(item => item.id));
+  const sections = allSections.filter(item => notebookIds.has(item.notebookId) && belongsToUser(item, userId));
+  // A page can legitimately predate section assignment; the notebook is the
+  // ownership boundary for backup purposes, so never drop such pages.
+  const pages = allPages.filter(item => notebookIds.has(item.notebookId) && belongsToUser(item, userId));
+  const canvases = allCanvases.filter(item => item.workspaceId === workspaceId && belongsToUser(item, userId));
+  const pageIds = new Set(pages.map(item => item.id));
+  const [contents, drawings, canvasPayloads] = await Promise.all([
+    db.notebookPageContents.toArray(), db.notebookPageDrawings.toArray(), db.canvasData.toArray(),
+  ]);
+  const contentByPage = new Map(contents.filter(item => pageIds.has(item.pageId) && belongsToUser(item, userId)).map(item => [item.pageId, item.data]));
+  const drawingByPage = new Map(drawings.filter(item => pageIds.has(item.pageId) && belongsToUser(item, userId)).map(item => [item.pageId, item.data]));
+  const payloadByCanvas = new Map(canvasPayloads.filter(item => canvases.some(canvas => canvas.id === item.canvasFileId) && belongsToUser(item, userId)).map(item => [item.canvasFileId, item]));
+  const pagePayloads: Record<string, BackupPagePayload> = {};
+  for (const page of pages) pagePayloads[page.id] = { content: contentByPage.get(page.id) ?? null, drawing: drawingByPage.get(page.id) ?? null };
+  const canvasData: Record<string, CanvasData> = {};
+  for (const canvas of canvases) {
+    canvasData[canvas.id] = payloadByCanvas.get(canvas.id) ?? {
+      canvasFileId: canvas.id, elements: [], appState: {}, files: {}, customBlocks: [], version: 1, updatedAt: canvas.updatedAt, userId,
+    };
+  }
+  return buildWorkspaceBackup({ workspace, folders, notebooks, sections, pages, canvases, pagePayloads, canvasPayloads: canvasData });
+}
+
+export async function restoreBrowserWorkspaceBackup(backup: WorkspaceBackup, userId: string | null): Promise<BackupImportResult> {
+  const existing = await db.workspaces.toArray();
+  const baseName = backup.header.workspaceName.trim();
+  const names = new Set(existing.map(item => item.name));
+  let workspaceName = `${baseName} (Restored)`;
+  let suffix = 2;
+  while (names.has(workspaceName)) workspaceName = `${baseName} (Restored ${suffix++})`;
+  const restored = remapWorkspaceBackup(backup, { idFactory: prefix => generateId(prefix), workspaceName, userId, now: Date.now() });
+  const pageContentRecords = restored.pages.map(page => ({ pageId: page.id, workspaceId: restored.workspace.id, notebookId: page.notebookId, data: restored.pagePayloads[page.id].content, version: 1 as const, updatedAt: restored.workspace.updatedAt, userId }));
+  const pageDrawingRecords = restored.pages.map(page => ({ pageId: page.id, workspaceId: restored.workspace.id, notebookId: page.notebookId, data: restored.pagePayloads[page.id].drawing, version: 1 as const, updatedAt: restored.workspace.updatedAt, userId }));
+  const canvasData = restored.canvases.map(canvas => restored.canvasPayloads[canvas.id]);
+  await db.transaction('rw', [db.workspaces, db.folders, db.canvasFiles, db.canvasData, db.notebooks, db.notebookSections, db.notebookPages, db.notebookPageContents, db.notebookPageDrawings], async () => {
+    await db.workspaces.add({ ...restored.workspace, name: workspaceName, userId, syncStatus: 'local', deletedAt: null });
+    await db.folders.bulkAdd(restored.folders.map(item => ({ ...item, userId, syncStatus: 'local' })));
+    await db.notebooks.bulkAdd(restored.notebooks.map(item => ({ ...item, userId, syncStatus: 'local' })));
+    await db.notebookSections.bulkAdd(restored.sections.map(item => ({ ...item, userId })));
+    await db.notebookPages.bulkAdd(restored.pages.map(item => ({ ...item, userId })));
+    await db.canvasFiles.bulkAdd(restored.canvases.map(item => ({ ...item, userId, syncStatus: 'local' })));
+    if (canvasData.length) await db.canvasData.bulkAdd(canvasData);
+    if (pageContentRecords.length) await db.notebookPageContents.bulkAdd(pageContentRecords);
+    if (pageDrawingRecords.length) await db.notebookPageDrawings.bulkAdd(pageDrawingRecords);
+  });
+  return { workspaceId: restored.workspace.id, workspaceName };
+}

@@ -3,11 +3,19 @@
 // ============================================
 // Handles state for text boxes.
 
-import type { TextObject } from './drawingTypes';
+import type { TextObject } from './drawingTypes.ts';
+import { LayerManager } from './LayerManager.ts';
 
 export class TextManager {
   private texts: TextObject[] = [];
   private editors: Map<string, any> = new Map(); // Store Editor instances
+  private layerManager: LayerManager;
+
+  constructor(layerManager: LayerManager = new LayerManager()) {
+    this.layerManager = layerManager;
+  }
+
+  private lastActiveTextId?: string;
 
   registerEditor(id: string, editor: any): void {
     this.editors.set(id, editor);
@@ -15,10 +23,35 @@ export class TextManager {
 
   unregisterEditor(id: string): void {
     this.editors.delete(id);
+    if (this.lastActiveTextId === id) {
+      this.lastActiveTextId = undefined;
+    }
   }
 
   getEditor(id: string): any | undefined {
     return this.editors.get(id);
+  }
+
+  setActiveTextId(id: string | undefined): void {
+    this.lastActiveTextId = id;
+  }
+
+  getActiveTextId(): string | undefined {
+    return this.lastActiveTextId;
+  }
+
+  getFocusedText(): TextObject | undefined {
+    for (const [id, editor] of this.editors.entries()) {
+      if (editor && !editor.isDestroyed && editor.isFocused) {
+        this.lastActiveTextId = id;
+        return this.texts.find(t => t.id === id);
+      }
+    }
+    if (this.lastActiveTextId) {
+      const active = this.texts.find(t => t.id === this.lastActiveTextId);
+      if (active) return active;
+    }
+    return undefined;
   }
 
   getTexts(): TextObject[] {
@@ -30,7 +63,16 @@ export class TextManager {
   }
 
   addText(text: TextObject): void {
+    text.layerId ??= this.layerManager.getActiveLayerId();
     this.texts.push(text);
+  }
+
+  /** Replace one object in place so continuation history preserves render order. */
+  replaceText(text: TextObject): boolean {
+    const index = this.texts.findIndex(candidate => candidate.id === text.id);
+    if (index < 0) return false;
+    this.texts[index] = text;
+    return true;
   }
 
   updateTextContent(id: string, content: any): void {
@@ -40,9 +82,28 @@ export class TextManager {
     }
   }
 
+  /** Update metadata without replacing the text object identity used by the
+   * selection and renderer layers. */
+  updateTextMetadata(id: string, metadata: Record<string, any>): TextObject | undefined {
+    const text = this.texts.find(t => t.id === id);
+    if (!text) return undefined;
+    text.metadata = { ...(text.metadata ?? {}), ...metadata };
+    return text;
+  }
+
   updateTextBounds(id: string, width: number, height: number): void {
     const text = this.texts.find(t => t.id === id);
     if (text) {
+      text.width = width;
+      text.height = height;
+    }
+  }
+
+  updateTextPositionAndBounds(id: string, x: number, y: number, width: number, height: number): void {
+    const text = this.texts.find(t => t.id === id);
+    if (text) {
+      text.x = x;
+      text.y = y;
       text.width = width;
       text.height = height;
     }
@@ -71,5 +132,9 @@ export class TextManager {
     const removed = this.texts;
     this.texts = [];
     return removed;
+  }
+
+  isEditable(text: TextObject): boolean {
+    return this.layerManager.isEditable(text.layerId);
   }
 }

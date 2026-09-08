@@ -3,7 +3,7 @@ import { PanelLeft, PanelRight, Maximize2, Minimize2 } from 'lucide-react';
 import { useUIStore } from '@/stores/uiStore';
 import { useLayoutStore } from '@/stores/layoutStore';
 
-export const NotebookWorkspaceControls: React.FC = () => {
+export const NotebookWorkspaceControls: React.FC<{ focusOnly?: boolean; embedded?: boolean }> = ({ focusOnly = false, embedded = false }) => {
   const { notebookModeLevel, setNotebookModeLevel, toggleNotebookPane, isNotebookPaneVisible, previousPanelState, setPreviousPanelState } = useLayoutStore();
   const { isSidebarOpen, toggleSidebar, togglePropertiesPanel, isPropertiesPanelOpen } = useUIStore();
 
@@ -43,12 +43,13 @@ export const NotebookWorkspaceControls: React.FC = () => {
   const isLeftPanelActive = notebookModeLevel === 0 ? isSidebarOpen : isNotebookPaneVisible;
 
   return (
-    <div className="flex items-center gap-2 p-1.5 rounded-xl bg-panvas-bg-primary/95 backdrop-blur-xl shadow-2xl ring-1 ring-panvas-border-strong text-panvas-text-primary select-none w-max">
+    <div className={`flex items-center gap-1.5 text-panvas-text-primary select-none w-max max-[599px]:gap-1 ${embedded ? 'p-1' : 'panvas-workspace-controls panvas-floating-surface p-1.5 max-[599px]:p-1'}`} role="toolbar" aria-label="Notebook workspace controls">
       {/* Full Page View */}
       <button
         type="button"
         onClick={handleToggleFocus}
-        className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors shrink-0 ${
+        aria-pressed={notebookModeLevel === 2}
+        className={`panvas-icon-control shrink-0 focus-ring ${
           notebookModeLevel === 2 
             ? 'bg-panvas-bg-hover text-panvas-text-primary' 
             : 'text-panvas-text-secondary hover:text-panvas-text-primary hover:bg-panvas-bg-hover'
@@ -58,13 +59,16 @@ export const NotebookWorkspaceControls: React.FC = () => {
         {notebookModeLevel === 2 ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
       </button>
 
-      <div className="w-px h-4 bg-panvas-border-default mx-1 shrink-0"></div>
+      {!focusOnly && <>
+
+      <div className="w-px h-4 bg-panvas-border-default mx-1 shrink-0 max-[599px]:mx-0.5"></div>
 
       {/* Left Navigation Panel */}
       <button
         type="button"
         onClick={handleToggleLeftPanel}
-        className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors shrink-0 ${
+        aria-pressed={isLeftPanelActive}
+        className={`panvas-icon-control shrink-0 focus-ring ${
           isLeftPanelActive 
             ? 'bg-panvas-bg-hover text-panvas-text-primary' 
             : 'text-panvas-text-secondary hover:text-panvas-text-primary hover:bg-panvas-bg-hover'
@@ -78,15 +82,18 @@ export const NotebookWorkspaceControls: React.FC = () => {
       <button
         type="button"
         onClick={togglePropertiesPanel}
-        className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors shrink-0 ${
+        aria-pressed={isPropertiesPanelOpen}
+        className={`panvas-icon-control shrink-0 focus-ring ${
           isPropertiesPanelOpen 
             ? 'bg-panvas-bg-hover text-panvas-text-primary' 
             : 'text-panvas-text-secondary hover:text-panvas-text-primary hover:bg-panvas-bg-hover'
         }`}
         title="Toggle Page Properties"
+        aria-label="Open page and view inspector"
       >
         <PanelRight size={16} />
       </button>
+      </>}
     </div>
   );
 };

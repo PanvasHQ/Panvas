@@ -30,6 +30,33 @@ export interface BasePageObject {
   createdAt: number;
   /** General metadata for plugins/extensions. */
   metadata?: Record<string, any>;
+  /** Stable owning layer. Missing legacy values migrate to the default layer. */
+  layerId?: string;
+}
+
+export interface PageLayer {
+  id: string;
+  name: string;
+  visible: boolean;
+  locked: boolean;
+  order: number;
+}
+
+export interface AudioNote {
+  id: string;
+  fileId: string;
+  fileName: string;
+  /** User-facing name. The generated filename remains the compatibility fallback. */
+  title?: string;
+  mimeType: string;
+  durationMs?: number;
+  createdAt: number;
+}
+
+export const DEFAULT_PAGE_LAYER_ID = 'layer-default';
+
+export function createDefaultPageLayer(): PageLayer {
+  return { id: DEFAULT_PAGE_LAYER_ID, name: 'Content', visible: true, locked: false, order: 0 };
 }
 
 /** A freehand stroke drawn by pen, pencil, highlighter, or marker. */
@@ -40,10 +67,15 @@ export interface Stroke extends BasePageObject {
   color: string;
   thickness: number;
   opacity: number;
+  /** Vector path pattern. Missing legacy values render as solid. */
+  pattern?: StrokePattern;
+  /** Retained vector area after erasing, relative to points[0]. Polygon rings may contain holes.
+   * Keeps the original pressure path/caps intact; travels with the ink on move/copy. */
+  inkClip?: [number, number][][][];
 }
 
 /** Shape types supported by the shape tool. */
-export type ShapeType = 'rectangle' | 'ellipse' | 'triangle' | 'diamond' | 'arrow' | 'line';
+export type ShapeType = 'rectangle' | 'rounded-rectangle' | 'ellipse' | 'triangle' | 'diamond' | 'arrow' | 'line';
 
 /** A vector shape placed on the drawing layer. */
 export interface Shape extends BasePageObject {
@@ -58,6 +90,7 @@ export interface Shape extends BasePageObject {
   strokeWidth: number;
   fill: string | null;
   rotation: number;
+  opacity?: number;
 }
 
 /** A floating text box. */
@@ -67,6 +100,7 @@ export interface TextObject extends BasePageObject {
   y: number;
   width: number;
   content: any; // TipTap JSON
+  rotation?: number;
 }
 
 /** An image rendered on the canvas. */
@@ -83,59 +117,45 @@ export interface ImageObject extends BasePageObject {
 /** A union of all valid notebook objects. */
 export type NotebookObject = Stroke | Shape | TextObject | ImageObject;
 
+import {
+  DEFAULT_PAGE_PROPERTY_SET,
+  type PagePropertySet,
+  type PageTemplateId,
+} from '../../../types/notebook.ts';
+
 /** Template backgrounds for notebook pages. */
-export type PageTemplate = 
-  | 'Blank' 
-  // Basic
-  | 'Ruled' | 'Narrow ruled' | 'Wide ruled'
-  // Grid
-  | 'Small grid' | 'Large grid' | 'Dotted' | 'Engineering'
-  // Study
-  | 'Cornell' | 'Lecture Notes' | 'Assignment' | 'Checklist'
-  // Planning
-  | 'To-do' | 'Daily planner' | 'Weekly planner' | 'Monthly planner'
-  // Special
-  | 'Journal' | 'Music' | 'Calendar';
+export type PageTemplate = PageTemplateId;
 
 /** Page properties that affect rendering and layout. */
-export interface PageProperties {
-  paperColor: string;
-  template: PageTemplate;
-  ruleLineColor: string;
-  orientation: 'portrait' | 'landscape';
-  pageSize: 'A4' | 'A5' | 'Letter' | 'Custom';
-  margins: 'No Margin' | 'Normal' | 'Narrow' | 'Wide';
-  zoom: number;
-}
+export interface PageProperties extends PagePropertySet {}
 
 /** Default page properties for new pages. */
-export const DEFAULT_PAGE_PROPERTIES: PageProperties = {
-  paperColor: '#ffffff',
-  template: 'Blank',
-  ruleLineColor: '#e0e0e0', // Default light gray for lines/grids
-  orientation: 'portrait',
-  pageSize: 'A4',
-  margins: 'Normal',
-  zoom: 100,
-};
+export const DEFAULT_PAGE_PROPERTIES: PageProperties = { ...DEFAULT_PAGE_PROPERTY_SET };
 
 /** The complete drawing data for a notebook page, persisted to {pageId}.drawing.json. */
 export interface DrawingData {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   /** @deprecated Used in version 1, migrated to objects in version 2. */
   strokes?: Stroke[];
   /** @deprecated Used in version 1, migrated to objects in version 2. */
   shapes?: Shape[];
   /** Unified structured content objects. (Version 2+) */
   objects?: NotebookObject[];
+  /** Ordered user-visible layers. Introduced in version 3. */
+  layers?: PageLayer[];
+  activeLayerId?: string;
+  audioNotes?: AudioNote[];
   properties: PageProperties;
 }
 
 /** Empty drawing data for new pages. */
 export function createEmptyDrawingData(): DrawingData {
   return {
-    version: 2,
+    version: 3,
     objects: [],
+    layers: [createDefaultPageLayer()],
+    activeLayerId: DEFAULT_PAGE_LAYER_ID,
+    audioNotes: [],
     properties: { ...DEFAULT_PAGE_PROPERTIES },
   };
 }
@@ -156,16 +176,17 @@ export function createDefaultDrawingData(settings?: Partial<PageProperties>): Dr
 // ---- Tool State ----
 
 /** Drawing tool identifiers. */
-export type DrawingToolId = 'pen' | 'pencil' | 'highlighter' | 'marker' | 'eraser';
+export type DrawingToolId = 'pen' | 'pencil' | 'highlighter' | 'marker' | 'eraser' | 'laser';
+export type StrokePattern = 'solid' | 'dashed' | 'dotted';
 
 /** Eraser modes. */
-export type EraserMode = 'stroke' | 'pixel' | 'all';
+export type EraserMode = 'stroke' | 'pixel' | 'highlighter' | 'all';
 
 /** Shape tool sub-modes. */
 export type ShapeToolMode = ShapeType;
 
-/** Notebook layout scroll direction mode */
-export type ScrollDirection = 'vertical' | 'horizontal' | 'two-page-horizontal';
+/** Notebook layout scroll direction mode (locked to vertical single-page) */
+export type ScrollDirection = 'vertical';
 
 /** The active mode of the notebook page. */
 export type NotebookMode = 'text' | 'draw' | 'select' | 'erase' | 'shape' | 'hand';
@@ -174,12 +195,25 @@ export type NotebookMode = 'text' | 'draw' | 'select' | 'erase' | 'shape' | 'han
 export interface ToolState {
   mode: NotebookMode;
   drawingTool: DrawingToolId;
+  /** Independent recognition toggle layered over a compatible drawing tool. */
+  handwritingToTextEnabled: boolean;
+  /** Temporary raw-ink style used only while recognition is enabled. */
+  handwritingInkColor: string;
+  handwritingInkThickness: number;
   eraserMode: EraserMode;
   shapeTool: ShapeToolMode;
   color: string;
   thickness: number;
   opacity: number;
   pressureSensitivity: boolean;
+  strokePattern: StrokePattern;
+  scribbleToErase: boolean;
+  circleToSelect: boolean;
+  straightLineRecognition: boolean;
+  snapRecognizedLines: boolean;
+  roughShapeRecognition: boolean;
+  snapRecognizedShapes: boolean;
+  rulerEnabled: boolean;
   stabilization: number; // 0-100
   shapeFillEnabled: boolean;
 }
@@ -188,12 +222,23 @@ export interface ToolState {
 export const DEFAULT_TOOL_STATE: ToolState = {
   mode: 'text',
   drawingTool: 'pen',
-  eraserMode: 'stroke',
+  handwritingToTextEnabled: false,
+  handwritingInkColor: '#20242a',
+  handwritingInkThickness: 2.4,
+  eraserMode: 'pixel',
   shapeTool: 'rectangle',
   color: '#20242a',
   thickness: 2,
   opacity: 1,
   pressureSensitivity: true,
+  strokePattern: 'solid',
+  scribbleToErase: false,
+  circleToSelect: false,
+  straightLineRecognition: false,
+  snapRecognizedLines: true,
+  roughShapeRecognition: false,
+  snapRecognizedShapes: false,
+  rulerEnabled: false,
   stabilization: 50,
   shapeFillEnabled: false,
 };
@@ -204,6 +249,8 @@ export const DEFAULT_TOOL_STATE: ToolState = {
 export interface HistoryCommand {
   /** Human-readable description for debugging. */
   description: string;
+  /** IDs introduced by this command, used when a later atomic transform consumes them. */
+  createdObjectIds?: readonly string[];
   /** Execute the command (or re-execute on redo). */
   execute: () => void;
   /** Reverse the command on undo. */
@@ -243,4 +290,3 @@ export interface SelectedElement {
   type: 'stroke' | 'shape' | 'text' | 'image';
   id: string;
 }
-

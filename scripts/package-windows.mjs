@@ -1,0 +1,33 @@
+import { cp, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+
+const root = process.cwd();
+const release = path.join(root, 'release');
+const stage = await mkdtemp(path.join(os.tmpdir(), 'panvas-release-'));
+const directoryOnly = process.argv.includes('--dir');
+
+try {
+  const cli = path.join(root, 'node_modules', 'electron-builder', 'out', 'cli', 'cli.js');
+  const args = [cli, '--win', '--x64', `--config.directories.output=${stage}`];
+  if (directoryOnly) args.push('--dir');
+  const result = spawnSync(process.execPath, args, { cwd: root, stdio: 'inherit' });
+  if (result.status !== 0) process.exitCode = result.status ?? 1;
+  else {
+    await mkdir(release, { recursive: true });
+    if (directoryOnly) {
+      await rm(path.join(release, 'win-unpacked'), { recursive: true, force: true });
+      await rm(path.join(release, 'win-unpacked.tmp'), { recursive: true, force: true });
+    }
+    for (const entry of await readdir(stage, { withFileTypes: true })) {
+      await cp(path.join(stage, entry.name), path.join(release, entry.name), {
+        recursive: entry.isDirectory(),
+        force: true,
+      });
+    }
+    console.log(`Windows ${directoryOnly ? 'directory' : 'installer'} artifacts copied to ${release}`);
+  }
+} finally {
+  await rm(stage, { recursive: true, force: true });
+}

@@ -12,7 +12,12 @@ import {
   ClipboardPaste, 
   CopyPlus, 
   Trash2, 
-  CheckSquare 
+  CheckSquare,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUp,
+  ChevronsDown,
+  Languages,
 } from 'lucide-react';
 
 export interface ContextMenuState {
@@ -23,12 +28,13 @@ export interface ContextMenuState {
   isTextEditing: boolean;
   canUndo: boolean;
   canRedo: boolean;
+  canConvertHandwriting: boolean;
 }
 
 export interface NotebookContextMenuProps {
   state: ContextMenuState;
   onClose: () => void;
-  onCommand: (command: 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'duplicate' | 'delete' | 'selectAll') => void;
+  onCommand: (command: 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'duplicate' | 'delete' | 'selectAll' | 'bringToFront' | 'bringForward' | 'sendBackward' | 'sendToBack' | 'convertHandwriting') => void;
 }
 
 export const NotebookContextMenu: React.FC<NotebookContextMenuProps> = ({
@@ -71,11 +77,11 @@ export const NotebookContextMenu: React.FC<NotebookContextMenuProps> = ({
 
   // Calculate clamped coordinates so menu never overflows screen bounds
   const menuWidth = 190;
-  const menuHeight = 240;
+  const menuHeight = 470;
   const clampedX = Math.max(10, Math.min(state.x, window.innerWidth - menuWidth - 10));
   const clampedY = Math.max(10, Math.min(state.y, window.innerHeight - menuHeight - 10));
 
-  const handleAction = (cmd: 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'duplicate' | 'delete' | 'selectAll') => {
+  const handleAction = (cmd: 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'duplicate' | 'delete' | 'selectAll' | 'bringToFront' | 'bringForward' | 'sendBackward' | 'sendToBack' | 'convertHandwriting') => {
     onCommand(cmd);
     onClose();
   };
@@ -91,7 +97,7 @@ export const NotebookContextMenu: React.FC<NotebookContextMenuProps> = ({
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95 }}
         transition={{ duration: 0.1, ease: 'easeOut' }}
-        className="fixed z-50 min-w-[190px] rounded-lg border border-panvas-border-default bg-panvas-bg-elevated p-1 shadow-2xl backdrop-blur-md select-none text-xs"
+        className="panvas-overlay fixed min-w-[190px] rounded-lg border border-panvas-border-default bg-panvas-bg-elevated p-1 shadow-2xl backdrop-blur-md select-none text-xs"
         style={{ left: `${clampedX}px`, top: `${clampedY}px` }}
         onContextMenu={(e) => e.preventDefault()}
       >
@@ -177,6 +183,57 @@ export const NotebookContextMenu: React.FC<NotebookContextMenuProps> = ({
             </div>
             <span className="text-[10px] font-mono text-panvas-text-tertiary">{modKey}D</span>
           </button>
+        )}
+
+        {state.canConvertHandwriting && !state.isTextEditing && (
+          <button
+            type="button"
+            onClick={() => handleAction('convertHandwriting')}
+            className="flex w-full items-center justify-between px-2.5 py-1.5 rounded-md text-panvas-text-primary hover:bg-panvas-bg-hover transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Languages size={13} className="text-blue-400" />
+              <span>Convert to Text</span>
+            </div>
+          </button>
+        )}
+
+        {state.hasSelection && !state.isTextEditing && (
+          <>
+            <div className="my-1 border-t border-panvas-border-subtle" />
+            <button
+              type="button"
+              onClick={() => handleAction('bringToFront')}
+              className="flex w-full items-center justify-between px-2.5 py-1.5 rounded-md text-panvas-text-primary hover:bg-panvas-bg-hover transition-colors"
+            >
+              <div className="flex items-center gap-2"><ChevronsUp size={13} className="text-panvas-text-secondary" /><span>Bring to Front</span></div>
+              <span className="text-[10px] font-mono text-panvas-text-tertiary">{modKey}Shift+]</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleAction('bringForward')}
+              className="flex w-full items-center justify-between px-2.5 py-1.5 rounded-md text-panvas-text-primary hover:bg-panvas-bg-hover transition-colors"
+            >
+              <div className="flex items-center gap-2"><ChevronUp size={13} className="text-panvas-text-secondary" /><span>Bring Forward</span></div>
+              <span className="text-[10px] font-mono text-panvas-text-tertiary">{modKey}]</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleAction('sendBackward')}
+              className="flex w-full items-center justify-between px-2.5 py-1.5 rounded-md text-panvas-text-primary hover:bg-panvas-bg-hover transition-colors"
+            >
+              <div className="flex items-center gap-2"><ChevronDown size={13} className="text-panvas-text-secondary" /><span>Send Backward</span></div>
+              <span className="text-[10px] font-mono text-panvas-text-tertiary">{modKey}[</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleAction('sendToBack')}
+              className="flex w-full items-center justify-between px-2.5 py-1.5 rounded-md text-panvas-text-primary hover:bg-panvas-bg-hover transition-colors"
+            >
+              <div className="flex items-center gap-2"><ChevronsDown size={13} className="text-panvas-text-secondary" /><span>Send to Back</span></div>
+              <span className="text-[10px] font-mono text-panvas-text-tertiary">{modKey}Shift+[</span>
+            </button>
+          </>
         )}
 
         <div className="my-1 border-t border-panvas-border-subtle" />

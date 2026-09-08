@@ -4,6 +4,9 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { NotebookExportCommandTarget, PageExportCommandTarget, SectionExportCommandTarget } from '@/services/pdf/notebookExportTargets';
+
+type ContextMenuExportTarget = NotebookExportCommandTarget | PageExportCommandTarget | SectionExportCommandTarget;
 
 interface UIState {
   // Sidebar
@@ -22,7 +25,8 @@ interface UIState {
   isCreateDialogOpen: boolean;
   createDialogType: 'workspace' | 'folder' | 'notebook' | 'section' | 'page' | 'canvas' | null;
   createDialogParentId: string | null;
-  openCreateDialog: (type: 'workspace' | 'folder' | 'notebook' | 'section' | 'page' | 'canvas', parentId?: string | null) => void;
+  createDialogParentType: 'folder' | 'notebook' | 'section' | null;
+  openCreateDialog: (type: 'workspace' | 'folder' | 'notebook' | 'section' | 'page' | 'canvas', parentId?: string | null, parentType?: 'folder' | 'notebook' | 'section' | null) => void;
   closeCreateDialog: () => void;
 
   // Context menu
@@ -32,8 +36,9 @@ interface UIState {
     y: number;
     targetId: string | null;
     targetType: 'workspace' | 'folder' | 'notebook' | 'section' | 'page' | 'canvas' | null;
+    exportTarget: ContextMenuExportTarget | null;
   };
-  openContextMenu: (x: number, y: number, targetId: string, targetType: 'workspace' | 'folder' | 'notebook' | 'section' | 'page' | 'canvas') => void;
+  openContextMenu: (x: number, y: number, targetId: string, targetType: 'workspace' | 'folder' | 'notebook' | 'section' | 'page' | 'canvas', exportTarget?: ContextMenuExportTarget | null) => void;
   closeContextMenu: () => void;
 
   // Rename
@@ -55,6 +60,11 @@ interface UIState {
   // toggleFullscreen: () => void;
   isPropertiesPanelOpen: boolean;
   togglePropertiesPanel: () => void;
+  // Wall-clock ms of the last explicit panel toggle. The notebook renderer
+  // auto-closes the properties drawer when the notebook area gets too narrow
+  // to hold it plus the minimal toolbar; this timestamp gives explicit user
+  // opens a grace period so the auto-close never fights the user.
+  lastPropertiesPanelToggleAt: number;
   isToolbarExpanded: boolean;
   toggleToolbar: () => void;
 }
@@ -78,16 +88,9 @@ export const useUIStore = create<UIState>()(
   isCreateDialogOpen: false,
   createDialogType: null,
   createDialogParentId: null,
-  openCreateDialog: (type, parentId = null) => set({
-    isCreateDialogOpen: true,
-    createDialogType: type,
-    createDialogParentId: parentId ?? null,
-  }),
-  closeCreateDialog: () => set({
-    isCreateDialogOpen: false,
-    createDialogType: null,
-    createDialogParentId: null,
-  }),
+  createDialogParentType: null,
+  openCreateDialog: (type, parentId = null, parentType = null) => set({ isCreateDialogOpen: true, createDialogType: type, createDialogParentId: parentId, createDialogParentType: parentType }),
+  closeCreateDialog: () => set({ isCreateDialogOpen: false, createDialogType: null, createDialogParentId: null, createDialogParentType: null }),
 
   // Context menu
 
@@ -98,12 +101,13 @@ export const useUIStore = create<UIState>()(
     y: 0,
     targetId: null,
     targetType: null,
+    exportTarget: null,
   },
-  openContextMenu: (x, y, targetId, targetType) => set({
-    contextMenu: { isOpen: true, x, y, targetId, targetType },
+  openContextMenu: (x, y, targetId, targetType, exportTarget = null) => set({
+    contextMenu: { isOpen: true, x, y, targetId, targetType, exportTarget },
   }),
   closeContextMenu: () => set({
-    contextMenu: { isOpen: false, x: 0, y: 0, targetId: null, targetType: null },
+    contextMenu: { isOpen: false, x: 0, y: 0, targetId: null, targetType: null, exportTarget: null },
   }),
 
   // Rename
@@ -142,8 +146,12 @@ export const useUIStore = create<UIState>()(
   // New UI States
   // isFullscreen: false,
   // toggleFullscreen: () => set(s => ({ isFullscreen: !s.isFullscreen })),
-  isPropertiesPanelOpen: true,
-  togglePropertiesPanel: () => set(s => ({ isPropertiesPanelOpen: !s.isPropertiesPanelOpen })),
+    isPropertiesPanelOpen: false,
+  lastPropertiesPanelToggleAt: 0,
+  togglePropertiesPanel: () => set(s => ({
+    isPropertiesPanelOpen: !s.isPropertiesPanelOpen,
+    lastPropertiesPanelToggleAt: Date.now(),
+  })),
   isToolbarExpanded: true,
   toggleToolbar: () => set(s => ({ isToolbarExpanded: !s.isToolbarExpanded })),
 }),

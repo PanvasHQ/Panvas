@@ -1,26 +1,138 @@
-import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { NotebookEngine } from './engine/NotebookEngine';
 import type { ViewportState } from './engine/drawingTypes';
-import { PageRenderer } from './PageRenderer';
 import { useUIStore } from '@/stores/uiStore';
+import { useCanvasStore } from '@/stores/canvasStore';
 import { useAuthStore } from '@/stores/authStore';
 import { UniversalDropRouter } from '@/services/drop/UniversalDropRouter';
 import { useLayoutStore } from '@/stores/layoutStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
-import { useNotebookSettingsStore } from '@/stores/notebookSettingsStore';
 import { NotebookToolPropertiesPanel } from './NotebookToolPropertiesPanel';
 import { NotebookFloatingToolbar } from './NotebookFloatingToolbar';
 import { NotebookNavigator } from './NotebookNavigator';
 import { NotebookWorkspaceControls } from './NotebookWorkspaceControls';
-import { FloatingTextEditor } from './FloatingTextEditor';
-import { InactivePagePreview } from './InactivePagePreview';
+import { NotebookPageUtilities } from './NotebookPageUtilities';
+import { PresentationOverlay } from '@/components/workspace/PresentationOverlay';
+import { NotebookPageView } from './NotebookPageView';
 import { NotebookContextMenu, type ContextMenuState } from './NotebookContextMenu';
+import { HandwritingConversionDialog } from './HandwritingConversionDialog';
 import type { Editor } from '@tiptap/react';
 import { notebookRepository } from '@/repositories/NotebookRepository';
-import { type TextObject, createEmptyDrawingData } from './engine/drawingTypes';
+import { exportNotebookToPdf, exportPageToPdf, printNotebook, printPage } from '@/services/pdf/notebookExportCommands';
+import { type AudioNote, type TextObject, type Stroke, createEmptyDrawingData, type DrawingData, type NotebookMode } from './engine/drawingTypes';
+import { canvasRepository } from '@/repositories/CanvasRepository';
+import { generateId } from '@/lib/utils/id';
+import { getSafeHttpUrl, htmlToTipTapJson } from './tiptapExtensions';
+import { useToolState } from './useEngineState';
+import { useIsMobileViewport } from '@/hooks/useIsMobileViewport';
+import { capturePageGeometryAnchor, derivePagePropertyOverrides, getNotebookPageDefaults, resolveNotebookPageLayout, resolvePageDimensions, resolvePageGeometryScrollDelta, resolvePageProperties, type PageGeometryAnchor } from '@/lib/pageProperties';
+import type { NotebookPropertyBatchSnapshot, PagePropertySet } from '@/types/notebook';
+import { createStickyNote, STICKY_NOTE_MIN_HEIGHT, STICKY_NOTE_WIDTH } from './stickyNotes';
+import type { HandwritingToolPreferences } from '@/services/beautification/handwritingBeautification';
+import type { ReviewedHandwritingLine } from '@/services/recognition/bulkConversion';
+import { PanelTopOpen, Plus } from 'lucide-react';
+import { pageAudioPersistence } from '@/services/audio/pageAudioPersistenceInstance';
 
-export function NotebookRenderer() {
-  const { activePageId, notebookPages, notebooks, workspaces, activeNotebookSectionId } = useWorkspaceStore();
+const clipboardCodeLanguages = new Set([
+  'python', 'javascript', 'typescript', 'java', 'c', 'cpp', 'csharp',
+  'go', 'rust', 'sql', 'bash', 'shell', 'json', 'html', 'css',
+  'markdown', 'jsx', 'tsx',
+]);
+
+const plainTextUrlPattern = /https?:\/\/[^\s<>"']+/gi;
+
+function textContentWithSafeLinks(text: string): any[] {
+  const content: any[] = [];
+  let cursor = 0;
+
+  for (const match of text.matchAll(plainTextUrlPattern)) {
+    const start = match.index ?? 0;
+    const rawUrl = match[0];
+    // Sentence punctuation is not normally part of a copied URL.
+    const url = rawUrl.replace(/[),.;!?]+$/, '');
+    const safeUrl = getSafeHttpUrl(url);
+
+    if (!safeUrl) continue;
+    if (start > cursor) content.push({ type: 'text', text: text.slice(cursor, start) });
+    content.push({ type: 'text', text: safeUrl, marks: [{ type: 'link', attrs: { href: safeUrl } }] });
+    cursor = start + rawUrl.length;
+  }
+
+  if (cursor < text.length) content.push({ type: 'text', text: text.slice(cursor) });
+  return content;
+}
+
+/**
+ * Converts only properly fenced Markdown code into the existing TipTap
+ * codeBlock schema. Returning null leaves the established plain-text path
+ * untouched.
+ */
+function parsePlainTextClipboard(text: string): any | null {
+  const lineEnding = text.includes('\r\n') ? '\r\n' : '\n';
+  const lines = text.split(/\r?\n/);
+  const content: any[] = [];
+  const proseLines: string[] = [];
+  let foundFence = false;
+
+  const appendProse = () => {
+    for (const line of proseLines) {
+      content.push({
+        type: 'paragraph',
+        content: line ? textContentWithSafeLinks(line) : [],
+      });
+    }
+    proseLines.length = 0;
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const openingFence = lines[index].match(/^ {0,3}```([^\s`]*)[ \t]*$/);
+    if (!openingFence) {
+      proseLines.push(lines[index]);
+      continue;
+    }
+
+    const closingIndex = lines.findIndex(
+      (line, candidate) => candidate > index && /^ {0,3}```[ \t]*$/.test(line),
+    );
+    if (closingIndex === -1) {
+      return null;
+    }
+
+    appendProse();
+    const requestedLanguage = openingFence[1].toLowerCase();
+    const language = clipboardCodeLanguages.has(requestedLanguage) ? requestedLanguage : null;
+    const code = lines.slice(index + 1, closingIndex).join(lineEnding);
+    content.push({
+      type: 'codeBlock',
+      attrs: { language },
+      content: code ? [{ type: 'text', text: code }] : [],
+    });
+    foundFence = true;
+    index = closingIndex;
+  }
+
+  appendProse();
+  return foundFence ? { type: 'doc', content } : null;
+}
+
+/**
+ * Presentation is stored on the existing TextObject metadata, rather than in
+ * the TipTap document. This keeps pasted prose editable with the same editor
+ * while ensuring fenced code retains its existing codeBlock rendering.
+ */
+function getPlainTextPastePresentation(content: any): 'sticky-note' | 'mixed-paste' | undefined {
+  const nodes = content?.content;
+  if (!Array.isArray(nodes)) return undefined;
+
+  const hasCode = nodes.some(node => node?.type === 'codeBlock');
+  const hasProse = nodes.some(node => node?.type !== 'codeBlock');
+
+  if (!hasProse) return undefined;
+  return hasCode ? 'mixed-paste' : 'sticky-note';
+}
+
+export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean }) {
+  const { activePageId, notebookPages, notebookSections, notebooks, workspaces, activeNotebookSectionId } = useWorkspaceStore();
   const page = notebookPages.find(item => item.id === activePageId);
   const notebook = page ? notebooks.find(item => item.id === page.notebookId) : undefined;
   const workspace = notebook ? workspaces.find(item => item.id === notebook.workspaceId) : undefined;
@@ -28,28 +140,98 @@ export function NotebookRenderer() {
   // Engine setup
   const notebookEngine = useMemo(() => new NotebookEngine(), []);
   const [viewport, setViewport] = useState<Readonly<ViewportState>>(() => notebookEngine.viewport.getState());
-  const [toolState, setToolState] = useState(() => notebookEngine.tools.getState());
+  // Read straight from the engine rather than mirroring it. The previous
+  // `useState(getState()) + subscribe(setToolState)` pair was resubscribed by the effect
+  // below on every workspace/notebook/page change without re-reading the engine, so any
+  // notification emitted across a resubscribe was silently dropped and never recovered.
+  const toolState = useToolState(notebookEngine);
   const [pageProperties, setPageProperties] = useState(() => notebookEngine.getProperties());
+  const [sectionDataCache, setSectionDataCache] = useState<Record<string, DrawingData>>({});
   const [textObjects, setTextObjects] = useState<TextObject[]>([]);
+  const [, setSelectionRevision] = useState(0);
+  const [handwritingStrokes, setHandwritingStrokes] = useState<Stroke[]>([]);
+  const [isHandwritingDialogOpen, setIsHandwritingDialogOpen] = useState(false);
   const [activeEditor, setActiveEditor] = useState<Editor | null>(null);
+  const [, setLayerRevision] = useState(0);
   const { isPropertiesPanelOpen } = useUIStore();
-  const { notebookModeLevel, setNotebookModeLevel } = useLayoutStore();
-  const { scrollDirection } = useNotebookSettingsStore();
+  const { notebookModeLevel, setNotebookModeLevel, workspaceViewMode, setWorkspaceViewMode, isToolbarCollapsed, setToolbarCollapsed } = useLayoutStore();
   const setActivePage = useWorkspaceStore(s => s.setActivePage);
+  const createNotebookPage = useWorkspaceStore(s => s.createNotebookPage);
+  const reorderPages = useWorkspaceStore(s => s.reorderPages);
   
   const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fullscreenToolbarHostRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const [fullscreenToolbarHostWidth, setFullscreenToolbarHostWidth] = useState<number | null>(null);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [debouncedScale, setDebouncedScale] = useState(1.0);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedScale(viewport.scale);
+    }, 150);
+    return () => clearTimeout(handler);
+  }, [viewport.scale]);
+
+  useEffect(() => {
+    if (workspaceViewMode !== 'edit') {
+      notebookEngine.tools.setMode('hand');
+      setActiveEditor(null);
+    }
+  }, [notebookEngine, workspaceViewMode]);
+
+  // True for the lifetime of a viewport pan gesture. Transferring page focus runs
+  // NotebookPageView's mount-effect cleanup — notebookEngine.unmount() ->
+  // InputManager.detach() — so it must never happen while a pan is in flight. Panning scrolls
+  // by definition, and scrolling is exactly what triggers a focus transfer, so these two have
+  // to be sequenced rather than left to race.
+  const panGestureActiveRef = useRef(false);
+  // Focus transfer requested by the scroll observer while a pan was in flight; applied when
+  // the gesture ends.
+  const pendingFocusPageIdRef = useRef<string | null>(null);
+  const pageGeometryTransitionRef = useRef<{ pageId: string; anchor: PageGeometryAnchor } | null>(null);
+  const pageGeometryReleaseRafRef = useRef<number | null>(null);
+  const [pageGeometryTransitionRevision, setPageGeometryTransitionRevision] = useState(0);
+  // handleActivatePage is defined further down (it needs the section cache) and is rebuilt
+  // whenever that cache changes. Effects that outlive those rebuilds must always call the
+  // latest version — a captured stale copy would flush the wrong outgoing page — so they go
+  // through this ref, which is reassigned on every render right after the callback is created.
+  const handleActivatePageRef = useRef<(targetPageId: string) => void>(() => {});
+
+  // The scroll viewport is only rendered when a page is active (see the guard just before the
+  // JSX), so this boolean — not the page id — is what listener-binding effects depend on.
+  const hasActivePage = Boolean(activePageId);
 
   // Sync Engine state to React
   useEffect(() => {
     const unsubViewport = notebookEngine.viewport.subscribe(setViewport);
-    const unsubTools = notebookEngine.tools.subscribe(setToolState);
+
+    let propSaveTimeout: NodeJS.Timeout;
     const unsubProps = notebookEngine.onPropertiesChange((newProps) => {
+      // 1. Immediately update React state for instant UI response
       setPageProperties(newProps);
-      if (workspace && notebook && page) {
-        notebookRepository.saveDrawingData(workspace.id, notebook.id, page.id, notebookEngine.getDrawingData());
+      
+      const currentPageId = focusedPageIdRef.current || page?.id;
+      if (currentPageId) {
+        setSectionDataCache(prev => {
+          const prevData = prev[currentPageId] || createEmptyDrawingData();
+          return {
+            ...prev,
+            [currentPageId]: {
+              ...prevData,
+              properties: { ...newProps },
+            }
+          };
+        });
       }
+      
+      // 2. Debounce persistence so serialization and disk/IPC never block the UI render
+      clearTimeout(propSaveTimeout);
+      propSaveTimeout = setTimeout(() => {
+        if (workspace && notebook && currentPageId) {
+          persistDrawing(currentPageId, notebookEngine.getDrawingData());
+        }
+      }, 500);
     });
     
     // Subscribe to drawing changes to update textObjects state for rendering
@@ -60,14 +242,16 @@ export function NotebookRenderer() {
     const unsubHistory = notebookEngine.history.subscribe(() => {
       setTextObjects([...notebookEngine.texts.getTexts()]);
     });
+    const unsubSelection = notebookEngine.selection.subscribe(() => setSelectionRevision(revision => revision + 1));
     return () => {
       unsubViewport();
-      unsubTools();
       unsubProps();
+      clearTimeout(propSaveTimeout);
       unsubDrawing();
       unsubHistory();
+      unsubSelection();
     };
-  }, [notebookEngine, workspace, notebook, page]);
+  }, [notebookEngine, workspace?.id, notebook?.id, page?.id]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -84,311 +268,881 @@ export function NotebookRenderer() {
     return () => observer.disconnect();
   }, []);
 
-  const paperDimensions = useMemo(() => {
-    let width = 794;  // Standard A4 width (96 DPI)
-    let height = 1123; // Standard A4 height (96 DPI)
+  useLayoutEffect(() => {
+    const host = fullscreenToolbarHostRef.current;
+    if (!host || notebookModeLevel !== 2 || isToolbarCollapsed) return;
+    const updateWidth = (width: number) => setFullscreenToolbarHostWidth(previous =>
+      Math.abs((previous ?? -1) - width) < 0.5 ? previous : width);
+    updateWidth(host.getBoundingClientRect().width);
+    const observer = new ResizeObserver(entries => {
+      if (entries[0]) updateWidth(entries[0].contentRect.width);
+    });
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, [isToolbarCollapsed, notebookModeLevel]);
 
-    if (pageProperties.pageSize === 'Letter') {
-      width = 816;
-      height = 1056;
-    } else if (pageProperties.pageSize === 'A5') {
-      width = 595;
-      height = 842;
-    }
+  // Below this notebook width the pinned chrome cannot hold the properties
+  // drawer (288px) + workspace controls (~141px) + even the minimal toolbar
+  // (~172px) without overlap, so the drawer auto-closes on resize. Explicit
+  // user opens get a grace period (lastPropertiesPanelToggleAt) and the
+  // effect only re-runs on resize, so an intentionally re-opened drawer is
+  // left alone until the window is resized again. On phones the panel is a
+  // viewport-level bottom sheet that never reserves chrome width, so the
+  // auto-close protection does not apply there.
+  const isMobileViewport = useIsMobileViewport();
+  const PROPERTIES_DRAWER_AUTOCLOSE_WIDTH = 680;
+  useEffect(() => {
+    if (!isPropertiesPanelOpen) return;
+    if (isMobileViewport) return;
+    if (containerSize.width === 0 || containerSize.width >= PROPERTIES_DRAWER_AUTOCLOSE_WIDTH) return;
+    const { lastPropertiesPanelToggleAt, togglePropertiesPanel } = useUIStore.getState();
+    if (Date.now() - lastPropertiesPanelToggleAt < 2500) return;
+    togglePropertiesPanel();
+  }, [containerSize.width, isPropertiesPanelOpen, isMobileViewport]);
 
-    if (pageProperties.orientation === 'landscape') {
-      const temp = width;
-      width = height;
-      height = temp;
-    }
+  const paperDimensions = useMemo(
+    () => resolvePageDimensions(pageProperties),
+    [pageProperties],
+  );
 
-    return { width, height };
-  }, [pageProperties.orientation, pageProperties.pageSize]);
-
-  // Auto-fit zoom to fill ~85% of workspace width on initial load
+  // Auto-fit zoom to fill ~85% of workspace width on initial load. The upper
+  // clamp bounds the zoom level itself (not a fixed pixel width) so large
+  // desktop windows get proportionally larger paper instead of hitting a
+  // 1150px ceiling that left big displays mostly empty.
   const hasAutoZoomed = useRef(false);
   useEffect(() => {
     if (containerSize.width === 0 || paperDimensions.width === 0) return;
     if (hasAutoZoomed.current) return;
-    
-    const targetWidth = Math.min(containerSize.width * 0.85, 1150);
-    const fitZoom = Math.max(0.4, Math.min(2.5, targetWidth / paperDimensions.width));
+
+    const targetWidth = containerSize.width * 0.85;
+    const fitZoom = Math.max(0.4, Math.min(1.75, targetWidth / paperDimensions.width));
     notebookEngine.viewport.setZoom(fitZoom);
     hasAutoZoomed.current = true;
   }, [containerSize.width, paperDimensions.width, notebookEngine]);
 
-  // Reset auto-zoom when active page changes
+  // Reset auto-zoom when active notebook or section changes (not on every single page scroll)
   useEffect(() => {
     hasAutoZoomed.current = false;
-  }, [activePageId]);
+  }, [activeNotebookSectionId, notebook?.id]);
   const marginPaddingClass = useMemo(() => {
     if (pageProperties.margins === 'Narrow') return 'px-[5%] py-[5%]';
     if (pageProperties.margins === 'Wide') return 'px-[18%] py-[12%]';
     return 'px-[10%] py-[10%]';
   }, [pageProperties.margins]);
 
-  // Panning & Zooming events
-  useEffect(() => {
+  // 6B: Calculate current page position
+  const currentSectionPages = useMemo(() => {
+    const rawPages = notebookPages
+      .filter(p => p.sectionId === activeNotebookSectionId && !p.deletedAt)
+      .sort((a, b) => a.order - b.order);
+
+    const seen = new Set<string>();
+    const uniquePages: typeof rawPages = [];
+    for (const p of rawPages) {
+      if (!seen.has(p.id)) {
+        seen.add(p.id);
+        uniquePages.push(p);
+      } else {
+        console.error('[PAGE DUPLICATE DETECTED IN STORE]', { id: p.id, title: p.title });
+      }
+    }
+
+    return uniquePages;
+  }, [notebookPages, activeNotebookSectionId]);
+  
+  // Compute the canonical section layout in stable base-document coordinates.
+  // Two-page mode is a real spread (paired columns), not a global UI scale.
+  const resolvedSectionProperties = useMemo(() => new Map(
+    currentSectionPages.map(sectionPage => [
+      sectionPage.id,
+      resolvePageProperties(
+        notebook,
+        sectionPage,
+        sectionDataCache[sectionPage.id]?.properties,
+      ),
+    ]),
+  ), [currentSectionPages, notebook, sectionDataCache]);
+
+  const layoutConfig = useMemo(() => resolveNotebookPageLayout(
+    currentSectionPages.map(sectionPage => ({
+      id: sectionPage.id,
+      properties: resolvedSectionProperties.get(sectionPage.id)!,
+    })),
+    spreadMode,
+  ), [currentSectionPages, resolvedSectionProperties, spreadMode]);
+
+  useLayoutEffect(() => {
+    const pending = pageGeometryTransitionRef.current;
+    const container = containerRef.current;
+    if (!pending || !container) return;
+    const pageElement = document.getElementById(`page-${pending.pageId}`);
+    if (pageElement) {
+      const pageRect = pageElement.getBoundingClientRect();
+      const delta = resolvePageGeometryScrollDelta(pending.anchor, pageRect);
+      container.scrollTo({
+        left: Math.max(0, container.scrollLeft + delta.x),
+        top: Math.max(0, container.scrollTop + delta.y),
+        behavior: 'instant',
+      });
+    }
+
+    if (pageGeometryReleaseRafRef.current !== null) cancelAnimationFrame(pageGeometryReleaseRafRef.current);
+    pageGeometryReleaseRafRef.current = requestAnimationFrame(() => {
+      pageGeometryReleaseRafRef.current = requestAnimationFrame(() => {
+        if (pageGeometryTransitionRef.current === pending) pageGeometryTransitionRef.current = null;
+        pageGeometryReleaseRafRef.current = null;
+      });
+    });
+  }, [pageGeometryTransitionRevision]);
+
+  useEffect(() => () => {
+    if (pageGeometryReleaseRafRef.current !== null) cancelAnimationFrame(pageGeometryReleaseRafRef.current);
+  }, []);
+
+  // ---- Zoom: deterministic closed-form anchor-based scroll correction ----
+  // We capture the document-space point under the cursor BEFORE zoom,
+  // then in useLayoutEffect we calculate the exact new scroll position using
+  // closed-form vertical coordinates without any flexbox ambiguity or jumps.
+  const zoomAnchorRef = useRef<{
+    docX: number;      // document-space X under cursor
+    docY: number;      // document-space Y under cursor
+    originX: number;   // cursor X relative to container
+    originY: number;   // cursor Y relative to container
+    newScale: number;  // target scale
+  } | null>(null);
+
+  const applyZoom = useCallback((factor: number, originX: number, originY: number): boolean => {
+    const container = containerRef.current;
+    if (!container) return false;
+
+    const renderedScale = viewport.scale;
+    const pendingScale = zoomAnchorRef.current?.newScale;
+    const targetBaseScale = pendingScale !== undefined && pendingScale !== renderedScale
+      ? pendingScale
+      : renderedScale;
+    const newScale = Math.max(0.25, Math.min(4.0, targetBaseScale * factor));
+    if (newScale === targetBaseScale) return false;
+
+    const w = layoutConfig.totalWidth * renderedScale;
+    const offsetX = Math.max(0, (container.clientWidth - w) / 2);
+
+    // Convert cursor origin (in container-space) to exact document-space coordinates
+    const contentX = container.scrollLeft + originX - offsetX;
+    const contentY = container.scrollTop + originY;
+    const docX = contentX / renderedScale;
+    const docY = contentY / renderedScale;
+
+    // Store anchor for post-render correction
+    zoomAnchorRef.current = { docX, docY, originX, originY, newScale };
+
+    // Update viewport scale — triggers React re-render
+    notebookEngine.viewport.setZoom(newScale);
+    return true;
+  }, [layoutConfig.totalWidth, notebookEngine, viewport.scale]);
+
+  // After React re-renders with the new scale, compute exact new scroll coordinates
+  useLayoutEffect(() => {
+    const anchor = zoomAnchorRef.current;
+    if (!anchor) return;
+    zoomAnchorRef.current = null;
+
     const container = containerRef.current;
     if (!container) return;
 
+    const scale = anchor.newScale;
+    const w = layoutConfig.totalWidth * scale;
+    const offsetX = Math.max(0, (container.clientWidth - w) / 2);
+
+    const newScrollLeft = Math.max(0, anchor.docX * scale + offsetX - anchor.originX);
+    const newScrollTop = Math.max(0, anchor.docY * scale - anchor.originY);
+
+    container.scrollTo({ left: newScrollLeft, top: newScrollTop, behavior: 'instant' });
+  }, [layoutConfig.totalWidth, viewport.scale]);
+
+  // Direct panel zoom button (+, -, fit)
+  const handlePanelZoom = useCallback((newZoom: number) => {
+    const container = containerRef.current;
+    if (!container) return;
+    const clampedZoom = Math.max(0.25, Math.min(4.0, newZoom));
+    const factor = clampedZoom / viewport.scale;
+    if (factor === 1) return;
+    applyZoom(factor, container.clientWidth / 2, container.clientHeight / 2);
+  }, [viewport.scale, applyZoom]);
+
+  // Continuously flushes accumulated pinch-zoom deltas on animation frames so
+  // there is always exactly one anchor in flight per committed scale.
+  const CONTINUOUS_PINCH_MAX_ABS_DELTA = 50; // px; below this, treat as a touchpad pinch sample
+  const pinchAccumulatedDeltaYRef = useRef(0);
+  const pinchOriginRef = useRef({ x: 0, y: 0 });
+  const pinchFrameRef = useRef<number | null>(null);
+  const pinchCommitInFlightRef = useRef(false);
+
+  const flushPinchZoom = useCallback(() => {
+    pinchFrameRef.current = null;
+    if (pinchCommitInFlightRef.current) return; // wait for the in-flight scale to commit + correct
+    const deltaY = pinchAccumulatedDeltaYRef.current;
+    if (deltaY === 0) return;
+    pinchAccumulatedDeltaYRef.current = 0;
+
+    const factor = Math.exp(-deltaY / 100);
+    const didCommit = applyZoom(factor, pinchOriginRef.current.x, pinchOriginRef.current.y);
+    if (didCommit) {
+      pinchCommitInFlightRef.current = true;
+    }
+  }, [applyZoom]);
+
+  const schedulePinchFlush = useCallback(() => {
+    if (pinchFrameRef.current !== null) return;
+    pinchFrameRef.current = requestAnimationFrame(flushPinchZoom);
+  }, [flushPinchZoom]);
+
+  useEffect(() => {
+    pinchCommitInFlightRef.current = false;
+    if (pinchAccumulatedDeltaYRef.current !== 0) {
+      schedulePinchFlush();
+    }
+  }, [viewport.scale, schedulePinchFlush]);
+
+  useEffect(() => {
+    return () => {
+      if (pinchFrameRef.current !== null) {
+        cancelAnimationFrame(pinchFrameRef.current);
+      }
+    };
+  }, []);
+
+  // Wheel handler: capture zoom with cursor as anchor
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
     const handleWheel = (e: WheelEvent) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-        notebookEngine.viewport.zoomBy(zoomFactor, e.clientX, e.clientY);
+
+        const rect = container.getBoundingClientRect();
+        const originX = e.clientX - rect.left;
+        const originY = e.clientY - rect.top;
+
+        if (Math.abs(e.deltaY) < CONTINUOUS_PINCH_MAX_ABS_DELTA) {
+          pinchAccumulatedDeltaYRef.current += e.deltaY;
+          pinchOriginRef.current = { x: originX, y: originY };
+          schedulePinchFlush();
+        } else {
+          const factor = e.deltaY < 0 ? 1.1 : 0.9;
+          applyZoom(factor, originX, originY);
+        }
       }
-      // Else let the browser handle native scrolling
     };
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
+  }, [applyZoom, schedulePinchFlush]);
+
+
+
+  // Space held = temporary Hand tool. The override has to be strictly symmetric: it is the
+  // only code path that writes a tool mode the user did not choose, so a lost restore shows
+  // up as exactly the reported symptom — the engine in one mode, the toolbar labelled with
+  // another. Previously the keyup listener was registered on `window` from inside the keydown
+  // handler and removed only by a matching Space keyup, so the effect's cleanup could not
+  // reclaim it. Losing focus before the keyup (alt-tab, or the native file dialog the image
+  // importer opens) left an orphaned listener holding a stale `prevMode` that fired on the
+  // next Space, silently reverting the mode with no user action.
+  useEffect(() => {
+    // Non-null only while the override is engaged; also the restore-once guard.
+    let overriddenFrom: NotebookMode | null = null;
+
+    const restore = () => {
+      if (overriddenFrom === null) return;
+      const previous = overriddenFrom;
+      overriddenFrom = null;
+      notebookEngine.tools.setMode(previous);
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' || e.repeat) return;
+      const target = e.target;
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || (target as HTMLElement)?.isContentEditable) return;
+      if (overriddenFrom !== null) return;
+
+      const currentMode = notebookEngine.tools.getState().mode;
+      if (currentMode === 'hand') return;
+
+      overriddenFrom = currentMode;
+      notebookEngine.tools.setMode('hand');
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') restore();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    // A keyup that lands on another window never reaches us, so blur is the backstop.
+    window.addEventListener('blur', restore);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', restore);
+      restore();
+    };
   }, [notebookEngine]);
 
+  // Viewport-level panning: Hand tool (left button) and middle mouse button.
+  //
+  // These listeners belong on the `.notebook-viewport` scroll container, NOT on a page
+  // canvas. Panning is a viewport concern: the gesture must work when it starts on an
+  // inter-page gap, a side margin, or a page that is not the focused one. The previous
+  // design bound panning to the single focused page's <canvas> inside InputManager, so a
+  // drag only panned when it happened to begin inside that one rectangle — and starting
+  // on a non-focused page instead triggered page activation, which tore the engine down
+  // mid-gesture. The container is an ancestor of every page, gap and margin, so ordinary
+  // event bubbling covers all of them with one binding (this is scoped delegation on an
+  // element we already own, not a global window listener).
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    let isDragging = false;
-    let lastX = 0, lastY = 0;
+
+    // Anchors are captured once per gesture and each move computes an ABSOLUTE target
+    // from them. Accumulating per-move deltas — and rebasing the anchor each move, as the
+    // old code did — permanently discards whatever the scroller clamps at a boundary or
+    // rounds off at fractional display scaling, which is what made the content lag
+    // behind the cursor and stutter on scaled displays.
+    let activePointerId: number | null = null;
+    let activePanSource: 'hand' | 'middle' | null = null;
+    let startClientX = 0;
+    let startClientY = 0;
+    let startScrollLeft = 0;
+    let startScrollTop = 0;
+
+    const isPanGesture = (e: PointerEvent): boolean => {
+      // Touch is left to the container's native scrolling; capturing it here would apply
+      // the gesture twice. Touch over the focused canvas (where `touch-action: none`
+      // suppresses native scrolling) is still handled by InputManager.
+      if (e.pointerType === 'touch') return false;
+      if (e.button === 1) return true;
+      return e.button === 0 && notebookEngine.tools.getState().mode === 'hand';
+    };
 
     const onPointerDown = (e: PointerEvent) => {
-      if (e.button === 1) { // Middle mouse button
-        isDragging = true;
-        lastX = e.clientX;
-        lastY = e.clientY;
+      if (activePointerId !== null || !isPanGesture(e)) return;
+
+      // Suppresses middle-click autoscroll, and for the Hand tool also suppresses text
+      // selection, drag-start and focus changes for the duration of the drag.
+      e.preventDefault();
+
+      activePointerId = e.pointerId;
+      activePanSource = e.button === 1 ? 'middle' : 'hand';
+      container.dataset.panActive = 'true';
+      container.dataset.panSource = activePanSource;
+      container.dataset.panPointer = String(e.pointerId);
+      panGestureActiveRef.current = true;
+      startClientX = e.clientX;
+      startClientY = e.clientY;
+      startScrollLeft = container.scrollLeft;
+      startScrollTop = container.scrollTop;
+
+      // Capture on the container keeps the gesture alive when the pointer moves over a
+      // child, leaves the viewport, or is released outside the window.
+      try {
         container.setPointerCapture(e.pointerId);
+      } catch (err) {
+        // Ignore DOMException if the pointer is already gone
       }
     };
+
+    const finishGesture = (pointerId?: number, releaseCapture = true) => {
+      if (activePointerId === null || (pointerId !== undefined && pointerId !== activePointerId)) return;
+      const finishedPointerId = activePointerId;
+      activePointerId = null;
+      activePanSource = null;
+      container.dataset.panActive = 'false';
+      delete container.dataset.panSource;
+      delete container.dataset.panPointer;
+      panGestureActiveRef.current = false;
+      if (releaseCapture) {
+        try {
+          if (container.hasPointerCapture(finishedPointerId)) {
+            container.releasePointerCapture(finishedPointerId);
+          }
+        } catch (err) {
+          // Ignore DOMException if capture is already lost
+        }
+      }
+      const pendingFocusPageId = pendingFocusPageIdRef.current;
+      if (pendingFocusPageId) {
+        pendingFocusPageIdRef.current = null;
+        handleActivatePageRef.current(pendingFocusPageId);
+      }
+    };
+
     const onPointerMove = (e: PointerEvent) => {
-      if (!isDragging) return;
-      container.scrollLeft -= (e.clientX - lastX);
-      container.scrollTop -= (e.clientY - lastY);
-      lastX = e.clientX;
-      lastY = e.clientY;
-    };
-    const onPointerUp = (e: PointerEvent) => {
-      if (isDragging && e.button === 1) {
-        isDragging = false;
-        container.releasePointerCapture(e.pointerId);
+      if (e.pointerId !== activePointerId) return;
+      // Some display/window transitions drop pointerup but still deliver a final move with
+      // no button held. End the capture instead of leaving an old Hand gesture in charge of
+      // later pointer events (including toolbar clicks).
+      if (e.pointerType !== 'touch' && e.buttons === 0) {
+        finishGesture(e.pointerId);
+        return;
       }
+      container.scrollLeft = startScrollLeft - (e.clientX - startClientX);
+      container.scrollTop = startScrollTop - (e.clientY - startClientY);
     };
+
+    const endGesture = (e: PointerEvent) => finishGesture(e.pointerId);
+    const onLostPointerCapture = (e: PointerEvent) => finishGesture(e.pointerId, false);
+    const onWindowBlur = () => finishGesture();
+    const unsubscribeTools = notebookEngine.tools.subscribe((state) => {
+      // Middle-button panning is tool-independent. A left-button Hand gesture, however,
+      // cannot remain authoritative after the user has selected another tool.
+      if (activePanSource === 'hand' && state.mode !== 'hand') finishGesture();
+    });
 
     container.addEventListener('pointerdown', onPointerDown);
     container.addEventListener('pointermove', onPointerMove);
-    container.addEventListener('pointerup', onPointerUp);
-    container.addEventListener('pointercancel', onPointerUp);
+    container.addEventListener('pointerup', endGesture);
+    container.addEventListener('pointercancel', endGesture);
+    container.addEventListener('lostpointercapture', onLostPointerCapture);
+    window.addEventListener('blur', onWindowBlur);
 
     return () => {
       container.removeEventListener('pointerdown', onPointerDown);
       container.removeEventListener('pointermove', onPointerMove);
-      container.removeEventListener('pointerup', onPointerUp);
-      container.removeEventListener('pointercancel', onPointerUp);
+      container.removeEventListener('pointerup', endGesture);
+      container.removeEventListener('pointercancel', endGesture);
+      container.removeEventListener('lostpointercapture', onLostPointerCapture);
+      window.removeEventListener('blur', onWindowBlur);
+      unsubscribeTools();
+      // If the effect is torn down mid-gesture, also release capture and flush any deferred
+      // focus transfer instead of leaving either state latched.
+      finishGesture();
     };
-  }, [notebookEngine]);
+    // `activePageId` was in this dependency list but nothing in the effect reads it. Because
+    // the scroll observer updates activePageId while a Hand drag is scrolling the container,
+    // that dependency re-ran the effect *during* the gesture: the cleanup removed the
+    // listeners and the fresh closure started with `activePointerId = null`, so the drag went
+    // dead the moment it crossed a page boundary. The gesture state lives in this closure, so
+    // the effect must only re-run when the engine identity changes, or when the viewport
+    // element itself appears or disappears.
+  }, [notebookEngine, hasActivePage]);
 
-  // Global Keyboard Shortcuts
+
+  // Central persistence writer for drawing data. Every notebook save goes
+  // through here so the StatusBar save indicator reflects reality and a
+  // failed write is surfaced instead of silently dropped: the roadmap's
+  // "intentional failure does not falsely report save success" contract.
+  const lastSaveErrorToastAtRef = useRef(0);
+  const persistDrawing = useCallback((pageId: string, data: DrawingData) => {
+    if (!pageId) return;
+    const { notebookPages: allPages, notebooks: allNotebooks, workspaces: allWorkspaces } = useWorkspaceStore.getState();
+    const targetPage = allPages.find(p => p.id === pageId) ?? notebookPages.find(p => p.id === pageId);
+    if (!targetPage) return;
+    const targetNotebook = allNotebooks.find(n => n.id === targetPage.notebookId) ?? notebooks.find(n => n.id === targetPage.notebookId);
+    if (!targetNotebook) return;
+    const targetWorkspace = allWorkspaces.find(w => w.id === targetNotebook.workspaceId) ?? workspaces.find(w => w.id === targetNotebook.workspaceId);
+    if (!targetWorkspace) return;
+
+    setSectionDataCache(prev => ({ ...prev, [pageId]: data }));
+    useCanvasStore.getState().setSaveStatus('saving');
+    pageAudioPersistence.saveDrawing({ workspaceId: targetWorkspace.id, notebookId: targetNotebook.id, pageId }, data)
+      .then(savedData => {
+        setSectionDataCache(prev => ({ ...prev, [pageId]: savedData }));
+        if (focusedPageIdRef.current === pageId) notebookEngine.audio.setAll(savedData.audioNotes);
+        useCanvasStore.getState().setSaveStatus('saved');
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('panvas:notebook-content-changed', { detail: { pageId } }));
+        }
+      })
+      .catch(err => {
+        useCanvasStore.getState().setSaveStatus('error');
+        console.error('[NotebookRenderer] drawing save failed:', err);
+        const now = Date.now();
+        if (now - lastSaveErrorToastAtRef.current > 10000) {
+          lastSaveErrorToastAtRef.current = now;
+          useUIStore.getState().showToast('Save failed. Your changes are kept in memory and will retry on the next edit.', 'error');
+        }
+      });
+  }, [notebookEngine, notebookPages, notebooks, workspaces]);
+
+  // In-Memory Section Data Cache
+  const [focusedPageId, setFocusedPageId] = useState<string>(activePageId || '');
+  const focusedPageIdRef = useRef(focusedPageId);
+  focusedPageIdRef.current = focusedPageId;
+  const focusedPage = notebookPages.find(item => item.id === focusedPageId) ?? page;
+
+  // Keep focusedPageId in sync when activePageId changes
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't interfere with text input or TipTap editors
-      if (
-        e.target instanceof HTMLInputElement || 
-        e.target instanceof HTMLTextAreaElement ||
-        (e.target as HTMLElement).isContentEditable
-      ) {
-        return;
+    if (activePageId && currentSectionPages.some(p => p.id === activePageId)) {
+      if (focusedPageId !== activePageId) {
+        setFocusedPageId(activePageId);
       }
-
-      if (e.key === 'F11') {
-        e.preventDefault();
-        setNotebookModeLevel(notebookModeLevel === 2 ? 0 : 2);
-        return;
-      }
-      
-      if (e.key === 'Escape' && notebookModeLevel > 0) {
-        setNotebookModeLevel(0);
-        // Fallthrough to allow clearing selection if needed
-      }
-
-      if (e.ctrlKey || e.metaKey || e.altKey) {
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-          e.preventDefault();
-          if (e.shiftKey) {
-            notebookEngine.history.redo();
-          } else {
-            notebookEngine.history.undo();
-          }
-        }
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
-          e.preventDefault();
-          notebookEngine.history.redo();
-        }
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
-          e.preventDefault();
-          notebookEngine.selection.copySelection();
-        }
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') {
-          e.preventDefault();
-          notebookEngine.selection.cutSelection();
-        }
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
-          e.preventDefault();
-          notebookEngine.selection.pasteSelection();
-        }
-        return;
-      }
-
-      const key = e.key.toLowerCase();
-      
-      switch (key) {
-        case 'v': notebookEngine.tools.setMode('select'); break;
-        case 't': notebookEngine.tools.setMode('text'); break;
-        case 'p': notebookEngine.tools.setDrawingTool('pen'); break;
-        case 'n': notebookEngine.tools.setDrawingTool('pencil'); break;
-        case 'h': notebookEngine.tools.setDrawingTool('highlighter'); break;
-        case 'm': notebookEngine.tools.setDrawingTool('marker'); break;
-        case 'e': notebookEngine.tools.setEraserMode('stroke'); break;
-        case 'r': notebookEngine.tools.setShapeTool('rectangle'); break;
-        case 'o': notebookEngine.tools.setShapeTool('ellipse'); break;
-        case 'a': notebookEngine.tools.setShapeTool('arrow'); break;
-        case 'l': notebookEngine.tools.setShapeTool('line'); break;
-        case 'delete':
-        case 'backspace':
-          notebookEngine.selection.deleteSelection();
-          break;
-        case 'escape':
-          notebookEngine.selection.clearSelection();
-          break;
-      }
-    };
-    
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [notebookEngine, notebookModeLevel, setNotebookModeLevel]);
-
-  // Load initial content
-  useEffect(() => {
-    async function loadPage() {
-      if (!workspace || !notebook || !page) return;
-      
-      // Load Drawing (which now includes texts)
-      const drawingData = await notebookRepository.loadDrawingData(workspace.id, notebook.id, page.id);
-      if (!drawingData) {
-        notebookEngine.setDrawingData(createEmptyDrawingData());
-      } else {
-        notebookEngine.setDrawingData(drawingData);
-      }
-      setTextObjects([...notebookEngine.texts.getTexts()]);
+    } else if (!focusedPageId && currentSectionPages.length > 0) {
+      setFocusedPageId(currentSectionPages[0].id);
     }
-    loadPage();
-  }, [workspace?.id, notebook?.id, page?.id, notebookEngine]);
+  }, [activePageId, focusedPageId, currentSectionPages]);
 
-  // Mount canvas and handle autosave for drawings
+  const handlePagePropertiesUpdate = useCallback((updates: Partial<PagePropertySet>) => {
+    const previousProperties = notebookEngine.getProperties();
+    const changesDimensions =
+      (updates.orientation !== undefined && updates.orientation !== previousProperties.orientation)
+      || (updates.pageSize !== undefined && updates.pageSize !== previousProperties.pageSize);
+    if (changesDimensions) {
+      const container = containerRef.current;
+      const pageId = focusedPageIdRef.current;
+      const pageElement = pageId ? document.getElementById(`page-${pageId}`) : null;
+      if (container && pageId && pageElement) {
+        const containerRect = container.getBoundingClientRect();
+        pageGeometryTransitionRef.current = {
+          pageId,
+          anchor: capturePageGeometryAnchor(pageElement.getBoundingClientRect(), {
+            x: containerRect.left + container.clientWidth / 2,
+            y: containerRect.top + container.clientHeight / 2,
+          }),
+        };
+      }
+    }
+    notebookEngine.setProperties(updates);
+    if (changesDimensions) setPageGeometryTransitionRevision(revision => revision + 1);
+    const pageId = focusedPageIdRef.current;
+    if (!workspace || !notebook || !pageId) return;
+    const overrides = derivePagePropertyOverrides(notebookEngine.getProperties(), notebook);
+    useWorkspaceStore.setState(state => ({
+      notebookPages: state.notebookPages.map(item => item.id === pageId
+        ? { ...item, pagePropertyOverrides: overrides, updatedAt: Date.now() }
+        : item),
+    }));
+    void notebookRepository.setPagePropertyOverrides(workspace.id, pageId, overrides).catch(error => {
+      console.error('[NotebookRenderer] page-property metadata save failed:', error);
+      useCanvasStore.getState().setSaveStatus('error');
+      useUIStore.getState().showToast('Page properties could not be saved.', 'error');
+    });
+  }, [notebookEngine, notebook, workspace]);
+
+  const handleApplyPropertiesToAll = useCallback(async (updates: Partial<PagePropertySet>) => {
+    if (!workspace || !notebook) throw new Error('No active notebook.');
+    const snapshot = await notebookRepository.applyPageDefaults(workspace.id, notebook.id, updates);
+    const changedKeys = Object.keys(updates) as (keyof PagePropertySet)[];
+    useWorkspaceStore.setState(state => ({
+      notebooks: state.notebooks.map(item => item.id === notebook.id
+        ? { ...item, defaultPageProperties: { ...getNotebookPageDefaults(item), ...updates }, updatedAt: Date.now() }
+        : item),
+      notebookPages: state.notebookPages.map(item => {
+        if (item.notebookId !== notebook.id || item.deletedAt || item.type === 'pdf') return item;
+        const overrides = { ...(item.pagePropertyOverrides ?? {}) } as Record<string, unknown>;
+        for (const key of changedKeys) delete overrides[key];
+        return { ...item, pagePropertyOverrides: overrides, updatedAt: Date.now() };
+      }),
+    }));
+    setSectionDataCache(previous => Object.fromEntries(Object.entries(previous).map(([id, data]) => [
+      id,
+      { ...data, properties: { ...data.properties, ...updates } },
+    ])));
+    notebookEngine.setProperties(updates);
+    return snapshot;
+  }, [notebookEngine, notebook, workspace]);
+
+  const handleRestorePropertiesBatch = useCallback(async (snapshot: NotebookPropertyBatchSnapshot) => {
+    if (!workspace) throw new Error('No active workspace.');
+    await notebookRepository.restorePageDefaults(workspace.id, snapshot);
+    const restoredPages = new Map(snapshot.pages.map(entry => [entry.pageId, entry.overrides]));
+    useWorkspaceStore.setState(state => ({
+      notebooks: state.notebooks.map(item => item.id === snapshot.notebookId
+        ? { ...item, defaultPageProperties: { ...snapshot.defaultPageProperties }, updatedAt: Date.now() }
+        : item),
+      notebookPages: state.notebookPages.map(item => restoredPages.has(item.id)
+        ? { ...item, pagePropertyOverrides: { ...restoredPages.get(item.id) }, updatedAt: Date.now() }
+        : item),
+    }));
+    setSectionDataCache(previous => Object.fromEntries(Object.entries(previous).map(([id, data]) => {
+      const overrides = restoredPages.get(id);
+      return [id, overrides === undefined ? data : {
+        ...data,
+        properties: { ...snapshot.defaultPageProperties, ...overrides },
+      }];
+    })));
+    const focusedOverrides = restoredPages.get(focusedPageIdRef.current);
+    if (focusedOverrides !== undefined) {
+      notebookEngine.setProperties({ ...snapshot.defaultPageProperties, ...focusedOverrides });
+    }
+  }, [notebookEngine, workspace]);
+
+  // Preload section drawing data into memory cache when section changes
   useEffect(() => {
-    if (!canvasRef.current) return;
-    
-    // Mount the engine to the canvas
-    const cssWidth = paperDimensions.width * viewport.scale;
-    const cssHeight = paperDimensions.height * viewport.scale;
-    notebookEngine.mount(canvasRef.current, cssWidth, cssHeight);
+    if (!workspace || !notebook || currentSectionPages.length === 0) return;
+    let mounted = true;
 
-    // Setup autosave for drawing
+    async function preloadSection() {
+      const entries = await Promise.all(
+        currentSectionPages.map(async (p) => {
+          const d = await notebookRepository.loadDrawingData(workspace!.id, notebook!.id, p.id);
+          const loaded = (d || createEmptyDrawingData()) as DrawingData;
+          const data = { ...loaded, properties: resolvePageProperties(notebook, p, loaded.properties) };
+          return [p.id, data] as const;
+        })
+      );
+      if (!mounted) return;
+      const map: Record<string, DrawingData> = {};
+      for (const [id, d] of entries) {
+        map[id] = d;
+      }
+      setSectionDataCache(prev => ({ ...prev, ...map }));
+    }
+
+    preloadSection();
+    return () => { mounted = false; };
+  }, [workspace?.id, notebook?.id, activeNotebookSectionId, currentSectionPages.length]);
+
+  // Sync focused page data with notebookEngine
+  useEffect(() => {
+    if (!focusedPageId || !workspace || !notebook) return;
+    const cachedData = sectionDataCache[focusedPageId];
+    if (cachedData) {
+      notebookEngine.setDrawingData(cachedData, focusedPageId);
+      setTextObjects([...notebookEngine.texts.getTexts()]);
+    } else {
+      notebookRepository.loadDrawingData(workspace.id, notebook.id, focusedPageId).then(loaded => {
+        const raw = (loaded || createEmptyDrawingData()) as DrawingData;
+        const pageMetadata = notebookPages.find(item => item.id === focusedPageId);
+        const d = { ...raw, properties: resolvePageProperties(notebook, pageMetadata, raw.properties) };
+        setSectionDataCache(prev => ({ ...prev, [focusedPageId]: d }));
+        notebookEngine.setDrawingData(d, focusedPageId);
+        setTextObjects([...notebookEngine.texts.getTexts()]);
+      });
+    }
+  }, [focusedPageId, workspace?.id, notebook?.id, notebookEngine]);
+
+  // Safe Autosave: debounced write strictly on user drawing actions
+  useEffect(() => {
     let drawingSaveTimeout: NodeJS.Timeout;
-    const unsubChange = notebookEngine.history.subscribe(() => {
+
+    const onUserDrawingAction = () => {
+      const currentPageId = focusedPageIdRef.current;
+      if (!currentPageId) return;
+      const { notebookPages: allPages } = useWorkspaceStore.getState();
+      const pageOwner = allPages.find(p => p.id === currentPageId);
+      if (!pageOwner || (notebook && pageOwner.notebookId !== notebook.id)) return;
+      const currentData = notebookEngine.getDrawingData();
+      setSectionDataCache(prev => ({ ...prev, [currentPageId]: currentData }));
       clearTimeout(drawingSaveTimeout);
       drawingSaveTimeout = setTimeout(() => {
-        if (workspace && notebook && page) {
-          notebookRepository.saveDrawingData(workspace.id, notebook.id, page.id, notebookEngine.getDrawingData());
+        if (currentPageId) {
+          // A layer, Element, or audio change can be persisted immediately while
+          // this older drawing debounce is still pending. Never let that stale
+          // snapshot overwrite the newer page state.
+          const latestData = focusedPageIdRef.current === currentPageId
+            ? notebookEngine.getDrawingData()
+            : currentData;
+          persistDrawing(currentPageId, latestData);
         }
       }, 1000);
-    });
+    };
+
+    const unsubDrawing = notebookEngine.input.onDrawingChange(onUserDrawingAction);
+    const unsubHistory = notebookEngine.history.subscribe(onUserDrawingAction);
 
     return () => {
-      unsubChange();
+      unsubDrawing();
+      unsubHistory();
       clearTimeout(drawingSaveTimeout);
-      notebookEngine.unmount();
     };
-  }, [notebookEngine, paperDimensions, viewport.scale, workspace, notebook, page]);
+  }, [notebookEngine, notebook?.id, persistDrawing]);
 
-  if (!activePageId) return null;
-  
-  // 6B: Calculate current page position
-  const currentSectionPages = notebookPages
-    .filter(p => p.sectionId === activeNotebookSectionId && !p.deletedAt)
-    .sort((a, b) => a.order - b.order);
+  // NOTE: no early return may be placed above this point, and none between here and the JSX.
+  // Seventeen hooks are declared below, so bailing out early changes the hook count for the
+  // render and React throws "Rendered fewer hooks than during the previous render", tearing
+  // down the whole subtree. The `if (!activePageId) return null` guard that used to sit here
+  // now lives immediately before the JSX return. Same defect class as the conditional hook
+  // already fixed in FloatingTextEditor.
   const currentPageIndex = currentSectionPages.findIndex(p => p.id === activePageId);
   const totalPages = currentSectionPages.length;
 
-  // Compute Layout for all pages in the section
-  const layoutConfig = useMemo(() => {
-    const isTwoPage = scrollDirection === 'two-page-horizontal';
-    const isHorizontal = scrollDirection === 'horizontal';
-    
-    const w = paperDimensions.width * viewport.scale;
-    const h = paperDimensions.height * viewport.scale;
-    const gap = 40 * viewport.scale;
-    const spineGap = 0;
+  // Keep track of activePageId for asynchronous scroll/pointer callbacks
+  const currentActivePageIdRef = useRef(activePageId);
+  currentActivePageIdRef.current = activePageId;
+  const isNavigatingRef = useRef<boolean>(false);
+  const lastNavigatedPageIdRef = useRef<string>('');
 
-    let totalWidth = 0;
-    let totalHeight = 0;
+  // Flush any pending drawing changes immediately
+  const flushActivePageDrawing = useCallback(() => {
+    const pageId = focusedPageIdRef.current;
+    if (pageId) {
+      persistDrawing(pageId, notebookEngine.getDrawingData());
+    }
+  }, [notebookEngine, persistDrawing]);
 
-    const positions = currentSectionPages.map((p, index) => {
-      let x = 0;
-      let y = 0;
-      
-      if (isTwoPage) {
-        const pairIndex = Math.floor(index / 2);
-        const isRight = index % 2 === 1;
-        x = pairIndex * (w * 2 + gap) + (isRight ? w + spineGap : 0);
-        y = 0;
-      } else if (isHorizontal) {
-        x = index * (w + gap);
-        y = 0;
-      } else {
-        x = 0;
-        y = index * (h + gap);
-      }
-      
-      totalWidth = Math.max(totalWidth, x + w);
-      totalHeight = Math.max(totalHeight, y + h);
+  // Handle immediate page activation on pointerdown or click without jumping the view
+  const handleActivatePage = useCallback((targetPageId: string) => {
+    if (targetPageId === focusedPageIdRef.current) return;
 
-      return { id: p.id, x, y };
-    });
+    // 1. Immediately flush outgoing page drawing data to cache & storage
+    const outgoingPageId = focusedPageIdRef.current;
+    if (outgoingPageId) {
+      persistDrawing(outgoingPageId, notebookEngine.getDrawingData());
+    }
 
-    return { positions, totalWidth, totalHeight };
-  }, [currentSectionPages, paperDimensions, viewport.scale, scrollDirection]);
+    // 2. Switch the ownership ref before loading the incoming page so any
+    // synchronous engine callbacks triggered by setDrawingData() are attributed
+    // to the correct page ID.
+    focusedPageIdRef.current = targetPageId;
+    setFocusedPageId(targetPageId);
 
-  // Keep active page centered on layout change
+    // The previous page's FloatingTextEditor is about to unmount. Its TipTap
+    // instance must not remain as the toolbar target while the new page mounts.
+    // The next focused editor registers itself through its existing onFocus path.
+    setActiveEditor(null);
+
+    // 3. Load incoming page data synchronously into notebookEngine.
+    const targetPage = notebookPages.find(item => item.id === targetPageId);
+    const incomingData = sectionDataCache[targetPageId] || {
+      ...createEmptyDrawingData(),
+      properties: resolvePageProperties(notebook, targetPage),
+    };
+    notebookEngine.setDrawingData(incomingData, targetPageId);
+    setTextObjects([...notebookEngine.texts.getTexts()]);
+
+    // 4. Switch focusedPageId & activePageId
+    setFocusedPageId(targetPageId);
+    setActivePage(targetPageId);
+  }, [focusedPageId, workspace, notebook, notebookEngine, notebookPages, sectionDataCache, setActivePage]);
+
+  handleActivatePageRef.current = handleActivatePage;
+
+  // Real-time visible page detection on vertical scroll (Passive Observational Update)
   useEffect(() => {
-    const pos = layoutConfig.positions.find(p => p.id === activePageId);
-    if (!pos || !containerRef.current || containerSize.width === 0 || containerSize.height === 0) return;
-    
-    // The inner container (pages) is centered within the scroll container via flexbox.
-    const innerWidth = layoutConfig.totalWidth;
-    const innerHeight = layoutConfig.totalHeight;
-    const containerW = containerSize.width;
-    const containerH = containerSize.height;
-    
-    // The flexbox wrapper size is totalWidth + 80, totalHeight + 120
-    const wrapperW = Math.max(containerW, innerWidth + 80);
-    const wrapperH = Math.max(containerH, innerHeight + 120);
-    
-    // Calculate the active page's center relative to the inner container's top-left
-    const pageCenterX = pos.x + (paperDimensions.width * viewport.scale) / 2;
-    const pageCenterY = pos.y + (paperDimensions.height * viewport.scale) / 2;
-    
-    // Calculate the top-left offset of the inner container within the wrapper
-    const offsetX = (wrapperW - innerWidth) / 2;
-    const offsetY = (wrapperH - innerHeight) / 2;
-    
-    // Calculate the target scroll positions to center the active page
-    const targetScrollLeft = (offsetX + pageCenterX) - containerW / 2;
-    const targetScrollTop = (offsetY + pageCenterY) - containerH / 2;
-    
-    containerRef.current.scrollTo({
-      left: targetScrollLeft,
-      top: targetScrollTop,
-      behavior: 'instant'
-    });
-  }, [layoutConfig, activePageId, containerSize.width, containerSize.height, paperDimensions, viewport.scale]);
+    const container = containerRef.current;
+    if (!container) return;
+
+    let scrollRafId: number | null = null;
+
+    const onScroll = () => {
+      if (isNavigatingRef.current || pageGeometryTransitionRef.current) return;
+      if (scrollRafId !== null) return;
+
+      scrollRafId = requestAnimationFrame(() => {
+        scrollRafId = null;
+        if (!container || isNavigatingRef.current || pageGeometryTransitionRef.current) return;
+
+        const containerRect = container.getBoundingClientRect();
+        const viewportCenterY = containerRect.top + containerRect.height / 2;
+
+        let dominantPage = null;
+        let minDistance = Infinity;
+
+        for (let i = 0; i < currentSectionPages.length; i++) {
+          const p = currentSectionPages[i];
+          const pageElem = document.getElementById(`page-${p.id}`);
+          if (pageElem) {
+            const pageRect = pageElem.getBoundingClientRect();
+            if (pageRect.top <= viewportCenterY && pageRect.bottom >= viewportCenterY) {
+              dominantPage = p;
+              break;
+            }
+            const pageCenterY = (pageRect.top + pageRect.bottom) / 2;
+            const dist = Math.abs(pageCenterY - viewportCenterY);
+            if (dist < minDistance) {
+              minDistance = dist;
+              dominantPage = p;
+            }
+          }
+        }
+
+        if (isNavigatingRef.current) return;
+
+        if (dominantPage && dominantPage.id !== currentActivePageIdRef.current) {
+          if (dominantPage.type === 'pdf') {
+            // Never allow passive scroll over a PDF preview in NotebookRenderer to hijack activePageId!
+            return;
+          }
+          currentActivePageIdRef.current = dominantPage.id;
+          // Suppresses the scroll-to-page layout effect below, which is only meant to react
+          // to sidebar/navigator navigation, not to the user's own scrolling.
+          lastNavigatedPageIdRef.current = dominantPage.id;
+          setActivePage(dominantPage.id);
+
+          // Focus has to follow. `focusedPageId` decides which page owns the live engine
+          // canvas and the interactive FloatingTextEditor nodes; every other page renders a
+          // `pointer-events-none` StaticTextPreview over a `pointer-events-none` canvas, so
+          // it has no interactive text DOM at all. This observer used to update only
+          // `activePageId` — the page indicator — and leave focus behind on whichever page
+          // was last *clicked*, which made text (and drawing) inert on the page actually on
+          // screen until a throwaway click re-activated it. The two values are no longer
+          // independent: the dominant page is the single source of truth and focus is derived
+          // from it.
+          // it has no interactive text DOM at all.
+          if (panGestureActiveRef.current) {
+            // Deferred rather than dropped: transferring focus mid-pan would unmount the
+            // engine under the live gesture. Applied by endGesture in the pan effect.
+            pendingFocusPageIdRef.current = dominantPage.id;
+          } else {
+            handleActivatePageRef.current(dominantPage.id);
+          }
+        }
+      });
+    };
+
+    container.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', onScroll);
+      if (scrollRafId !== null) {
+        cancelAnimationFrame(scrollRafId);
+      }
+    };
+  }, [currentSectionPages, setActivePage]);
+
+  // Scroll to active page when activePageId changes from sidebar/navigator clicks
+  useLayoutEffect(() => {
+    if (!activePageId || activePageId === lastNavigatedPageIdRef.current) return;
+
+    handleActivatePage(activePageId);
+
+    const scrollToTarget = () => {
+      const pageElem = document.getElementById(`page-${activePageId}`);
+      const container = containerRef.current;
+      if (!container) return false;
+
+      if (pageElem) {
+        const containerRect = container.getBoundingClientRect();
+        const pageRect = pageElem.getBoundingClientRect();
+        const relativeTop = pageRect.top - containerRect.top;
+        const pageOutsideHorizontalViewport = pageRect.left < containerRect.left || pageRect.right > containerRect.right;
+        const targetScrollLeft = pageOutsideHorizontalViewport
+          ? Math.max(0, container.scrollLeft + pageRect.left - containerRect.left - (container.clientWidth - pageRect.width) / 2)
+          : container.scrollLeft;
+        const targetScrollTop = container.scrollTop + relativeTop - 24;
+
+        isNavigatingRef.current = true;
+        container.scrollTo({ left: targetScrollLeft, top: Math.max(0, targetScrollTop), behavior: 'instant' });
+        lastNavigatedPageIdRef.current = activePageId;
+        setTimeout(() => {
+          isNavigatingRef.current = false;
+        }, 150);
+        return true;
+      } else {
+        const pos = layoutConfig.positions.find(p => p.id === activePageId);
+        if (pos && container) {
+          const targetScrollTop = Math.max(0, pos.y * viewport.scale - 24);
+          const targetScrollLeft = spreadMode
+            ? Math.max(0, pos.x * viewport.scale - (container.clientWidth - pos.width * viewport.scale) / 2)
+            : container.scrollLeft;
+          isNavigatingRef.current = true;
+          container.scrollTo({ left: targetScrollLeft, top: targetScrollTop, behavior: 'instant' });
+          lastNavigatedPageIdRef.current = activePageId;
+          setTimeout(() => {
+            isNavigatingRef.current = false;
+          }, 150);
+          return true;
+        }
+      }
+      return false;
+    };
+
+    if (!scrollToTarget()) {
+      const raf = requestAnimationFrame(() => {
+        scrollToTarget();
+      });
+      return () => cancelAnimationFrame(raf);
+    }
+  }, [activePageId, currentSectionPages, handleActivatePage, layoutConfig.positions, spreadMode, viewport.scale]);
 
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
@@ -399,10 +1153,515 @@ export function NotebookRenderer() {
     isTextEditing: false,
     canUndo: false,
     canRedo: false,
+    canConvertHandwriting: false,
   });
 
+  // Sensible position for pasted content (viewport center on focused/active page)
+  const getSensiblePastePosition = useCallback((contentWidth = 300, contentHeight = 100): { x: number; y: number } => {
+    const container = containerRef.current;
+    const targetPageId = focusedPageId || activePageId;
+    const pageElem = targetPageId ? document.getElementById(`page-${targetPageId}`) : null;
+    
+    if (!container || !pageElem) {
+      return {
+        x: Math.max(20, Math.round((paperDimensions.width - contentWidth) / 2)),
+        y: Math.max(20, Math.round(paperDimensions.height / 3))
+      };
+    }
+
+    const pageRect = pageElem.getBoundingClientRect();
+    const viewportRect = container.getBoundingClientRect();
+
+    const visibleTop = Math.max(pageRect.top, viewportRect.top);
+    const visibleBottom = Math.min(pageRect.bottom, viewportRect.bottom);
+    
+    let pageCenterY = paperDimensions.height / 3;
+    if (visibleBottom > visibleTop) {
+      const visibleCenterY = (visibleTop + visibleBottom) / 2;
+      pageCenterY = (visibleCenterY - pageRect.top) / (viewport.scale || 1);
+    }
+
+    const x = Math.max(20, Math.min(paperDimensions.width - contentWidth - 20, Math.round((paperDimensions.width - contentWidth) / 2)));
+    const y = Math.max(20, Math.min(paperDimensions.height - contentHeight - 20, Math.round(pageCenterY - contentHeight / 2)));
+
+    return { x, y };
+  }, [focusedPageId, activePageId, paperDimensions, viewport.scale]);
+
+  // Sticky notes use the existing text/selection/persistence pipeline. The
+  // toolbar and slash menu intentionally communicate through a narrow DOM
+  // event so neither surface needs to know about page storage internals.
+  useEffect(() => {
+    const createSticky = () => {
+      if (!notebookEngine.drawing.canEditActiveLayer()) return;
+      const targetPageId = focusedPageIdRef.current || activePageId;
+      if (!targetPageId) return;
+
+      const position = getSensiblePastePosition(STICKY_NOTE_WIDTH, STICKY_NOTE_MIN_HEIGHT);
+      const sticky = createStickyNote({
+        id: generateId('txt'),
+        x: position.x,
+        y: position.y,
+      });
+
+      const insert = () => {
+        if (!notebookEngine.texts.getTexts().some(text => text.id === sticky.id)) {
+          notebookEngine.texts.addText(sticky);
+        }
+        setTextObjects([...notebookEngine.texts.getTexts()]);
+        notebookEngine.selection.clearSelection();
+        notebookEngine.selection.selectAt(sticky.x + 10, sticky.y + 10, false);
+        notebookEngine.tools.setMode('text');
+        notebookEngine.drawing.redraw();
+      };
+
+      insert();
+      notebookEngine.history.pushExecuted({
+        description: 'Create sticky note',
+        execute: insert,
+        undo: () => {
+          notebookEngine.texts.removeText(sticky.id);
+          notebookEngine.selection.clearSelection();
+          setTextObjects([...notebookEngine.texts.getTexts()]);
+          notebookEngine.drawing.redraw();
+        },
+      });
+      persistDrawing(targetPageId, notebookEngine.getDrawingData());
+    };
+
+    const persistStickyChange = (event: Event) => {
+      const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+      if (!id || !notebookEngine.texts.getTexts().some(text => text.id === id)) return;
+      setTextObjects([...notebookEngine.texts.getTexts()]);
+      const targetPageId = focusedPageIdRef.current || activePageId;
+      if (targetPageId) persistDrawing(targetPageId, notebookEngine.getDrawingData());
+    };
+
+    document.addEventListener('panvas:create-sticky-note', createSticky);
+    document.addEventListener('panvas:sticky-note-changed', persistStickyChange);
+    return () => {
+      document.removeEventListener('panvas:create-sticky-note', createSticky);
+      document.removeEventListener('panvas:sticky-note-changed', persistStickyChange);
+    };
+  }, [activePageId, getSensiblePastePosition, notebookEngine, persistDrawing]);
+
+  // Import image (used by drag-and-drop and clipboard paste)
+  const importImage = useCallback(async (file: File, clientX?: number, clientY?: number) => {
+    if (!notebookEngine.drawing.canEditActiveLayer()) return;
+    const targetPageId = focusedPageId || activePageId;
+    if (!targetPageId) return;
+
+    const reader = new FileReader();
+    reader.onload = async (re) => {
+      const buffer = re.target?.result as ArrayBuffer;
+      if (!buffer) return;
+
+      try {
+        const { canvasRepository } = await import('@/repositories/CanvasRepository');
+        const userId = useAuthStore.getState().user?.id || null;
+        
+        const mimeType = file.type || 'image/png';
+        const fileName = file.name || `image_${Date.now()}.png`;
+        const imgData = await canvasRepository.storeImage(userId, targetPageId, fileName, mimeType, buffer);
+        
+        const imgUrl = URL.createObjectURL(new Blob([buffer], { type: mimeType }));
+        const img = new Image();
+        img.onload = () => {
+          const viewportManager = notebookEngine.viewport;
+          
+          let width = img.width;
+          let height = img.height;
+          const max = 450;
+          if (width > max || height > max) {
+            const ratio = Math.min(max / width, max / height);
+            width = Math.round(width * ratio);
+            height = Math.round(height * ratio);
+          }
+
+          let pageX = paperDimensions.width / 2;
+          let pageY = paperDimensions.height / 3;
+
+          const pageElem = document.getElementById(`page-${targetPageId}`);
+          if (clientX !== undefined && clientY !== undefined && pageElem) {
+            const rect = pageElem.getBoundingClientRect();
+            const screenX = clientX - rect.left;
+            const screenY = clientY - rect.top;
+            const pt = viewportManager.screenToPage(screenX, screenY);
+            pageX = pt.x;
+            pageY = pt.y;
+          } else {
+            const pos = getSensiblePastePosition(width, height);
+            pageX = pos.x + width / 2;
+            pageY = pos.y + height / 2;
+          }
+
+          const newImg = {
+            type: 'image' as const,
+            id: imgData.id,
+            x: Math.max(10, Math.min(paperDimensions.width - width - 10, pageX - width / 2)),
+            y: Math.max(10, Math.min(paperDimensions.height - height - 10, pageY - height / 2)),
+            width,
+            height,
+            fileId: imgData.id,
+            rotation: 0,
+            createdAt: Date.now()
+          };
+
+          notebookEngine.images.cacheImage(imgData.id, img, imgUrl);
+          if ((focusedPageIdRef.current || activePageId) !== targetPageId || !notebookEngine.drawing.canEditActiveLayer()) return;
+          notebookEngine.images.addImage(newImg);
+          notebookEngine.drawing.redraw();
+          
+          // Switch to select tool and highlight the inserted image
+          notebookEngine.tools.setMode('select');
+          notebookEngine.selection.clearSelection();
+          notebookEngine.selection.selectAt(newImg.x + 10, newImg.y + 10, false);
+
+          notebookEngine.history.pushExecuted({
+            description: 'Insert image',
+            execute: () => {
+              notebookEngine.images.addImage(newImg);
+              notebookEngine.drawing.redraw();
+            },
+            undo: () => {
+              notebookEngine.images.removeImage(imgData.id);
+              notebookEngine.drawing.redraw();
+            }
+          });
+
+          // Immediate persistence
+          if (workspace && notebook && targetPageId) {
+            persistDrawing(targetPageId, notebookEngine.getDrawingData());
+          }
+        };
+        img.onerror = (err) => {
+          console.error('Image onload failed:', err);
+        };
+        img.src = imgUrl;
+      } catch (err) {
+        console.error('Failed to store image:', err);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }, [focusedPageId, activePageId, notebookEngine, paperDimensions, getSensiblePastePosition, workspace, notebook]);
+
+  // Import rich text formatted content as editable TextObject (OneNote style paste)
+  const importRichText = useCallback((content: any, customX?: number, customY?: number, pastePresentation?: 'sticky-note' | 'mixed-paste') => {
+    if (!notebookEngine.drawing.canEditActiveLayer()) return;
+    if (!content || !content.content || content.content.length === 0) return;
+    const targetPageId = focusedPageId || activePageId;
+    if (!targetPageId) return;
+
+    // Check if content has codeBlock or large elements to size appropriately
+    const contentStr = JSON.stringify(content);
+    const hasCodeBlock = contentStr.includes('"type":"codeBlock"');
+    const hasHeading = contentStr.includes('"type":"heading"');
+    const boxWidth = hasCodeBlock ? 520 : (hasHeading ? 420 : 360);
+    const boxHeight = 120;
+
+    let { x, y } = getSensiblePastePosition(boxWidth, boxHeight);
+    if (customX !== undefined && customY !== undefined) {
+      x = customX;
+      y = customY;
+    }
+
+    const newText: TextObject = {
+      id: generateId('txt'),
+      type: 'text',
+      x,
+      y,
+      width: boxWidth,
+      content,
+      createdAt: Date.now(),
+      metadata: pastePresentation ? { pastePresentation } : undefined,
+    };
+
+    notebookEngine.texts.addText(newText);
+    setTextObjects([...notebookEngine.texts.getTexts()]);
+    notebookEngine.tools.setMode('select');
+    notebookEngine.selection.clearSelection();
+    notebookEngine.selection.selectAt(newText.x + 10, newText.y + 10, false);
+    notebookEngine.drawing.redraw();
+
+    notebookEngine.history.pushExecuted({
+      description: 'Paste formatted text',
+      execute: () => {
+        notebookEngine.texts.addText(newText);
+        setTextObjects([...notebookEngine.texts.getTexts()]);
+        notebookEngine.drawing.redraw();
+      },
+      undo: () => {
+        notebookEngine.texts.removeText(newText.id);
+        notebookEngine.selection.clearSelection();
+        setTextObjects([...notebookEngine.texts.getTexts()]);
+        notebookEngine.drawing.redraw();
+      }
+    });
+
+    if (workspace && notebook && targetPageId) {
+      persistDrawing(targetPageId, notebookEngine.getDrawingData());
+    }
+  }, [focusedPageId, activePageId, getSensiblePastePosition, notebookEngine, workspace, notebook]);
+
+  // Import text as editable TextObject (plain text fallback)
+  const importText = useCallback((rawText: string, customX?: number, customY?: number, pastePresentation?: 'sticky-note') => {
+    if (!notebookEngine.drawing.canEditActiveLayer()) return;
+    if (!rawText.trim()) return;
+    const targetPageId = focusedPageId || activePageId;
+    if (!targetPageId) return;
+
+    const lines = rawText.split(/\r?\n/);
+    const toolColor = toolState.color || '#20242a';
+
+    const content = {
+      type: 'doc',
+      content: lines.map(line => ({
+        type: 'paragraph',
+        content: line ? textContentWithSafeLinks(line).map(node => ({
+          ...node,
+          marks: [
+            ...(node.marks || []),
+            { type: 'textStyle', attrs: { color: toolColor } },
+          ],
+        })) : []
+      }))
+    };
+
+    let { x, y } = getSensiblePastePosition(320, Math.min(400, Math.max(80, lines.length * 24)));
+    if (customX !== undefined && customY !== undefined) {
+      x = customX;
+      y = customY;
+    }
+
+    const newText: TextObject = {
+      id: generateId('txt'),
+      type: 'text',
+      x,
+      y,
+      width: 320,
+      content,
+      createdAt: Date.now(),
+      metadata: pastePresentation ? { pastePresentation } : undefined,
+    };
+
+    notebookEngine.texts.addText(newText);
+    setTextObjects([...notebookEngine.texts.getTexts()]);
+    notebookEngine.tools.setMode('select');
+    notebookEngine.selection.clearSelection();
+    notebookEngine.selection.selectAt(newText.x + 10, newText.y + 10, false);
+    notebookEngine.drawing.redraw();
+
+    notebookEngine.history.pushExecuted({
+      description: 'Paste text',
+      execute: () => {
+        notebookEngine.texts.addText(newText);
+        setTextObjects([...notebookEngine.texts.getTexts()]);
+        notebookEngine.drawing.redraw();
+      },
+      undo: () => {
+        notebookEngine.texts.removeText(newText.id);
+        notebookEngine.selection.clearSelection();
+        setTextObjects([...notebookEngine.texts.getTexts()]);
+        notebookEngine.drawing.redraw();
+      }
+    });
+
+    if (workspace && notebook && targetPageId) {
+      persistDrawing(targetPageId, notebookEngine.getDrawingData());
+    }
+  }, [focusedPageId, activePageId, toolState.color, getSensiblePastePosition, notebookEngine, workspace, notebook]);
+
+  const handledPasteEvents = useRef(new WeakSet<Event>());
+
+  // Unified clipboard paste handler (strictly obeys live OS clipboard precedence)
+  const handlePasteFromClipboard = useCallback(async (e?: React.ClipboardEvent | ClipboardEvent) => {
+    // 1. If inside a native input / TipTap text editor, let it paste natively
+    const isTextEditing = (
+      document.activeElement instanceof HTMLInputElement || 
+      document.activeElement instanceof HTMLTextAreaElement ||
+      !!(document.activeElement as HTMLElement)?.isContentEditable
+    );
+    if (isTextEditing) return;
+
+    if (e) {
+      const nativeEvent = 'nativeEvent' in e ? e.nativeEvent : e;
+      if (handledPasteEvents.current.has(nativeEvent)) return;
+      handledPasteEvents.current.add(nativeEvent);
+    }
+    const pastePageId = focusedPageIdRef.current;
+    const stillOnPage = () => focusedPageIdRef.current === pastePageId;
+
+    // 2. Check ClipboardEvent items if provided (e.g. from onPaste or window paste event)
+    if (e && 'clipboardData' in e && e.clipboardData) {
+      // a. Image from OS clipboard (check both items and files)
+      let imageFile: File | null = null;
+      const items = Array.from(e.clipboardData.items || []);
+      const imageItem = items.find(item => item.type.startsWith('image/'));
+      if (imageItem) {
+        imageFile = imageItem.getAsFile();
+      }
+      if (!imageFile && e.clipboardData.files && e.clipboardData.files.length > 0) {
+        const file = Array.from(e.clipboardData.files).find(f => f.type.startsWith('image/'));
+        if (file) {
+          imageFile = file;
+        }
+      }
+      if (imageFile) {
+        e.preventDefault();
+        await importImage(imageFile);
+        return;
+      }
+
+      const textData = e.clipboardData.getData('text/plain');
+      const htmlData = e.clipboardData.getData('text/html');
+
+      // b. Explicit Panvas element JSON payload from live clipboard
+      if (textData && textData.trim().startsWith('{"type":"panvas/elements"')) {
+        try {
+          const parsed = JSON.parse(textData);
+          if (parsed?.type === 'panvas/elements') {
+            e.preventDefault();
+            const success = notebookEngine.selection.pasteElements(parsed);
+            if (success) {
+              setTextObjects([...notebookEngine.texts.getTexts()]);
+              return;
+            }
+          }
+        } catch {
+          // not valid JSON
+        }
+      }
+
+      // c. Formatted HTML from OS clipboard
+      if (htmlData && htmlData.trim().length > 0) {
+        e.preventDefault();
+        const json = htmlToTipTapJson(htmlData);
+        if (json && json.content && json.content.length > 0) {
+          importRichText(json, undefined, undefined, getPlainTextPastePresentation(json));
+          return;
+        }
+      }
+
+      // d. Plain text from OS clipboard
+      if (textData && textData.trim().length > 0) {
+        e.preventDefault();
+        const content = parsePlainTextClipboard(textData);
+        if (content) {
+          importRichText(content, undefined, undefined, getPlainTextPastePresentation(content));
+        } else {
+          importText(textData, undefined, undefined, 'sticky-note');
+        }
+        return;
+      }
+
+      if (notebookEngine.selection.pasteInternalClipboard()) {
+        e.preventDefault();
+        notebookEngine.input.notifyChange();
+      }
+      return;
+    }
+
+    // 3. Programmatic clipboard read (e.g. from context menu click)
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.read === 'function') {
+        try {
+          const clipboardItems = await navigator.clipboard.read();
+          if (!stillOnPage()) return;
+          for (const item of clipboardItems) {
+            const imageType = item.types.find(t => t.startsWith('image/'));
+            if (imageType) {
+              const blob = await item.getType(imageType);
+              if (!stillOnPage()) return;
+              const ext = imageType.split('/')[1] || 'png';
+              const file = new File([blob], `pasted_image_${Date.now()}.${ext}`, { type: imageType });
+              await importImage(file);
+              return;
+            }
+
+            if (item.types.includes('text/html')) {
+              const htmlBlob = await item.getType('text/html');
+              const htmlText = await htmlBlob.text();
+              if (!stillOnPage()) return;
+              if (htmlText && htmlText.trim().length > 0) {
+                const json = htmlToTipTapJson(htmlText);
+                if (json && json.content && json.content.length > 0) {
+                  importRichText(json, undefined, undefined, getPlainTextPastePresentation(json));
+                  return;
+                }
+              }
+            }
+          }
+        } catch {
+          // navigator.clipboard.read() might fail or be restricted
+        }
+      }
+
+      let text = '';
+      if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+        try {
+          text = await navigator.clipboard.readText();
+        } catch {
+          // fallback
+        }
+      }
+
+      if (!stillOnPage()) return;
+      if (text && text.trim().length > 0) {
+        if (text.trim().startsWith('{"type":"panvas/elements"')) {
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed?.type === 'panvas/elements') {
+              const success = notebookEngine.selection.pasteElements(parsed);
+              if (success) {
+                setTextObjects([...notebookEngine.texts.getTexts()]);
+                return;
+              }
+            }
+          } catch {
+            // not valid JSON
+          }
+        }
+        const content = parsePlainTextClipboard(text);
+        if (content) {
+          importRichText(content, undefined, undefined, getPlainTextPastePresentation(content));
+        } else {
+          importText(text, undefined, undefined, 'sticky-note');
+        }
+      } else if (notebookEngine.selection.pasteInternalClipboard()) {
+        notebookEngine.input.notifyChange();
+      }
+    } catch (err) {
+      console.error('Failed to paste from clipboard:', err);
+    }
+  }, [importImage, importRichText, importText, notebookEngine]);
+
+  const openHandwritingConversion = useCallback(() => {
+    const strokes = notebookEngine.selection.getSelectedStrokes();
+    if (strokes.length === 0) {
+      useUIStore.getState().showToast('Select handwriting strokes to convert them to text.', 'error');
+      return;
+    }
+    setHandwritingStrokes(strokes);
+    setIsHandwritingDialogOpen(true);
+  }, [notebookEngine]);
+
+  const confirmHandwritingConversion = useCallback((
+    lines: ReviewedHandwritingLine[],
+    preferences: HandwritingToolPreferences,
+    providerId: string,
+  ) => {
+    if (!notebookEngine.convertSelectedHandwritingLinesToText(lines, preferences, providerId)) {
+      useUIStore.getState().showToast('The selected handwriting is no longer available for conversion.', 'error');
+      return;
+    }
+    const targetPageId = focusedPageIdRef.current || activePageId;
+    setTextObjects([...notebookEngine.texts.getTexts()]);
+    if (targetPageId) persistDrawing(targetPageId, notebookEngine.getDrawingData());
+    setIsHandwritingDialogOpen(false);
+    setHandwritingStrokes([]);
+  }, [activePageId, notebookEngine, persistDrawing]);
+
   // Centralized command dispatcher shared between context menu & keyboard
-  const executeCommand = async (command: 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'duplicate' | 'delete' | 'selectAll') => {
+  const executeCommand = useCallback(async (command: 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'duplicate' | 'delete' | 'selectAll' | 'bringToFront' | 'bringForward' | 'sendBackward' | 'sendToBack' | 'convertHandwriting') => {
     const isTextEditing = (
       document.activeElement instanceof HTMLInputElement || 
       document.activeElement instanceof HTMLTextAreaElement ||
@@ -411,14 +1670,18 @@ export function NotebookRenderer() {
 
     switch (command) {
       case 'undo':
-        if (notebookEngine.history.canUndo()) {
+        if (isTextEditing) {
+          document.execCommand('undo');
+        } else if (notebookEngine.history.canUndo()) {
           notebookEngine.history.undo();
           setTextObjects([...notebookEngine.texts.getTexts()]);
           notebookEngine.drawing.redraw();
         }
         break;
       case 'redo':
-        if (notebookEngine.history.canRedo()) {
+        if (isTextEditing) {
+          document.execCommand('redo');
+        } else if (notebookEngine.history.canRedo()) {
           notebookEngine.history.redo();
           setTextObjects([...notebookEngine.texts.getTexts()]);
           notebookEngine.drawing.redraw();
@@ -443,13 +1706,32 @@ export function NotebookRenderer() {
         if (isTextEditing) {
           document.execCommand('paste');
         } else {
-          await notebookEngine.selection.pasteSelection();
-          setTextObjects([...notebookEngine.texts.getTexts()]);
+          await handlePasteFromClipboard();
         }
         break;
       case 'duplicate':
         if (!isTextEditing) {
           await notebookEngine.selection.duplicateSelection();
+          setTextObjects([...notebookEngine.texts.getTexts()]);
+        }
+        break;
+      case 'bringToFront':
+        if (!isTextEditing && notebookEngine.bringSelectionToFront()) {
+          setTextObjects([...notebookEngine.texts.getTexts()]);
+        }
+        break;
+      case 'bringForward':
+        if (!isTextEditing && notebookEngine.bringSelectionForward()) {
+          setTextObjects([...notebookEngine.texts.getTexts()]);
+        }
+        break;
+      case 'sendBackward':
+        if (!isTextEditing && notebookEngine.sendSelectionBackward()) {
+          setTextObjects([...notebookEngine.texts.getTexts()]);
+        }
+        break;
+      case 'sendToBack':
+        if (!isTextEditing && notebookEngine.sendSelectionToBack()) {
           setTextObjects([...notebookEngine.texts.getTexts()]);
         }
         break;
@@ -466,59 +1748,184 @@ export function NotebookRenderer() {
           notebookEngine.selection.selectAll();
         }
         break;
+      case 'convertHandwriting':
+        if (!isTextEditing) openHandwritingConversion();
+        break;
     }
-  };
+  }, [notebookEngine, handlePasteFromClipboard, openHandwritingConversion]);
 
-  // Global keyboard shortcuts
+  // Global Keyboard Shortcuts (Consolidated)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isTextEditing = (
+        e.target instanceof HTMLInputElement || 
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target as HTMLElement)?.isContentEditable ||
         document.activeElement instanceof HTMLInputElement || 
         document.activeElement instanceof HTMLTextAreaElement ||
         !!(document.activeElement as HTMLElement)?.isContentEditable
       );
 
+      if (e.key === 'F11') {
+        e.preventDefault();
+        setNotebookModeLevel(notebookModeLevel === 2 ? 0 : 2);
+        return;
+      }
+      
+      if (e.key === 'Escape' && notebookModeLevel > 0) {
+        setNotebookModeLevel(0);
+      }
+
       const isMod = e.ctrlKey || e.metaKey;
 
-      if (isMod && (e.key === 'z' || e.key === 'Z')) {
-        if (!isTextEditing) {
+      if (workspaceViewMode !== 'edit') {
+        if (e.key === 'Escape' && workspaceViewMode === 'present') setWorkspaceViewMode('edit');
+        const isReadingZoom = isMod && (e.key === '+' || e.key === '=' || e.key === '-' || e.code === 'Equal' || e.code === 'Minus' || e.code === 'NumpadAdd' || e.code === 'NumpadSubtract');
+        if (!isReadingZoom) return;
+      }
+
+      if (isMod) {
+        const isZoomIn = e.key === '+' || e.key === '=' || e.code === 'Equal' || e.code === 'NumpadAdd';
+        const isZoomOut = e.key === '-' || e.code === 'Minus' || e.code === 'NumpadSubtract';
+
+        if (isZoomIn || isZoomOut) {
           e.preventDefault();
-          if (e.shiftKey) {
-            executeCommand('redo');
-          } else {
-            executeCommand('undo');
+          handlePanelZoom(isZoomIn ? 1.1 : 0.9);
+          return;
+        }
+
+        if (e.code === 'BracketRight' || e.code === 'BracketLeft') {
+          if (!isTextEditing) {
+            e.preventDefault();
+            if (e.code === 'BracketRight') {
+              executeCommand(e.shiftKey ? 'bringToFront' : 'bringForward');
+            } else {
+              executeCommand(e.shiftKey ? 'sendToBack' : 'sendBackward');
+            }
           }
+          return;
         }
-      } else if (isMod && (e.key === 'y' || e.key === 'Y')) {
-        if (!isTextEditing) {
-          e.preventDefault();
-          executeCommand('redo');
+
+        if (e.key.toLowerCase() === 'z') {
+          if (!isTextEditing) {
+            e.preventDefault();
+            if (e.shiftKey) {
+              executeCommand('redo');
+            } else {
+              executeCommand('undo');
+            }
+          }
+          return;
         }
-      } else if (isMod && (e.key === 'd' || e.key === 'D')) {
-        if (!isTextEditing) {
-          e.preventDefault();
-          executeCommand('duplicate');
+
+        if (e.key.toLowerCase() === 'y') {
+          if (!isTextEditing) {
+            e.preventDefault();
+            executeCommand('redo');
+          }
+          return;
         }
-      } else if (isMod && (e.key === 'a' || e.key === 'A')) {
-        if (!isTextEditing) {
-          e.preventDefault();
-          executeCommand('selectAll');
+
+        if (e.key.toLowerCase() === 'c') {
+          if (!isTextEditing) {
+            e.preventDefault();
+            executeCommand('copy');
+          }
+          return;
         }
-      } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (!isTextEditing && notebookEngine.selection.getSelectedElements().length > 0) {
-          e.preventDefault();
-          executeCommand('delete');
+
+        if (e.key.toLowerCase() === 'x') {
+          if (!isTextEditing) {
+            e.preventDefault();
+            executeCommand('cut');
+          }
+          return;
         }
+
+        if (e.key.toLowerCase() === 'v') {
+          if (!isTextEditing) {
+            // Allow native paste event to fire so onWindowPaste receives the full ClipboardEvent with image File items
+          }
+          return;
+        }
+
+        if (e.key.toLowerCase() === 'd') {
+          if (!isTextEditing) {
+            e.preventDefault();
+            executeCommand('duplicate');
+          }
+          return;
+        }
+
+        if (e.key.toLowerCase() === 'a') {
+          if (!isTextEditing) {
+            e.preventDefault();
+            executeCommand('selectAll');
+          }
+          return;
+        }
+
+        return;
+      }
+
+      if (isTextEditing) return;
+
+      const key = e.key.toLowerCase();
+      
+      switch (key) {
+        case 'v': notebookEngine.tools.setMode('select'); break;
+        case 't': notebookEngine.tools.setMode('text'); break;
+        case 'p': notebookEngine.tools.setDrawingTool('pen'); break;
+        case 'n': notebookEngine.tools.setDrawingTool('pencil'); break;
+        case 'h': notebookEngine.tools.setDrawingTool('highlighter'); break;
+        case 'm': notebookEngine.tools.setDrawingTool('marker'); break;
+        case 'e': notebookEngine.tools.setMode('erase'); break;
+        case 'r': notebookEngine.tools.setShapeTool('rectangle'); break;
+        case 'o': notebookEngine.tools.setShapeTool('ellipse'); break;
+        case 'a': notebookEngine.tools.setShapeTool('arrow'); break;
+        case 'l': notebookEngine.tools.setShapeTool('line'); break;
+        case 'delete':
+        case 'backspace':
+          if (notebookEngine.selection.getSelectedElements().length > 0) {
+            e.preventDefault();
+            executeCommand('delete');
+          }
+          break;
+        case 'escape':
+          notebookEngine.selection.clearSelection();
+          break;
       }
     };
-
+    
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [notebookEngine]);
+  }, [notebookEngine, notebookModeLevel, setNotebookModeLevel, handlePanelZoom, executeCommand, setWorkspaceViewMode, workspaceViewMode]);
+
+  // Window paste event listener
+  useEffect(() => {
+    if (workspaceViewMode !== 'edit') return;
+    const onWindowPaste = (e: ClipboardEvent) => {
+      const isTextEditing = (
+        e.target instanceof HTMLInputElement || 
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target as HTMLElement)?.isContentEditable ||
+        document.activeElement instanceof HTMLInputElement || 
+        document.activeElement instanceof HTMLTextAreaElement ||
+        !!(document.activeElement as HTMLElement)?.isContentEditable
+      );
+      if (isTextEditing) return;
+
+      handlePasteFromClipboard(e);
+    };
+
+    window.addEventListener('paste', onWindowPaste);
+    return () => window.removeEventListener('paste', onWindowPaste);
+  }, [handlePasteFromClipboard, workspaceViewMode]);
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     const hasSelection = notebookEngine.selection.getSelectedElements().length > 0;
+    const canConvertHandwriting = notebookEngine.selection.hasSelectedStrokes();
     const isTextEditing = (
       document.activeElement instanceof HTMLInputElement || 
       document.activeElement instanceof HTMLTextAreaElement ||
@@ -533,32 +1940,12 @@ export function NotebookRenderer() {
       isTextEditing,
       canUndo: notebookEngine.history.canUndo(),
       canRedo: notebookEngine.history.canRedo(),
+      canConvertHandwriting,
     });
   };
 
   const handlePaste = async (e: React.ClipboardEvent) => {
-    // Only handle if not in a text editor
-    if (
-      e.target instanceof HTMLInputElement || 
-      e.target instanceof HTMLTextAreaElement ||
-      (e.target as HTMLElement).isContentEditable
-    ) {
-      return;
-    }
-
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    for (const item of Array.from(items)) {
-      if (item.type.startsWith('image/')) {
-        const file = item.getAsFile();
-        if (file) {
-          e.preventDefault();
-          await importImage(file);
-          break;
-        }
-      }
-    }
+    await handlePasteFromClipboard(e);
   };
 
   const handleDrop = async (e: React.DragEvent) => {
@@ -581,147 +1968,203 @@ export function NotebookRenderer() {
     UniversalDropRouter.handleDragOver(e, ['IMAGE']);
   };
 
-  const importImage = async (file: File, clientX?: number, clientY?: number) => {
-    console.log('[DEBUG] Drag&Drop: importImage called with file:', file.name, file.type, file.size, 'at', clientX, clientY);
-    const canvasFileId = activePageId;
-    if (!canvasFileId) {
-      console.log('[DEBUG] Drag&Drop: no activePageId');
-      return;
+  const handleLayersChange = useCallback(() => {
+    setLayerRevision(value => value + 1);
+    setTextObjects([...notebookEngine.texts.getTexts()]);
+    const currentPageId = focusedPageIdRef.current || page?.id;
+    if (!currentPageId) return;
+    const data = notebookEngine.getDrawingData();
+    setSectionDataCache(previous => ({ ...previous, [currentPageId]: data }));
+    persistDrawing(currentPageId, data);
+  }, [notebookEngine, page?.id, persistDrawing]);
+
+  const handlePageAudioPersisted = useCallback((pageId: string, data: DrawingData) => {
+    setSectionDataCache(previous => ({ ...previous, [pageId]: data }));
+    if (focusedPageIdRef.current === pageId) {
+      notebookEngine.audio.setAll(data.audioNotes);
+      const persistedVoice = (data.objects ?? []).filter(object => object.type === 'text' && object.metadata?.isVoiceNote === true) as TextObject[];
+      const ordinary = notebookEngine.texts.getTexts().filter(object => object.metadata?.isVoiceNote !== true);
+      notebookEngine.texts.setTexts([...ordinary, ...persistedVoice]);
+      setTextObjects([...ordinary, ...persistedVoice]);
     }
-    console.log('[DEBUG] Drag&Drop: activePageId is valid:', canvasFileId);
+  }, [notebookEngine]);
 
-    const reader = new FileReader();
-    reader.onload = async (re) => {
-      const buffer = re.target?.result as ArrayBuffer;
-      if (!buffer) return;
-      console.log('[DEBUG] Drag&Drop: FileReader loaded buffer');
+  const handleDeleteVoiceNote = useCallback(async (note: AudioNote) => {
+    if (!workspace?.id || !notebook?.id || !focusedPageIdRef.current) return;
+    const owner = { workspaceId: workspace.id, notebookId: notebook.id, pageId: focusedPageIdRef.current };
+    try {
+      const data = await pageAudioPersistence.removeVoiceNote(owner, note.id);
+      handlePageAudioPersisted(owner.pageId, data);
+      await canvasRepository.deleteAudio(note.fileId).catch(() => useUIStore.getState().showToast('Voice note was removed, but its binary cleanup failed.', 'error'));
+    } catch (error) {
+      useUIStore.getState().showToast(error instanceof Error ? error.message : 'Voice note could not be deleted.', 'error');
+    }
+  }, [handlePageAudioPersisted, notebook?.id, workspace?.id]);
 
-      try {
-        console.log('[DEBUG] Drag&Drop: canvasRepository.storeImage called');
-        const { canvasRepository } = await import('@/repositories/CanvasRepository');
-        const userId = useAuthStore.getState().user?.id || null;
-        
-        const mimeType = file.type || 'image/png';
-        const imgData = await canvasRepository.storeImage(userId, canvasFileId, file.name, mimeType, buffer);
-        console.log('[DEBUG] Drag&Drop: canvasRepository.storeImage SUCCESS, imgData:', imgData);
-        
-        const imgUrl = URL.createObjectURL(new Blob([buffer], { type: mimeType }));
-        const img = new Image();
-        img.onload = () => {
-          console.log('[DEBUG] Drag&Drop: Image onload triggered, calc width/height');
-          const viewportManager = notebookEngine.viewport;
-          
-          let pageX = paperDimensions.width / 2;
-          let pageY = paperDimensions.height / 3;
+  const handleRenameVoiceNote = useCallback(async (note: AudioNote, title: string) => {
+    if (!workspace?.id || !notebook?.id || !focusedPageIdRef.current) return;
+    const owner = { workspaceId: workspace.id, notebookId: notebook.id, pageId: focusedPageIdRef.current };
+    try {
+      const data = await pageAudioPersistence.rename(owner, note.id, title);
+      handlePageAudioPersisted(owner.pageId, data);
+    } catch (error) {
+      useUIStore.getState().showToast(error instanceof Error ? error.message : 'Voice note could not be renamed.', 'error');
+    }
+  }, [handlePageAudioPersisted, notebook?.id, workspace?.id]);
 
-          const canvas = canvasRef.current;
-          if (clientX !== undefined && clientY !== undefined && canvas) {
-            const rect = canvas.getBoundingClientRect();
-            const screenX = clientX - rect.left;
-            const screenY = clientY - rect.top;
-            const pt = viewportManager.screenToPage(screenX, screenY);
-            pageX = pt.x;
-            pageY = pt.y;
-          }
+  const handleInsertPage = useCallback(async () => {
+    const sectionId = page?.sectionId ?? activeNotebookSectionId;
+    if (!sectionId) return;
 
-          let width = img.width;
-          let height = img.height;
-          const max = 450;
-          if (width > max || height > max) {
-            const ratio = Math.min(max / width, max / height);
-            width = Math.round(width * ratio);
-            height = Math.round(height * ratio);
-          }
+    try {
+      // The repository creates new pages at the end. Reinsert the new id after
+      // the current page so the quick action has predictable notebook semantics.
+      const existingIds = currentSectionPages.map(item => item.id);
+      const created = await createNotebookPage(sectionId, 'New page');
+      const activeIndex = existingIds.indexOf(activePageId ?? '');
+      const insertAt = activeIndex >= 0 ? activeIndex + 1 : existingIds.length;
+      existingIds.splice(insertAt, 0, created.id);
+      await reorderPages(existingIds);
+      setActivePage(created.id);
+    } catch (error) {
+      console.error('[NotebookRenderer] quick page insertion failed:', error);
+      useUIStore.getState().showToast('Could not insert a new page.', 'error');
+    }
+  }, [activePageId, activeNotebookSectionId, createNotebookPage, currentSectionPages, page?.sectionId, reorderPages, setActivePage]);
 
-          const newImg = {
-            type: 'image' as const,
-            id: imgData.id,
-            x: Math.max(10, Math.min(paperDimensions.width - width - 10, pageX - width / 2)),
-            y: Math.max(10, Math.min(paperDimensions.height - height - 10, pageY - height / 2)),
-            width,
-            height,
-            fileId: imgData.id,
-            rotation: 0,
-            createdAt: Date.now()
-          };
-          console.log('[DEBUG] Drag&Drop: generated ImageObject:', newImg);
+  const handleExportPagePdf = useCallback(async () => {
+    if (!page || !notebook) return;
+    setIsExportingPdf(true);
+    try {
+      await exportPageToPdf(page.id, { drawingOverrides: { [page.id]: notebookEngine.getDrawingData() } });
+    } finally {
+      setIsExportingPdf(false);
+    }
+  }, [notebook, notebookEngine, page]);
 
-          notebookEngine.images.cacheImage(imgData.id, img);
-          notebookEngine.images.addImage(newImg);
-          notebookEngine.drawing.redraw();
-          console.log('[DEBUG] Drag&Drop: redraw called');
-          
-          // Switch to select tool and highlight the inserted image
-          notebookEngine.tools.setMode('select');
-          notebookEngine.selection.clearSelection();
-          notebookEngine.selection.selectAt(newImg.x + 10, newImg.y + 10, false);
+  const handleExportNotebookPdf = useCallback(async () => {
+    if (!notebook) return;
+    setIsExportingPdf(true);
+    try {
+      const activeId = focusedPageIdRef.current;
+      const overrides = activeId ? { [activeId]: notebookEngine.getDrawingData() } : undefined;
+      await exportNotebookToPdf(notebook.id, { drawingOverrides: overrides });
+    } finally {
+      setIsExportingPdf(false);
+    }
+  }, [notebook, notebookEngine]);
 
-          notebookEngine.history.pushExecuted({
-            description: 'Insert image',
-            execute: () => {
-              notebookEngine.images.addImage(newImg);
-              notebookEngine.drawing.redraw();
-            },
-            undo: () => {
-              notebookEngine.images.removeImage(imgData.id);
-              notebookEngine.drawing.redraw();
-            }
-          });
+  const handlePrintPage = useCallback(async () => {
+    if (!page) return;
+    setIsExportingPdf(true);
+    try {
+      await printPage(page.id, { drawingOverrides: { [page.id]: notebookEngine.getDrawingData() } });
+    } finally {
+      setIsExportingPdf(false);
+    }
+  }, [notebookEngine, page]);
 
-          // Immediate persistence
-          console.log('[DEBUG] Drag&Drop: persistence called');
-          if (workspace && notebook && page) {
-            notebookRepository.saveDrawingData(workspace.id, notebook.id, page.id, notebookEngine.getDrawingData());
-          }
+  const handlePrintNotebook = useCallback(async () => {
+    if (!notebook) return;
+    setIsExportingPdf(true);
+    try {
+      const activeId = focusedPageIdRef.current;
+      const overrides = activeId ? { [activeId]: notebookEngine.getDrawingData() } : undefined;
+      await printNotebook(notebook.id, { drawingOverrides: overrides });
+    } finally {
+      setIsExportingPdf(false);
+    }
+  }, [notebook, notebookEngine]);
 
-          URL.revokeObjectURL(imgUrl);
-        };
-        img.onerror = (err) => {
-          console.error('[DEBUG] Drag&Drop: Image onload FAILED', err);
-        };
-        img.src = imgUrl;
-      } catch (err) {
-        console.error('[DEBUG] Drag&Drop: failed to store image:', err);
-      }
-    };
-    reader.onerror = (err) => {
-       console.error('[DEBUG] Drag&Drop: FileReader FAILED', err);
-    };
-    reader.readAsArrayBuffer(file);
-  };
+  if (!activePageId) return null;
+
+  // The floating header has three independent control clusters. When the page
+  // properties drawer reserves its width, keeping the utilities beside the
+  // workspace controls can leave less than the toolbar's compact footprint.
+  // Stack those two secondary clusters instead of letting the toolbar overflow
+  // into them; every control remains available and the paper viewport is not
+  // globally scaled or remounted.
+  // On phones the properties panel is a viewport-level bottom sheet that
+  // overlays the paper, so it never reserves header width. Mobile detection
+  // is viewport-based (matching the max-[599px] styles) rather than pane
+  // width, so narrow desktop split panes keep the desktop/tablet contract.
+  const reservedPropertiesWidth = isPropertiesPanelOpen && workspaceViewMode !== 'present' && !isMobileViewport ? 288 : 0;
+  const isConstrainedHeader = containerSize.width > 0 && containerSize.width - reservedPropertiesWidth < 560;
 
   return (
-    <div 
-      className="relative flex h-full w-full overflow-hidden bg-panvas-bg-primary"
-      onPaste={handlePaste}
-      onDrop={handleDrop}
-      onDragOver={handleDragOver}
-      onDragEnter={handleDragOver}
+    <div
+      className="panvas-notebook-workspace relative flex h-full w-full overflow-hidden bg-panvas-bg-primary"
+      onPaste={workspaceViewMode === 'edit' ? handlePaste : undefined}
+      onDrop={workspaceViewMode === 'edit' ? handleDrop : undefined}
+      onDragOver={workspaceViewMode === 'edit' ? handleDragOver : undefined}
+      onDragEnter={workspaceViewMode === 'edit' ? handleDragOver : undefined}
       tabIndex={0}
     >
       {/* Responsive Floating Header (Fixed, outside scroll viewport) */}
-      <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-start z-50 pointer-events-none gap-4">
-        <div className="pointer-events-auto flex-shrink flex items-start min-w-0 max-w-[30%]">
-          <NotebookNavigator />
+      {/* Reserve space matching the Page Properties <aside> (w-72) whenever the
+          panel is open. Below the xl breakpoint the panel renders as an overlay
+          drawer; reserving space only at xl let that drawer cover the floating
+          toolbar's right side and the workspace controls on smaller windows. */}
+      {/* The three wrappers below are layout only and must stay `pointer-events-none`: they
+          are full-height flex cells spanning the width of the header, so making them
+          interactive turned the whole top band into an invisible click sink over the top of
+          page 1 and over anything scrolled beneath it. Each child re-enables pointer events
+          on its own visible chrome. */}
+      {workspaceViewMode !== 'present' && notebookModeLevel === 2 && (
+        isToolbarCollapsed ? (
+          <button
+            type="button"
+            onClick={() => setToolbarCollapsed(false)}
+            className="panvas-floating-surface panvas-icon-control absolute left-1/2 top-3 z-40 h-8 w-8 -translate-x-1/2 rounded-full pointer-events-auto focus-ring"
+            title="Show fullscreen tools and exit control"
+            aria-label="Show fullscreen tools and exit control"
+          >
+            <PanelTopOpen size={17} />
+          </button>
+        ) : (
+          <div ref={fullscreenToolbarHostRef} className="panvas-fullscreen-toolbar-host absolute left-3 right-3 top-3 z-40 flex min-w-0 justify-center overflow-visible pointer-events-none">
+            <div className="panvas-layer-toolbar panvas-floating-surface flex w-fit max-w-full items-center gap-1 overflow-visible rounded-2xl p-1 pointer-events-auto" role="toolbar" aria-label="Fullscreen notebook tools">
+              {workspaceViewMode === 'edit' && <NotebookFloatingToolbar editor={activeEditor} engine={notebookEngine} workspaceId={workspace?.id} hasSelectedStrokes={notebookEngine.selection.hasSelectedStrokes()} onConvertHandwriting={openHandwritingConversion} embedded hideCollapseButton fullscreenToolOnly availableWidth={fullscreenToolbarHostWidth === null ? null : Math.max(0, fullscreenToolbarHostWidth - 104)} />}
+              <button type="button" onClick={() => setToolbarCollapsed(true)} className="panvas-icon-control shrink-0 focus-ring" title="Hide fullscreen tools" aria-label="Hide fullscreen tools">
+                <PanelTopOpen size={16} className="rotate-180" />
+              </button>
+              <NotebookWorkspaceControls focusOnly embedded />
+            </div>
+          </div>
+        )
+      )}
+      {workspaceViewMode !== 'present' && notebookModeLevel !== 2 && <div className={`panvas-notebook-chrome panvas-layer-toolbar absolute top-0 left-0 right-0 p-4 flex justify-between items-start pointer-events-none gap-4 ${isPropertiesPanelOpen ? 'right-72 max-[599px]:right-0' : ''}`}>
+        {/* Below ~500px of notebook width the navigator's minimum footprint
+            (~116px even fully truncated) starves the toolbar cell below the
+            minimal tier and the bar overlaps the workspace controls. Tool
+            access wins: the navigator is hidden and navigation stays available
+            through the library toggle in the workspace controls. */}
+        {!isConstrainedHeader && (containerSize.width === 0 || containerSize.width >= 500) && (
+          <div className="pointer-events-auto flex flex-shrink items-start gap-1 min-w-0 max-w-[30%]">
+            <NotebookNavigator />
+          </div>
+        )}
+
+        <div className="pointer-events-none flex-1 flex justify-center items-start min-w-0">
+          {workspaceViewMode === 'edit' && <NotebookFloatingToolbar editor={activeEditor} engine={notebookEngine} workspaceId={workspace?.id} hasSelectedStrokes={notebookEngine.selection.hasSelectedStrokes()} onConvertHandwriting={openHandwritingConversion} />}
         </div>
 
-        <div className="pointer-events-auto flex-1 flex justify-center items-start min-w-0">
-          <NotebookFloatingToolbar editor={activeEditor} engine={notebookEngine} />
-        </div>
-
-        <div className="pointer-events-auto flex-shrink-0 flex items-start">
+        <div className={`pointer-events-auto flex flex-shrink-0 items-end gap-2 ${isConstrainedHeader ? 'flex-col gap-1' : 'items-start'}`}>
+          <NotebookPageUtilities engine={notebookEngine} workspaceId={workspace?.id} notebookId={notebook?.id} ownerId={focusedPage?.id} editable={workspaceViewMode === 'edit'} onPageDataPersisted={handlePageAudioPersisted} onChange={handleLayersChange} compact={containerSize.width < 900} onExportPage={() => void handleExportPagePdf()} onExportNotebook={() => void handleExportNotebookPdf()} onPrintPage={() => void handlePrintPage()} onPrintNotebook={() => void handlePrintNotebook()} isExporting={isExportingPdf} />
           <NotebookWorkspaceControls />
         </div>
-      </div>
+      </div>}
 
       {/* Native Scrolling Viewport */}
       <main 
         ref={containerRef}
-        className="notebook-viewport relative flex-1 min-w-0 min-h-0 overflow-auto bg-panvas-bg-secondary"
+        className={`panvas-notebook-viewport notebook-viewport relative flex-1 min-w-0 min-h-0 overflow-auto bg-panvas-bg-secondary ${
+          toolState.mode === 'hand' ? 'cursor-grab active:cursor-grabbing' : ''
+        }`}
         onDrop={handleDrop}
         onDragOver={handleDragOver}
         onDragEnter={handleDragOver}
-        onContextMenu={handleContextMenu}
+        onContextMenu={workspaceViewMode === 'edit' ? handleContextMenu : event => event.preventDefault()}
         onPointerDown={() => {
           if (contextMenu.isOpen) {
             setContextMenu(prev => ({ ...prev, isOpen: false }));
@@ -730,97 +2173,92 @@ export function NotebookRenderer() {
       >
 
         <div 
+          className="flex flex-col items-center mx-auto"
           style={{ 
-            minWidth: '100%',
+            width: `${Math.max(containerSize.width, layoutConfig.totalWidth * viewport.scale + 64)}px`,
             minHeight: '100%',
-            width: `${layoutConfig.totalWidth + 80}px`,
-            height: `${layoutConfig.totalHeight + 120}px`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center'
+            height: `${layoutConfig.totalHeight * viewport.scale}px`,
+            position: 'relative'
           }}
         >
           <div
-            className="relative"
+            className="relative origin-top"
             style={{
               width: `${layoutConfig.totalWidth}px`,
-              height: `${layoutConfig.totalHeight}px`
+              height: `${layoutConfig.totalHeight}px`,
+              transform: `scale(${viewport.scale})`,
+              transformOrigin: 'top center',
             }}
           >
-          {layoutConfig.positions.map((pos, index) => {
-            const isActive = pos.id === activePageId;
-            const pageNumText = `${index + 1} / ${totalPages}`;
-            
-            return (
-              <div 
-                key={pos.id} 
-                className="absolute" 
-                style={{ 
-                  left: pos.x, 
-                  top: pos.y, 
-                  width: paperDimensions.width * viewport.scale, 
-                  height: paperDimensions.height * viewport.scale 
-                }}
-              >
-                {isActive ? (
-                  <PageRenderer 
-                    properties={pageProperties} 
-                    id={activePageId} 
-                    width={paperDimensions.width * viewport.scale} 
-                    height={paperDimensions.height * viewport.scale}
+            {layoutConfig.positions.map((pos, index) => {
+              const pageNumText = `${index + 1} / ${totalPages}`;
+              const isFocused = pos.id === focusedPageId;
+              const pageItem = currentSectionPages.find(p => p.id === pos.id)!;
+
+              return (
+                <div 
+                  key={pos.id} 
+                  data-page-id={pos.id}
+                  data-page-index={index}
+                  className="absolute"
+                  style={{ 
+                    left: pos.x,
+                    top: pos.y, 
+                    width: pos.width, 
+                    height: pos.height 
+                  }}
+                >
+                  <NotebookPageView
+                    key={pos.id}
+                    page={pageItem}
+                    data={sectionDataCache[pos.id]}
+                    properties={resolvedSectionProperties.get(pos.id)!}
+                    width={pos.width}
+                    height={pos.height}
+                    renderScale={debouncedScale}
                     pageNumberText={pageNumText}
-                  >
-                    {/* Floating Text Editors */}
-                    {textObjects.map(obj => (
-                      <FloatingTextEditor 
-                        key={obj.id}
-                        object={obj}
-                        engine={notebookEngine}
-                        scale={viewport.scale}
-                        toolMode={toolState.mode}
-                        onFocus={setActiveEditor}
-                        onBlur={() => {}}
-                      />
-                    ))}
-                    
-                    {/* Drawing Canvas Overlay */}
-                    <canvas
-                      ref={canvasRef}
-                      onDrop={handleDrop}
-                      onDragOver={handleDragOver}
-                      onDragEnter={handleDragOver}
-                      className={`absolute inset-0 z-10 w-full h-full touch-none ${
-                        toolState.mode === 'hand' ? 'cursor-grab active:cursor-grabbing' : 
-                        toolState.mode === 'text' ? 'cursor-text' : 
-                        toolState.mode === 'select' ? 'cursor-default' : 'cursor-crosshair'
-                      }`}
-                    />
-                  </PageRenderer>
-                ) : (
-                  <InactivePagePreview 
-                    workspaceId={workspace!.id}
-                    notebookId={notebook!.id}
-                    page={notebookPages.find(p => p.id === pos.id)!}
-                    width={paperDimensions.width * viewport.scale}
-                    height={paperDimensions.height * viewport.scale}
-                    pageNumberText={pageNumText}
-                    onClick={() => setActivePage(pos.id)}
+                    isFocused={isFocused}
+                    toolState={toolState}
+                    notebookEngine={notebookEngine}
+                    activeEditor={activeEditor}
+                    setActiveEditor={setActiveEditor}
+                    onActivatePage={() => handleActivatePage(pos.id)}
+                    handleDrop={handleDrop}
+                    handleDragOver={handleDragOver}
+                    editable={workspaceViewMode === 'edit'}
+                    onVoiceNoteChange={handleLayersChange}
+                    onVoiceNoteDelete={note => void handleDeleteVoiceNote(note)}
+                    onVoiceNoteRename={(note, title) => void handleRenameVoiceNote(note, title)}
+                    onUpdateProperties={isFocused ? handlePagePropertiesUpdate : undefined}
                   />
-                )}
-              </div>
-            );
-          })}
+                  {isFocused && workspaceViewMode === 'edit' && (
+                    <button
+                      type="button"
+                      onClick={() => void handleInsertPage()}
+                      className="panvas-insert-page-button panvas-floating-surface panvas-icon-control absolute bottom-0 left-full ml-3 z-30 h-8 w-8 rounded-full p-0 pointer-events-auto focus-ring"
+                      aria-label="Insert page after current page"
+                      title="Insert page after current page"
+                    >
+                      <Plus size={15} />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </main>
 
       {/* Static properties panel on the right */}
-      {isPropertiesPanelOpen && (
+      {isPropertiesPanelOpen && workspaceViewMode !== 'present' && (
         <NotebookToolPropertiesPanel 
           viewportEngine={notebookEngine.viewport} 
           zoom={viewport.scale} 
           properties={pageProperties}
-          onUpdateProperties={(updates) => notebookEngine.setProperties(updates)}
+          onUpdateProperties={handlePagePropertiesUpdate}
+          onApplyPropertiesToAll={handleApplyPropertiesToAll}
+          onRestorePropertiesBatch={handleRestorePropertiesBatch}
+          onZoom={handlePanelZoom}
         />
       )}
 
@@ -830,6 +2268,17 @@ export function NotebookRenderer() {
         onClose={() => setContextMenu(prev => ({ ...prev, isOpen: false }))}
         onCommand={executeCommand}
       />
+      <HandwritingConversionDialog
+        open={isHandwritingDialogOpen}
+        strokes={handwritingStrokes}
+        initialPreferences={notebookEngine.handwriting.getPreferences()}
+        onCancel={() => {
+          setIsHandwritingDialogOpen(false);
+          setHandwritingStrokes([]);
+        }}
+        onConfirm={confirmHandwritingConversion}
+      />
+      {workspaceViewMode === 'present' && <PresentationOverlay />}
     </div>
   );
 }

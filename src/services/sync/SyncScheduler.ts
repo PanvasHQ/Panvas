@@ -6,6 +6,7 @@
 import { processSyncQueue, getPendingCount, getLastSyncError } from './SyncEngine';
 import { useAuthStore } from '@/stores/authStore';
 import { useSyncStore } from '@/stores/syncStore';
+import { CLOUD_SYNC_ENABLED } from '@/config/features';
 
 const SYNC_INTERVAL_MS = 30 * 1000; // 30 seconds
 
@@ -14,6 +15,7 @@ export class SyncScheduler {
   private isProcessing = false;
 
   start() {
+    if (!CLOUD_SYNC_ENABLED) return;
     if (this.timer) return;
 
     // Listen to network events
@@ -39,6 +41,7 @@ export class SyncScheduler {
   }
 
   async triggerSync() {
+    if (!CLOUD_SYNC_ENABLED) return;
     if (this.isProcessing) return;
     if (!navigator.onLine) return;
 

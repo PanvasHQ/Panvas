@@ -1,61 +1,11 @@
-import React from 'react';
-import { Footer } from '@/components/layout/Footer';
+import { PublicDocument, PublicPageShell } from '@/components/marketing/PublicPageShell';
 
-export function PrivacyPolicyPage() {
-  return (
-    <div className="min-h-screen bg-[#0D1117] text-white flex flex-col font-sans">
-      <div className="max-w-[800px] mx-auto px-6 py-24 flex-1 w-full">
-        <h1 className="text-4xl font-bold mb-4 font-handwritten tracking-tight">Privacy Policy</h1>
-        <p className="text-panvas-text-tertiary mb-12">Last updated: {new Date().toLocaleDateString()}</p>
-        
-        <div className="prose prose-invert prose-p:text-[#A3A3A3] prose-headings:text-white max-w-none">
-          <p>
-            Welcome to Panvas. We respect your privacy and are committed to protecting your personal data. 
-            Because Panvas is built with a <strong>local-first architecture</strong>, the vast majority of your data 
-            never leaves your device unless you explicitly enable Cloud Sync.
-          </p>
-
-          <h2 className="text-2xl font-semibold mt-12 mb-4">1. Data We Collect</h2>
-          <p>
-            When you use Panvas offline, <strong>we collect absolutely nothing</strong>. All your canvases, 
-            folders, and custom blocks are stored entirely in your browser's IndexedDB.
-          </p>
-          <p>
-            If you create an account to use Cloud Sync, we collect:
-          </p>
-          <ul className="list-disc pl-6 text-[#A3A3A3] mb-6 flex flex-col gap-2">
-            <li>Your email address (for authentication).</li>
-            <li>Basic profile information (if provided via OAuth).</li>
-            <li>The encrypted or securely transmitted canvas data you explicitly sync to our Supabase backend.</li>
-          </ul>
-
-          <h2 className="text-2xl font-semibold mt-12 mb-4">2. How We Use Your Data</h2>
-          <p>
-            Your synced data is used exclusively to provide the synchronization service across your devices. 
-            We do not sell, rent, or share your canvas data, notes, or code blocks with any third parties, 
-            including AI training models.
-          </p>
-
-          <h2 className="text-2xl font-semibold mt-12 mb-4">3. Data Security</h2>
-          <p>
-            All data synced to the cloud is protected by Row Level Security (RLS) policies. This ensures that 
-            on a database level, no other user can query or access your workspaces, folders, or canvases.
-          </p>
-
-          <h2 className="text-2xl font-semibold mt-12 mb-4">4. Analytics</h2>
-          <p>
-            We use privacy-friendly analytics (PostHog) to understand how the application is used (e.g., page views, feature clicks). 
-            This data is anonymized and helps us improve the user experience. You can opt out by using standard ad-blockers.
-          </p>
-
-          <h2 className="text-2xl font-semibold mt-12 mb-4">5. Your Rights</h2>
-          <p>
-            You can delete your account and all associated cloud data at any time. Because Panvas is local-first, 
-            you can continue using the application entirely offline even after deleting your cloud account.
-          </p>
-        </div>
-      </div>
-      <Footer />
-    </div>
-  );
-}
+export function PrivacyPolicyPage(){return <PublicPageShell label="Trust / Privacy" title="Your workspace starts local." intro="This notice describes the behavior implemented in the current Panvas codebase. Optional services are separated from the local workspace and may require release configuration." aside={<>CURRENT PRODUCT NOTICE<br/>Updated 7 September 2026<br/>Pre-release software</>}>
+  <PublicDocument>
+    <section><span className="pp-section-index">01</span><div><h2>Local workspace data</h2><p>On Windows desktop, Panvas stores the authoritative workspace in a local filesystem directory. The browser build stores workspace records in origin-scoped IndexedDB. Notes, drawings, canvases and imported assets do not need a Panvas account or network connection for ordinary local use.</p><p>Browser storage remains subject to the browser and device’s storage controls. Exported backups and files remain under your control.</p></div></section>
+    <section><span className="pp-section-index">02</span><div><h2>Optional Google Drive sync</h2><p>Google Drive synchronization is implemented behind explicit release flags and remains disabled by default while runtime certification is completed. When enabled and connected by you, Panvas communicates directly with Google APIs using the limited <code>drive.file</code> scope.</p><p>The browser keeps the Google access token in memory. The desktop app stores Google tokens using Electron’s operating-system-backed secure storage and does not expose them to the renderer. Disconnecting revokes or removes the locally held authorization where supported.</p></div></section>
+    <section><span className="pp-section-index">03</span><div><h2>Authentication</h2><p>Local workspace use does not require an account. Development or configured web builds can offer Supabase authentication using email/password or Google and GitHub OAuth. In those builds, the authentication provider processes account identifiers, session information and any profile information returned by the selected provider.</p><p>Signing out does not delete local workspace records.</p></div></section>
+    <section><span className="pp-section-index">04</span><div><h2>Analytics and network access</h2><p>Product analytics is off in ordinary workspace builds. PostHog analytics can initialize only when both the analytics flag and marketing-only build flag are enabled and a key is configured. Automatic interaction capture and automatic pageview capture are disabled in code.</p><p>Network access may also occur when you choose authentication or Google Drive features, or when the application loads third-party resources required by those configured features.</p></div></section>
+    <section><span className="pp-section-index">05</span><div><h2>Your controls</h2><p>You can continue using a local workspace without enabling Google Drive or authentication. You can disconnect Google Drive, sign out of an optional account, and manage or remove local files using the controls provided by your operating system or browser.</p><div className="pp-note">Account deletion procedures, production operator identity, legal contact details, and any server-side retention rules require human/legal confirmation before public release.</div></div></section>
+  </PublicDocument>
+</PublicPageShell>}

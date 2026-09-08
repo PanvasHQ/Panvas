@@ -1,6 +1,7 @@
-import { ImageObject } from './drawingTypes';
-import { ViewportManager } from './ViewportManager';
+import { ImageObject, DEFAULT_PAGE_LAYER_ID } from './drawingTypes.ts';
+import { ViewportManager } from './ViewportManager.ts';
 import { canvasRepository } from '@/repositories/CanvasRepository';
+import { LayerManager } from './LayerManager.ts';
 
 export class ImageManager {
   private images: ImageObject[] = [];
@@ -8,9 +9,11 @@ export class ImageManager {
   private objectUrls: Map<string, string> = new Map();
   private viewport: ViewportManager;
   private redrawCallback?: () => void;
+  private layerManager: LayerManager;
 
-  constructor(viewport: ViewportManager) {
+  constructor(viewport: ViewportManager, layerManager: LayerManager = new LayerManager()) {
     this.viewport = viewport;
+    this.layerManager = layerManager;
   }
 
   setRedrawCallback(cb: () => void) {
@@ -30,6 +33,7 @@ export class ImageManager {
   }
 
   addImage(image: ImageObject): void {
+    image.layerId ??= this.layerManager.getActiveLayerId();
     this.images.push(image);
     this.preloadImage(image.fileId);
   }
@@ -53,8 +57,11 @@ export class ImageManager {
     return removed;
   }
 
-  cacheImage(fileId: string, img: HTMLImageElement): void {
+  cacheImage(fileId: string, img: HTMLImageElement, objectUrl?: string): void {
     this.imageCache.set(fileId, img);
+    if (objectUrl) {
+      this.objectUrls.set(fileId, objectUrl);
+    }
   }
 
   clearImages(): ImageObject[] {
@@ -88,17 +95,24 @@ export class ImageManager {
     }
   }
 
-  renderImages(ctx: CanvasRenderingContext2D): void {
+  renderImages(ctx: CanvasRenderingContext2D, layerId?: string): void {
     for (const imgObj of this.images) {
+      if (layerId && imgObj.layerId !== layerId) continue;
+      const imgLayerId = imgObj.layerId ?? DEFAULT_PAGE_LAYER_ID;
+      if (layerId && imgLayerId !== layerId) continue;
       const imgElem = this.imageCache.get(imgObj.fileId);
       if (!imgElem) continue;
 
       ctx.save();
+      // Ensure high quality bicubic/lanczos filtering across any zoom and display dimensions
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+
       // Move to center of image to apply rotation
       ctx.translate(imgObj.x + imgObj.width / 2, imgObj.y + imgObj.height / 2);
       ctx.rotate(((imgObj.rotation || 0) * Math.PI) / 180);
       
-      // Draw image centered at the translated coordinate
+      // Draw image centered at the translated coordinate using original full-resolution source
       ctx.drawImage(
         imgElem,
         -imgObj.width / 2,
@@ -109,6 +123,10 @@ export class ImageManager {
       
       ctx.restore();
     }
+  }
+
+  isEditable(image: ImageObject): boolean {
+    return this.layerManager.isEditable(image.layerId);
   }
 
   // Cleanup object URLs to prevent memory leaks when manager is destroyed

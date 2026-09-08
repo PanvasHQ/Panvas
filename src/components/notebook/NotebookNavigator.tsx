@@ -44,7 +44,7 @@ function NavigatorDropdown({ icon, label, items, onSelect, activeId }: DropdownP
               items.map(item => (
                 <button
                   key={item.id}
-                  className={`w-full flex items-center px-2 py-1.5 text-xs rounded-md transition-colors text-left truncate ${item.id === activeId ? 'bg-blue-500/10 text-blue-500 font-medium' : 'text-panvas-text-secondary hover:bg-panvas-bg-hover hover:text-panvas-text-primary'}`}
+                  className={`w-full flex items-center px-2 py-1.5 text-xs rounded-md transition-colors text-left truncate focus-ring ${item.id === activeId ? 'bg-panvas-accent-blue/10 text-panvas-accent-blue font-medium' : 'text-panvas-text-secondary hover:bg-panvas-bg-hover hover:text-panvas-text-primary'}`}
                   onClick={() => {
                     onSelect(item.id);
                     setIsOpen(false);
@@ -104,10 +104,10 @@ function NotebookManagerOverlay({
   };
 
   return (
-    <div className="flex flex-row bg-panvas-bg-elevated text-panvas-text-primary border border-panvas-border-default rounded-xl shadow-2xl z-50 overflow-hidden max-h-[60vh]">
-      
+    <div className="panvas-overlay flex max-h-[60vh] flex-row overflow-hidden rounded-xl border border-panvas-border-default bg-panvas-bg-elevated text-panvas-text-primary shadow-2xl max-[599px]:w-[min(24rem,calc(100vw-1.5rem))] max-[599px]:flex-col max-[599px]:overflow-y-auto">
+
       {/* COLUMN 1: Notebooks */}
-      <div className="w-[220px] flex flex-col border-r border-panvas-border-subtle bg-panvas-bg-elevated flex-shrink-0 overflow-y-auto">
+      <div className="w-[220px] flex flex-col border-r border-panvas-border-subtle bg-panvas-bg-elevated flex-shrink-0 overflow-y-auto max-[599px]:w-full max-[599px]:border-r-0 max-[599px]:border-b">
         <div className="px-3 py-2 flex items-center justify-between border-b border-panvas-border-subtle sticky top-0 bg-panvas-bg-elevated z-10">
           <span className="text-[11px] font-semibold tracking-wider uppercase text-panvas-text-tertiary">Notebooks</span>
         </div>
@@ -125,7 +125,7 @@ function NotebookManagerOverlay({
               onClick={() => handleSelectNotebook(notebook.id)}
               className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer text-xs transition-colors ${notebook.id === selectedNotebookId ? 'bg-panvas-bg-active text-panvas-text-primary' : 'hover:bg-panvas-bg-hover text-panvas-text-secondary'}`}
             >
-              <Book size={14} className={notebook.id === activeNotebookId ? 'text-red-500' : 'text-panvas-text-tertiary'} />
+              <Book size={14} className={notebook.id === activeNotebookId ? 'text-panvas-accent-rose' : 'text-panvas-text-tertiary'} />
               <span className={`truncate flex-1 ${notebook.id === activeNotebookId ? 'font-medium text-panvas-text-primary' : 'text-panvas-text-secondary'}`}>
                 {notebook.name}
               </span>
@@ -135,7 +135,7 @@ function NotebookManagerOverlay({
       </div>
 
       {/* COLUMN 2: Sections */}
-      <div className="w-[220px] flex flex-col border-r border-panvas-border-subtle bg-panvas-bg-secondary/60 flex-shrink-0 overflow-y-auto">
+      <div className="w-[220px] flex flex-col border-r border-panvas-border-subtle bg-panvas-bg-secondary/60 flex-shrink-0 overflow-y-auto max-[599px]:w-full max-[599px]:border-r-0 max-[599px]:border-b">
         <div className="px-3 py-2 flex items-center justify-between border-b border-panvas-border-subtle sticky top-0 bg-panvas-bg-secondary z-10">
           <span className="text-[11px] font-semibold tracking-wider uppercase text-panvas-text-tertiary truncate">
             {selectedNotebook?.name ?? 'No Notebook Selected'}
@@ -157,7 +157,7 @@ function NotebookManagerOverlay({
               onClick={() => setSelectedSectionId(section.id)}
               className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer text-xs transition-colors ${section.id === selectedSectionId ? 'bg-panvas-bg-active text-panvas-text-primary' : 'hover:bg-panvas-bg-hover text-panvas-text-secondary'}`}
             >
-              <FolderOpen size={14} className={section.id === activeSectionId ? 'text-blue-500' : 'text-panvas-text-tertiary'} />
+              <FolderOpen size={14} className={section.id === activeSectionId ? 'text-panvas-accent-blue' : 'text-panvas-text-tertiary'} />
               <span className={`truncate flex-1 ${section.id === activeSectionId ? 'font-medium text-panvas-text-primary' : 'text-panvas-text-secondary'}`}>
                 {section.name}
               </span>
@@ -167,7 +167,7 @@ function NotebookManagerOverlay({
       </div>
 
       {/* COLUMN 3: Pages */}
-      <div className="w-[240px] flex flex-col bg-panvas-bg-elevated flex-shrink-0 pb-1 overflow-y-auto">
+      <div className="w-[240px] flex flex-col bg-panvas-bg-elevated flex-shrink-0 pb-1 overflow-y-auto max-[599px]:w-full">
         <div className="px-3 py-2 flex items-center justify-between border-b border-panvas-border-subtle sticky top-0 bg-panvas-bg-elevated z-10 mb-1">
           <span className="text-[11px] font-semibold tracking-wider uppercase text-panvas-text-tertiary truncate">
             {selectedSection?.name ?? 'No Section Selected'}

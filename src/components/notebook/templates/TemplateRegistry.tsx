@@ -227,8 +227,6 @@ export const TEMPLATE_REGISTRY: Record<PageTemplate, TemplateDefinition> = {
           {/* Header Box */}
           <rect x={16} y={16} width={width - 32} height={headerH - 24} fill="none" stroke={color} strokeWidth={1.2} rx={4} />
           <line x1={Math.round(width * 0.6)} y1={16} x2={Math.round(width * 0.6)} y2={headerH - 8} stroke={color} strokeWidth={1} />
-          <text x={28} y={32} fill={color} fontSize="10" fontWeight="600" opacity="0.6" fontFamily="sans-serif">COURSE & TOPIC:</text>
-          <text x={Math.round(width * 0.6) + 12} y={32} fill={color} fontSize="10" fontWeight="600" opacity="0.6" fontFamily="sans-serif">DATE:</text>
           {/* Column Divider */}
           <line x1={splitX} y1={headerH} x2={splitX} y2={height - 10} stroke={color} strokeWidth={1.5} />
           {/* Column Labels */}
@@ -258,7 +256,6 @@ export const TEMPLATE_REGISTRY: Record<PageTemplate, TemplateDefinition> = {
         <g>
           {/* Header Block */}
           <rect x={16} y={14} width={width - 32} height={headerH - 22} fill="none" stroke={color} strokeWidth={1.2} rx={4} />
-          <text x={28} y={30} fill={color} fontSize="10" fontWeight="600" opacity="0.6" fontFamily="sans-serif">ASSIGNMENT / DUE DATE:</text>
           {/* Lined body */}
           <g opacity={0.7}>{lines}</g>
           {/* Problem section divider */}
@@ -322,7 +319,6 @@ export const TEMPLATE_REGISTRY: Record<PageTemplate, TemplateDefinition> = {
       return (
         <g>
           {/* Header Title */}
-          <text x={24} y={32} fill={color} fontSize="14" fontWeight="700" fontFamily="sans-serif">TO-DO LIST</text>
           <line x1={20} y1={42} x2={width - 20} y2={42} stroke={color} strokeWidth={1.5} />
           {rows}
         </g>
@@ -365,8 +361,6 @@ export const TEMPLATE_REGISTRY: Record<PageTemplate, TemplateDefinition> = {
       return (
         <g>
           {/* Header Banner */}
-          <text x={20} y={30} fill={color} fontSize="13" fontWeight="700" fontFamily="sans-serif">DAILY PLANNER</text>
-          <text x={width - 160} y={30} fill={color} fontSize="10" opacity="0.6" fontFamily="sans-serif">DATE: _________________</text>
           <line x1={16} y1={40} x2={width - 16} y2={40} stroke={color} strokeWidth={1.2} />
 
           {/* Schedule Column */}
@@ -412,7 +406,6 @@ export const TEMPLATE_REGISTRY: Record<PageTemplate, TemplateDefinition> = {
 
       return (
         <g>
-          <text x={20} y={28} fill={color} fontSize="13" fontWeight="700" fontFamily="sans-serif">WEEKLY OVERVIEW</text>
           {blocks}
         </g>
       );
@@ -449,7 +442,6 @@ export const TEMPLATE_REGISTRY: Record<PageTemplate, TemplateDefinition> = {
 
       return (
         <g opacity={0.85}>
-          <text x={20} y={30} fill={color} fontSize="14" fontWeight="700" fontFamily="sans-serif">MONTH: _________________</text>
           {headers}
           {gridLines}
         </g>
@@ -476,9 +468,7 @@ export const TEMPLATE_REGISTRY: Record<PageTemplate, TemplateDefinition> = {
       return (
         <g>
           {/* Header Details */}
-          <text x={40} y={36} fill={color} fontSize="11" fontWeight="600" opacity="0.7" fontFamily="sans-serif">DATE:</text>
           <line x1={78} y1={38} x2={200} y2={38} stroke={color} strokeWidth={1} opacity="0.5" />
-          <text x={width - 180} y={36} fill={color} fontSize="11" fontWeight="600" opacity="0.7" fontFamily="sans-serif">MOOD / WEATHER:</text>
           <line x1={width - 70} y1={38} x2={width - 40} y2={38} stroke={color} strokeWidth={1} opacity="0.5" />
           <line x1={40} y1={52} x2={width - 40} y2={52} stroke={color} strokeWidth={1.5} opacity="0.8" />
           {/* Lined body */}
@@ -545,7 +535,6 @@ export const TEMPLATE_REGISTRY: Record<PageTemplate, TemplateDefinition> = {
 
       return (
         <g opacity={0.85}>
-          <text x={20} y={32} fill={color} fontSize="13" fontWeight="700" fontFamily="sans-serif">MONTHLY CALENDAR</text>
           {gridLines}
           {/* Side Notes column */}
           <rect x={calWidth + 10} y={topMargin} width={width - calWidth - 26} height={gridH} rx={4} fill="none" stroke={color} strokeWidth={1} />

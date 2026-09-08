@@ -24,13 +24,15 @@ export function Toast() {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 20, scale: 0.95 }}
           transition={{ duration: 0.2 }}
-          className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50
+          role="status"
+          aria-live="polite"
+          className="panvas-toast panvas-layer-system fixed right-6 top-56
                      flex items-center gap-2.5 px-4 py-2.5
                      rounded-lg glass-panel shadow-2xl"
         >
           {icons[toast.type]}
           <span className="text-sm text-panvas-text-primary">{toast.message}</span>
-          <button onClick={clearToast} className="btn-icon p-0.5 ml-1">
+          <button type="button" onClick={clearToast} className="btn-icon p-0.5 ml-1" aria-label="Dismiss notification" title="Dismiss notification">
             <X size={12} />
           </button>
         </motion.div>

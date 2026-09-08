@@ -12,6 +12,11 @@ import type { CustomBlock } from '@/types/canvas';
 
 const MAX_ATTEMPTS = 5;
 
+// The pre-Sync-0 engine does not cover the final local entity set or the
+// required optimistic-conflict/token boundary. Keep it impossible to enable
+// accidentally while its data is migrated to the provider-neutral contract.
+export const LEGACY_SYNC_QUARANTINED = true;
+
 const ENTITY_SYNC_PRIORITY: Record<SyncQueueItem['entityType'], number> = {
   workspace: 0,
   folder: 1,
@@ -69,6 +74,9 @@ async function upsertQueueItem(item: Omit<SyncQueueItem, 'id' | 'attempts' | 'cr
  * Called by SyncScheduler on interval and on reconnection.
  */
 export async function processSyncQueue(userId: string): Promise<{ processed: number; failed: number }> {
+  if (LEGACY_SYNC_QUARANTINED) {
+    throw new Error('Legacy cloud sync is quarantined until the Sync-0 acceptance suite passes.');
+  }
   if (!supabase || !isSupabaseConfigured || !userId) {
     return { processed: 0, failed: 0 };
   }
@@ -114,16 +122,15 @@ export async function processSyncQueue(userId: string): Promise<{ processed: num
       processed++;
     } catch (err) {
       if (String(err).includes('violates row-level security policy')) {
-        console.warn(`[SyncEngine] Dropping cross-account item ${item.entityType}:${item.entityId}`);
-        await db.syncQueue.delete(item.id!);
-        // Purge the offending item from local DB to prevent it from getting re-queued
-        if (item.entityType === 'workspace') await db.workspaces.delete(item.entityId);
-        if (item.entityType === 'folder') await db.folders.delete(item.entityId);
-        if (item.entityType === 'canvasFile') {
-          await db.canvasFiles.delete(item.entityId);
-          await db.canvasData.delete(item.entityId);
-        }
-        continue;
+        console.warn(`[SyncEngine] Authorization rejected for ${item.entityType}:${item.entityId}; local data preserved.`);
+        await db.syncQueue.update(item.id!, {
+          status: 'failed',
+          attempts: MAX_ATTEMPTS,
+          lastAttemptAt: Date.now(),
+          error: 'Remote authorization rejected this operation; local data was preserved.',
+        });
+        failed++;
+        break;
       }
 
       console.error(`[SyncEngine] Failed: ${item.entityType}:${item.entityId}`, err);
@@ -219,40 +226,9 @@ export async function queueLocalSnapshotForSync(userId: string): Promise<void> {
   
   if (hasCloudWorkspaces) {
     const systemWorkspaces = workspaces.filter(ws => ws.userId === null && ws.isSystem === true);
-    for (const sysWs of systemWorkspaces) {
-      // Check if the user drew anything on the local system canvases before logging in
-      let hasUserDrawings = false;
-      const sysCanvases = canvasFiles.filter(cf => cf.workspaceId === sysWs.id);
-      for (const sc of sysCanvases) {
-        const cd = canvasData.find(d => d.canvasFileId === sc.id);
-        if (cd && cd.elements && cd.elements.length > 0) {
-          hasUserDrawings = true;
-          break;
-        }
-      }
-
-      // Only purge if it's completely untouched. If they drew something, we adopt it so they don't lose work.
-      if (!hasUserDrawings) {
-        console.log('[SyncEngine] Purging untouched local system workspace to prevent duplication.');
-        await db.workspaces.delete(sysWs.id);
-        for (const sc of sysCanvases) {
-          await db.canvasFiles.delete(sc.id);
-          await db.canvasData.delete(sc.id);
-        }
-      }
+    if (systemWorkspaces.length > 0) {
+      throw new Error('Local workspaces require an explicit adoption or keep-local decision before cloud sync.');
     }
-
-    // Refresh memory arrays after potential purge
-    workspaces = await db.workspaces
-      .filter(item => item.deletedAt === null || item.deletedAt === undefined)
-      .toArray();
-    folders = await db.folders
-      .filter(item => item.deletedAt === null || item.deletedAt === undefined)
-      .toArray();
-    canvasFiles = await db.canvasFiles
-      .filter(item => item.deletedAt === null || item.deletedAt === undefined)
-      .toArray();
-    canvasData = await db.canvasData.toArray();
   }
 
   for (const workspace of workspaces) {
@@ -325,7 +301,7 @@ async function syncWorkspace(item: SyncQueueItem, userId: string) {
   const data = item.data as any;
 
   if (item.action === 'delete') {
-    assertSupabaseSuccess(await supabase.from('workspaces').delete().eq('id', item.entityId));
+    throw new Error('Legacy remote hard delete is disabled until Sync-0 tombstones are implemented.');
   } else {
     assertSupabaseSuccess(await supabase.from('workspaces').upsert({
       id: item.entityId,
@@ -345,7 +321,7 @@ async function syncFolder(item: SyncQueueItem, userId: string) {
   const data = item.data as any;
 
   if (item.action === 'delete') {
-    assertSupabaseSuccess(await supabase.from('folders').delete().eq('id', item.entityId));
+    throw new Error('Legacy remote hard delete is disabled until Sync-0 tombstones are implemented.');
   } else {
     assertSupabaseSuccess(await supabase.from('folders').upsert({
       id: item.entityId,
@@ -367,7 +343,7 @@ async function syncCanvasFile(item: SyncQueueItem, userId: string) {
   const data = item.data as any;
 
   if (item.action === 'delete') {
-    assertSupabaseSuccess(await supabase.from('canvas_files').delete().eq('id', item.entityId));
+    throw new Error('Legacy remote hard delete is disabled until Sync-0 tombstones are implemented.');
   } else {
     assertSupabaseSuccess(await supabase.from('canvas_files').upsert({
       id: item.entityId,

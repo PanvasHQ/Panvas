@@ -3,15 +3,19 @@
 // ============================================
 // Handles drawing and rendering of vector shapes (rectangle, ellipse, etc).
 
-import type { Shape, ShapeType } from './drawingTypes';
-import type { ViewportManager } from './ViewportManager';
+import type { Shape, ShapeType } from './drawingTypes.ts';
+import { DEFAULT_PAGE_LAYER_ID } from './drawingTypes.ts';
+import type { ViewportManager } from './ViewportManager.ts';
+import { LayerManager } from './LayerManager.ts';
 
 export class ShapeManager {
   private shapes: Shape[] = [];
   private viewport: ViewportManager;
+  private layerManager: LayerManager;
 
-  constructor(viewport: ViewportManager) {
+  constructor(viewport: ViewportManager, layerManager: LayerManager = new LayerManager()) {
     this.viewport = viewport;
+    this.layerManager = layerManager;
   }
 
   getShapes(): Shape[] {
@@ -23,6 +27,7 @@ export class ShapeManager {
   }
 
   addShape(shape: Shape): void {
+    shape.layerId ??= this.layerManager.getActiveLayerId();
     this.shapes.push(shape);
   }
 
@@ -52,8 +57,11 @@ export class ShapeManager {
   }
 
   /** Render all shapes onto the given context. */
-  renderShapes(ctx: CanvasRenderingContext2D): void {
+  renderShapes(ctx: CanvasRenderingContext2D, layerId?: string): void {
     for (const shape of this.shapes) {
+      if (layerId && shape.layerId !== layerId) continue;
+      const shapeLayerId = shape.layerId ?? DEFAULT_PAGE_LAYER_ID;
+      if (layerId && shapeLayerId !== layerId) continue;
       this.renderShape(ctx, shape);
     }
   }
@@ -71,6 +79,7 @@ export class ShapeManager {
 
     ctx.strokeStyle = shape.color;
     ctx.lineWidth = shape.strokeWidth;
+    ctx.globalAlpha = Math.max(0, Math.min(1, shape.opacity ?? 1));
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
@@ -84,6 +93,11 @@ export class ShapeManager {
       case 'rectangle':
         ctx.rect(shape.x, shape.y, shape.width, shape.height);
         break;
+      case 'rounded-rectangle': {
+        const radius = Math.min(16, Math.abs(shape.width) / 4, Math.abs(shape.height) / 4);
+        ctx.roundRect(shape.x, shape.y, shape.width, shape.height, radius);
+        break;
+      }
       case 'ellipse':
         ctx.ellipse(cx, cy, Math.abs(shape.width) / 2, Math.abs(shape.height) / 2, 0, 0, 2 * Math.PI);
         break;
@@ -134,6 +148,7 @@ export class ShapeManager {
     const radiusSq = radius * radius;
 
     for (const shape of this.shapes) {
+      if (!this.layerManager.isEditable(shape.layerId)) continue;
       // Very basic hit testing for now (bounding box + radius)
       // For precise selection, we'd need type-specific geometry math.
       const minX = Math.min(shape.x, shape.x + shape.width) - radius;

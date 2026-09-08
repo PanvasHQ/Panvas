@@ -22,8 +22,8 @@ interface CanvasState {
   setExcalidrawAPI: (api: any) => void;
 
   // Data loading
-  loadCanvasData: (canvasFileId: string) => Promise<void>;
-  saveCanvasData: (data: Partial<CanvasData> & { canvasFileId: string }) => Promise<void>;
+  loadCanvasData: (canvasFileId: string, workspaceId?: string) => Promise<void>;
+  saveCanvasData: (data: Partial<CanvasData> & { canvasFileId: string }, workspaceId?: string) => Promise<void>;
   clearCurrentCanvas: () => void;
 
   // Custom blocks
@@ -54,9 +54,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   setExcalidrawAPI: (api) => set({ excalidrawAPI: api }),
 
-  loadCanvasData: async (canvasFileId: string) => {
+  loadCanvasData: async (canvasFileId: string, workspaceId?: string) => {
     const userId = useAuthStore.getState().user?.id ?? null;
-    const data = await canvasRepository.loadData(userId, canvasFileId);
+    const data = await canvasRepository.loadData(userId, canvasFileId, workspaceId);
     const blocks = await canvasRepository.loadBlocks(userId, canvasFileId);
     set({
       currentData: data || null,
@@ -65,11 +65,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     });
   },
 
-  saveCanvasData: async (data: Partial<CanvasData> & { canvasFileId: string }) => {
+  saveCanvasData: async (data: Partial<CanvasData> & { canvasFileId: string }, workspaceId?: string) => {
     set({ saveStatus: 'saving' });
     try {
       const userId = useAuthStore.getState().user?.id ?? null;
-      await canvasRepository.saveData(userId, data);
+      await canvasRepository.saveData(userId, data, workspaceId);
       useSyncStore.getState().incrementPending();
       
       const current = get().currentData;

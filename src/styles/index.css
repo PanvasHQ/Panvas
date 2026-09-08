@@ -8,53 +8,97 @@
 
 @layer base {
   :root {
-    /* LIGHT THEME */
-    --bg-primary: 255 255 255;
-    --bg-secondary: 249 250 251;
-    --bg-tertiary: 243 244 246;
-    --bg-elevated: 255 255 255;
-    --bg-hover: 243 244 246;
-    --bg-active: 229 231 235;
-    --border-subtle: 0 0 0;
-    --border-default: 229 231 235;
-    --border-strong: 0 0 0;
-    --text-primary: 17 24 39;
-    --text-secondary: 75 85 99;
-    --text-tertiary: 107 114 128;
-    --text-accent: 17 24 39;
-    --accent-violet: 124 58 237;
-    --accent-violet-light: 139 92 246;
-    --accent-blue: 59 130 246;
-    --accent-emerald: 16 185 129;
-    --accent-amber: 245 158 11;
-    --accent-rose: 244 63 94;
-    --glass-bg: 255 255 255;
-    --glass-border: 229 231 235;
+    /* LIGHT — clean paper and quiet chrome. */
+    --bg-primary: 255 254 251;
+    --bg-secondary: 248 247 243;
+    --bg-tertiary: 239 238 232;
+    --bg-elevated: 255 255 253;
+    --bg-hover: 239 237 231;
+    --bg-active: 228 226 218;
+    --border-subtle: 225 222 213;
+    --border-default: 211 207 197;
+    --border-strong: 166 161 150;
+    --text-primary: 35 36 38;
+    --text-secondary: 82 83 86;
+    --text-tertiary: 119 119 121;
+    --text-accent: 40 41 43;
+    --accent-violet: 93 78 176;
+    --accent-violet-light: 121 105 211;
+    --accent-blue: 45 111 183;
+    --accent-emerald: 40 132 94;
+    --accent-amber: 181 120 31;
+    --accent-rose: 193 67 83;
+    --glass-bg: 255 255 253;
+    --glass-border: 218 214 205;
+    --code-comment: #5b6472;
+    --code-keyword: #5b21b6;
+    --code-string: #047857;
+    --code-function: #075985;
+    --code-number: #9a3412;
+    --code-variable: #9f1239;
+    --code-built-in: #9a6700;
+    --code-type: #0f766e;
+    --code-property: #0e7490;
+    --code-operator: #334155;
+    /* Layout tokens keep application chrome, menus, and work surfaces aligned
+       across the three themes without forcing a component-library rewrite. */
+    --radius-control: 0.5rem;
+    --radius-surface: 0.75rem;
+    --radius-floating: 0.9rem;
+    --control-height-sm: 2rem;
+    --control-height-md: 2.5rem;
+    --shadow-surface: 0 1px 2px rgb(35 32 25 / 0.06), 0 8px 20px rgb(35 32 25 / 0.06);
+    --shadow-floating: 0 14px 34px rgb(27 25 20 / 0.16), 0 2px 5px rgb(27 25 20 / 0.09);
+    --motion-fast: 120ms;
+    --motion-standard: 180ms;
+    --focus-outline: rgb(var(--accent-violet) / 0.65);
+    /* Product-wide layering contract. Components use the semantic classes
+       below instead of racing each other with arbitrary z-index values. */
+    --z-base: 0;
+    --z-canvas-decoration: 10;
+    --z-floating-control: 20;
+    --z-toolbar: 30;
+    --z-popover: 40;
+    --z-sheet: 50;
+    --z-modal: 60;
+    --z-system: 70;
   }
 
   .dark {
-    /* DARK THEME */
-    --bg-primary: 13 13 13;
-    --bg-secondary: 18 18 18;
-    --bg-tertiary: 26 26 26;
-    --bg-elevated: 34 34 34;
-    --bg-hover: 23 23 23;
-    --bg-active: 38 38 38;
-    --border-subtle: 255 255 255;
-    --border-default: 38 38 38;
-    --border-strong: 255 255 255;
-    --text-primary: 245 245 245;
-    --text-secondary: 163 163 163;
-    --text-tertiary: 115 115 115;
-    --text-accent: 245 245 245;
-    --accent-violet: 139 92 246;
-    --accent-violet-light: 167 139 250;
-    --accent-blue: 59 130 246;
-    --accent-emerald: 16 185 129;
-    --accent-amber: 245 158 11;
-    --accent-rose: 244 63 94;
-    --glass-bg: 18 18 18;
-    --glass-border: 38 38 38;
+    /* DARK — charcoal surfaces rather than pure black. */
+    --bg-primary: 24 25 27;
+    --bg-secondary: 30 31 34;
+    --bg-tertiary: 41 42 46;
+    --bg-elevated: 36 37 40;
+    --bg-hover: 48 49 54;
+    --bg-active: 61 62 67;
+    --border-subtle: 57 58 63;
+    --border-default: 72 73 79;
+    --border-strong: 121 122 129;
+    --text-primary: 244 243 239;
+    --text-secondary: 194 193 188;
+    --text-tertiary: 150 149 145;
+    --text-accent: 250 249 245;
+    --accent-violet: 163 143 255;
+    --accent-violet-light: 190 177 255;
+    --accent-blue: 100 175 255;
+    --accent-emerald: 81 203 143;
+    --accent-amber: 245 187 82;
+    --accent-rose: 251 123 139;
+    --glass-bg: 36 37 40;
+    --glass-border: 73 74 80;
+    --code-comment: #a1a1aa;
+    --code-keyword: #c4b5fd;
+    --code-string: #86efac;
+    --code-function: #7dd3fc;
+    --code-number: #fdba74;
+    --code-variable: #fda4af;
+    --code-built-in: #fde68a;
+    --code-type: #5eead4;
+    --code-property: #67e8f9;
+    --code-operator: #cbd5e1;
+    --shadow-surface: 0 1px 2px rgb(0 0 0 / 0.2), 0 8px 20px rgb(0 0 0 / 0.14);
+    --shadow-floating: 0 16px 38px rgb(0 0 0 / 0.34), 0 2px 6px rgb(0 0 0 / 0.24);
   }
 
   .theme-ink {
@@ -65,9 +109,9 @@
     --bg-elevated: 255 253 245;
     --bg-hover: 232 227 211;
     --bg-active: 223 217 199;
-    --border-subtle: 60 50 40;
-    --border-default: 60 50 40;
-    --border-strong: 60 50 40;
+    --border-subtle: 215 205 186;
+    --border-default: 189 176 151;
+    --border-strong: 132 116 91;
     --text-primary: 60 50 40;
     --text-secondary: 90 78 66;
     --text-tertiary: 120 108 92;
@@ -80,6 +124,18 @@
     --accent-rose: 172 65 86;
     --glass-bg: 247 244 235;
     --glass-border: 60 50 40;
+    --code-comment: #6b6259;
+    --code-keyword: #6d3da1;
+    --code-string: #2f7652;
+    --code-function: #2d6198;
+    --code-number: #a55b24;
+    --code-variable: #a0445f;
+    --code-built-in: #8a641d;
+    --code-type: #356f68;
+    --code-property: #356d91;
+    --code-operator: #4e514f;
+    --shadow-surface: 0 1px 2px rgb(60 50 40 / 0.08), 0 8px 20px rgb(60 50 40 / 0.08);
+    --shadow-floating: 0 14px 34px rgb(60 50 40 / 0.2), 0 2px 5px rgb(60 50 40 / 0.12);
   }
 
   /* ============================================
@@ -93,14 +149,17 @@
     display: none !important;
   }
 
-  * {
-    @apply border-panvas-border-subtle;
+  *,
+  *::before,
+  *::after {
+    border-color: rgb(var(--border-subtle) / 0.85);
   }
 
   body {
     @apply bg-panvas-bg-primary text-panvas-text-primary font-sans;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    letter-spacing: -0.006em;
   }
 
   /* Custom scrollbar */
@@ -114,18 +173,24 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgb(var(--text-tertiary) / 0.25);
     border-radius: 3px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgb(var(--text-tertiary) / 0.43);
   }
 
   /* Selection */
   ::selection {
-    background: rgba(124, 58, 237, 0.3);
-    color: #fff;
+    background: rgba(59, 130, 246, 0.35);
+    color: inherit;
+  }
+
+  .ProseMirror ::selection,
+  .ProseMirror *::selection {
+    background: rgba(59, 130, 246, 0.35) !important;
+    color: inherit !important;
   }
 }
 
@@ -133,7 +198,7 @@
   /* Glass panel */
   .glass-panel {
     @apply bg-panvas-glass-bg backdrop-blur-xl border border-panvas-glass-border;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 12px 30px rgb(33 30 24 / 0.10);
   }
 
   /* Sidebar item */
@@ -158,7 +223,12 @@
     @apply focus:outline-none focus:ring-offset-0;
   }
   .focus-ring:focus {
-    box-shadow: 0 0 0 2px rgba(var(--accent-violet), 0.4);
+    box-shadow: 0 0 0 2px var(--focus-outline);
+  }
+
+  .focus-ring:focus-visible {
+    outline: 2px solid var(--focus-outline);
+    outline-offset: 2px;
   }
 
   /* Gradient text */
@@ -168,10 +238,13 @@
 
   /* Button variants */
   .btn-primary {
-    @apply px-4 py-2 rounded-lg bg-gradient-to-r from-panvas-accent-violet to-panvas-accent-blue
-           text-white font-medium text-sm
-           hover:shadow-glow-violet transition-all duration-200
-           active:scale-[0.98] focus-ring;
+    @apply px-4 py-2 rounded-lg bg-panvas-text-primary text-panvas-bg-primary font-medium text-sm
+           transition-all duration-150 active:scale-[0.98] focus-ring;
+    box-shadow: 0 1px 2px rgb(22 21 18 / 0.18);
+  }
+
+  .btn-primary:hover {
+    filter: brightness(1.13);
   }
 
   .btn-ghost {
@@ -198,12 +271,184 @@
     box-shadow: 0 0 0 1px rgba(var(--accent-violet), 0.3);
   }
 
+  /* Shared primitives for dense desktop controls. They are intentionally
+     semantic classes, so the product can retain its existing component APIs. */
+  .panvas-surface {
+    border: 1px solid rgb(var(--border-default));
+    border-radius: var(--radius-surface);
+    background: rgb(var(--bg-elevated));
+    box-shadow: var(--shadow-surface);
+  }
+
+  .panvas-floating-surface {
+    border: 1px solid rgb(var(--border-strong));
+    border-radius: var(--radius-floating);
+    background: rgb(var(--bg-elevated) / 0.96);
+    box-shadow: var(--shadow-floating);
+    backdrop-filter: blur(16px);
+  }
+
+  .panvas-icon-control {
+    display: inline-flex;
+    height: var(--control-height-sm);
+    width: var(--control-height-sm);
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-control);
+    color: rgb(var(--text-secondary));
+    transition: background-color var(--motion-fast) ease, color var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
+  }
+
+  .panvas-icon-control:hover {
+    background: rgb(var(--bg-hover));
+    color: rgb(var(--text-primary));
+  }
+
+  .panvas-icon-control[aria-pressed='true'],
+  .panvas-icon-control[aria-expanded='true'] {
+    background: rgb(var(--bg-active));
+    color: rgb(var(--text-primary));
+  }
+
+  .panvas-control {
+    min-height: var(--control-height-sm);
+    border: 1px solid rgb(var(--border-default));
+    border-radius: var(--radius-control);
+    background: rgb(var(--bg-secondary));
+    color: rgb(var(--text-primary));
+    transition: background-color var(--motion-fast) ease, border-color var(--motion-fast) ease, color var(--motion-fast) ease;
+  }
+
+  .panvas-control:hover:not(:disabled) {
+    border-color: rgb(var(--border-strong));
+    background: rgb(var(--bg-hover));
+  }
+
+  /* Compact groups make related actions legible without turning the desktop
+     workspace into one long floating pill. The same grouping is used for
+     document mode, view layout, page utilities, and presentation controls. */
+  .panvas-control-group {
+    display: inline-flex;
+    min-height: calc(var(--control-height-sm) + 0.25rem);
+    align-items: center;
+    gap: 0.125rem;
+    border: 1px solid rgb(var(--border-subtle));
+    border-radius: calc(var(--radius-control) + 0.15rem);
+    background: rgb(var(--bg-secondary) / 0.72);
+    padding: 0.125rem;
+  }
+
+  .panvas-control-group > [data-group-label] {
+    margin-inline: 0.35rem 0.15rem;
+    color: rgb(var(--text-tertiary));
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+
+  .panvas-dialog {
+    max-height: min(85vh, calc(100vh - 2rem));
+    border: 1px solid rgb(var(--border-default));
+    border-radius: var(--radius-surface);
+    background: rgb(var(--bg-elevated));
+    box-shadow: var(--shadow-floating);
+  }
+
+  .panvas-dialog-backdrop {
+    background: rgb(14 15 17 / 0.42);
+    backdrop-filter: blur(2px);
+  }
+
+  .panvas-menu {
+    border: 1px solid rgb(var(--border-default));
+    border-radius: var(--radius-surface);
+    background: rgb(var(--bg-elevated) / 0.98);
+    box-shadow: var(--shadow-floating);
+    backdrop-filter: blur(16px);
+  }
+
+  .panvas-menu-item {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    gap: 0.625rem;
+    border-radius: calc(var(--radius-control) - 0.1rem);
+    padding: 0.5rem 0.625rem;
+    color: rgb(var(--text-secondary));
+    font-size: 0.75rem;
+    text-align: left;
+    transition: background-color var(--motion-fast) ease, color var(--motion-fast) ease;
+  }
+
+  .panvas-menu-item:hover,
+  .panvas-menu-item:focus-visible {
+    background: rgb(var(--bg-hover));
+    color: rgb(var(--text-primary));
+  }
+
+  .panvas-action-button {
+    display: inline-flex;
+    min-height: var(--control-height-md);
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: var(--radius-control);
+    padding-inline: 0.8rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    transition: background-color var(--motion-fast) ease, border-color var(--motion-fast) ease, color var(--motion-fast) ease, transform var(--motion-fast) ease;
+  }
+
+  .panvas-action-button:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+
+  .panvas-action-button--secondary {
+    border: 1px solid rgb(var(--border-default));
+    background: rgb(var(--bg-elevated));
+    color: rgb(var(--text-primary));
+  }
+
+  .panvas-action-button--secondary:hover:not(:disabled) {
+    border-color: rgb(var(--border-strong));
+    background: rgb(var(--bg-hover));
+  }
+
+  .panvas-action-button--primary {
+    border: 1px solid rgb(var(--text-primary));
+    background: rgb(var(--text-primary));
+    color: rgb(var(--bg-primary));
+  }
+
+  .panvas-action-button--primary:hover:not(:disabled) {
+    filter: brightness(1.12);
+  }
+
+  .panvas-empty-state {
+    border: 1px dashed rgb(var(--border-default));
+    border-radius: var(--radius-surface);
+    background: rgb(var(--bg-secondary) / 0.58);
+    color: rgb(var(--text-tertiary));
+  }
+
+  .panvas-layer-canvas-decoration { z-index: var(--z-canvas-decoration); }
+  .panvas-layer-floating { z-index: var(--z-floating-control); }
+  .panvas-layer-scrim { z-index: var(--z-floating-control); }
+  .panvas-layer-toolbar { z-index: var(--z-toolbar); }
+  .panvas-overlay { z-index: var(--z-popover); }
+  .panvas-layer-popover { z-index: var(--z-popover); }
+  .panvas-layer-sheet { z-index: var(--z-sheet); }
+  .panvas-layer-modal { z-index: var(--z-modal); }
+  .panvas-layer-system { z-index: var(--z-system); }
+
   /* Tooltip */
   .tooltip {
-    @apply absolute z-50 px-2 py-1 text-xs rounded-md
+    @apply absolute px-2 py-1 text-xs rounded-md
            bg-panvas-bg-elevated text-panvas-text-primary
            border border-panvas-border-default shadow-glass-sm
            animate-scale-in pointer-events-none whitespace-nowrap;
+    z-index: var(--z-popover);
   }
 
   /* Canvas overlay blocks */
@@ -248,6 +493,15 @@
 
 .excalidraw .App-menu_top {
   z-index: 3 !important;
+}
+
+/* Panvas owns the canvas chrome. Keep Excalidraw's help affordances and
+   branding footer from leaking through the wrapper. */
+.excalidraw .help-icon,
+.excalidraw .help-menu-button,
+.excalidraw .layer-ui__wrapper__footer-right,
+.excalidraw .layer-ui__wrapper__footer-left {
+  display: none !important;
 }
 
 /* KaTeX styling overrides for dark theme */
@@ -348,6 +602,12 @@
 }
 
 /* TipTap Editor Styles */
+.ProseMirror strong {
+  /* Tailwind Typography assigns `.prose strong` its own foreground color.
+     TipTap's bold mark must inherit the surrounding textStyle color instead. */
+  color: inherit;
+}
+
 .ProseMirror p.is-editor-empty:first-child::before {
   color: #adb5bd;
   content: attr(data-placeholder);
@@ -356,28 +616,451 @@
   pointer-events: none;
 }
 
-.prose pre {
-  background-color: rgba(var(--bg-secondary), 1) !important;
-  color: rgba(var(--text-primary), 1) !important;
-  border: 1px solid rgba(var(--border-default), 1);
-  border-radius: 0.375rem;
-  padding: 1rem;
-  margin-top: 1rem;
-  margin-bottom: 1rem;
+/* Pasted prose keeps the normal TipTap document and receives only this
+   persisted TextObject presentation wrapper. Code blocks deliberately retain
+   their existing codeBlock surface, including inside mixed clipboard content. */
+.panvas-pasted-note {
+  padding: 0.625rem 0.75rem;
+  border: 1px solid rgba(var(--border-strong), 0.28);
+  border-radius: 0.625rem;
+  background: rgba(var(--bg-elevated), 0.88);
+  box-shadow:
+    0 12px 26px rgba(var(--text-primary), 0.15),
+    0 2px 6px rgba(var(--text-primary), 0.08),
+    inset 0 1px 0 rgba(var(--bg-elevated), 0.6);
+  backdrop-filter: blur(8px);
 }
 
-.prose pre code {
-  background-color: transparent !important;
-  color: inherit !important;
-  border-width: 0;
-  padding: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+.panvas-pasted-note .ProseMirror > :first-child,
+.panvas-pasted-note .ProseMirror > :last-child {
+  margin-top: 0;
+  margin-bottom: 0;
 }
 
-.prose code {
+/* A mixed plain-text/code paste gives prose its note treatment without
+   changing the existing codeBlock node or its syntax-highlighted CSS. */
+.panvas-mixed-paste .ProseMirror > :not(pre) {
+  margin: 0.5rem 0;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid rgba(var(--border-strong), 0.26);
+  border-radius: 0.625rem;
+  background: rgba(var(--bg-elevated), 0.86);
+  box-shadow:
+    0 8px 18px rgba(var(--text-primary), 0.11),
+    0 2px 5px rgba(var(--text-primary), 0.06),
+    inset 0 1px 0 rgba(var(--bg-elevated), 0.48);
+  backdrop-filter: blur(8px);
+}
+
+/* TipTap CodeBlock & Syntax Highlighting */
+.ProseMirror pre {
+  background: #18181b !important;
+  color: #f4f4f5 !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+  padding: 0.875rem 1rem !important;
+  border-radius: 0.625rem !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  margin: 0.75rem 0 !important;
+  overflow-x: auto;
+  line-height: 1.55;
+  tab-size: 2;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.ProseMirror pre code {
+  color: #f4f4f5 !important;
+  padding: 0 !important;
+  background: none !important;
+  font-size: 0.8125rem !important;
+  display: block;
+}
+
+/* Clipboard HTML may retain source span colors. Unclassified spans inherit
+   the crisp readable code surface color; lowlight token classes below take priority. */
+.ProseMirror pre span:not([class*="hljs-"]) {
+  color: #f4f4f5 !important;
+}
+
+.panvas-text-link {
+  color: rgb(var(--accent-blue)) !important;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: color 140ms ease, text-decoration-color 140ms ease;
+}
+
+.panvas-text-link:hover {
+  color: rgb(var(--accent-violet)) !important;
+  text-decoration-thickness: 2px;
+}
+
+.prose code:not(pre code) {
   background-color: rgba(var(--bg-secondary), 1);
   color: rgba(var(--text-accent), 1);
   border: 1px solid rgba(var(--border-subtle), 1);
   border-radius: 0.25rem;
   padding: 0.125rem 0.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.85em;
+}
+
+/* Syntax Highlighting Tokens (High Contrast, Universal Colors for Dark Code Surface) */
+.hljs-comment,
+.hljs-quote {
+  color: #94a3b8 !important;
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-doctag {
+  color: #c084fc !important;
+  font-weight: 600;
+}
+
+.hljs-subst,
+.hljs-punctuation {
+  color: #e2e8f0 !important;
+}
+
+.hljs-string,
+.hljs-title,
+.hljs-section,
+.hljs-attribute,
+.hljs-literal,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-addition {
+  color: #4ade80 !important;
+}
+
+.hljs-type,
+.hljs-class,
+.hljs-title.class_ {
+  color: #2dd4bf !important;
+}
+
+.hljs-function,
+.hljs-title.function_ {
+  color: #38bdf8 !important;
+}
+
+.hljs-number,
+.hljs-regexp,
+.hljs-link {
+  color: #fb923c !important;
+}
+
+.hljs-variable,
+.hljs-params {
+  color: #f472b6 !important;
+}
+
+.hljs-built_in,
+.hljs-meta {
+  color: #facc15 !important;
+}
+
+.hljs-property,
+.hljs-attr {
+  color: #22d3ee !important;
+}
+
+.hljs-operator,
+.hljs-symbol,
+.hljs-bullet {
+  color: #e2e8f0 !important;
+}
+
+.hljs-deletion {
+  color: #f87171 !important;
+}
+
+/* Token classes lowlight emits that the palette above does not list
+   explicitly (HTML/XML tags, CSS selectors, escape sequences). Without
+   these they inherit the near-white base code color; give each an
+   explicit readable hue on the dark code surface. */
+.hljs-tag,
+.hljs-name {
+  color: #4ade80 !important;
+}
+
+.hljs-selector-class,
+.hljs-selector-id,
+.hljs-selector-attr,
+.hljs-selector-pseudo {
+  color: #c084fc !important;
+}
+
+.hljs-char.escape_ {
+  color: #fb923c !important;
+}
+
+.hljs-variable.language_,
+.hljs-variable.constant_ {
+  color: #facc15 !important;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: bold;
+}
+
+/* TipTap Tables */
+.ProseMirror table {
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 0.375rem;
+  border: 1px solid rgba(120, 120, 120, 0.35);
+}
+
+.ProseMirror th,
+.ProseMirror td {
+  min-width: 1em;
+  border: 1px solid rgba(120, 120, 120, 0.3);
+  padding: 0.5rem 0.75rem;
+  vertical-align: top;
+  box-sizing: border-box;
+  position: relative;
+}
+
+.ProseMirror th {
+  font-weight: 600;
+  text-align: left;
+  background-color: rgba(120, 120, 120, 0.12);
+}
+
+.ProseMirror .selectedCell:after {
+  z-index: 2;
+  position: absolute;
+  content: "";
+  left: 0; right: 0; top: 0; bottom: 0;
+  background: rgba(59, 130, 246, 0.15);
+  pointer-events: none;
+}
+
+/* ============================================
+   Product shell reformation
+   These classes deliberately decorate existing, repository-backed screens;
+   they do not introduce a second navigation or persistence model.
+   ============================================ */
+.panvas-app-shell {
+  background:
+    radial-gradient(circle at 50% -20%, rgb(var(--accent-violet) / 0.045), transparent 36rem),
+    rgb(var(--bg-primary));
+}
+
+.panvas-topbar {
+  height: 3.25rem;
+  background: rgb(var(--bg-primary) / 0.94);
+  border-color: rgb(var(--border-subtle));
+  backdrop-filter: blur(18px);
+}
+
+.panvas-document-tabs {
+  height: 2.35rem;
+  background: rgb(var(--bg-secondary) / 0.86);
+  border-color: rgb(var(--border-subtle));
+}
+
+.panvas-document-tabs [role='tab'] {
+  height: 1.85rem;
+  border: 1px solid transparent;
+}
+
+.panvas-document-tabs [role='tab'][aria-selected='true'] {
+  border-color: rgb(var(--border-default));
+  box-shadow: 0 1px 2px rgb(30 28 22 / 0.08);
+}
+
+.panvas-sidebar {
+  background: rgb(var(--bg-primary) / 0.93);
+  border-color: rgb(var(--border-subtle));
+}
+
+.panvas-sidebar .sidebar-item,
+.panvas-sidebar button {
+  border-radius: 0.45rem;
+}
+
+.panvas-library {
+  background:
+    radial-gradient(circle at 80% -15%, rgb(var(--accent-violet) / 0.05), transparent 34rem),
+    rgb(var(--bg-secondary) / 0.62);
+}
+
+.panvas-library > div {
+  gap: 2rem;
+}
+
+.panvas-library header h1 {
+  font-size: clamp(1.7rem, 2.4vw, 2.25rem);
+  letter-spacing: -0.045em;
+}
+
+.panvas-library header > div:last-child > button:last-child {
+  background: rgb(var(--text-primary));
+  border-color: rgb(var(--text-primary));
+  color: rgb(var(--bg-primary));
+  box-shadow: 0 2px 3px rgb(20 19 16 / 0.14);
+}
+
+.panvas-library header > div:last-child > button:last-child:hover {
+  filter: brightness(1.14);
+}
+
+.panvas-library aside {
+  padding-right: 1.25rem;
+}
+
+.panvas-library section > h2 {
+  letter-spacing: -0.025em;
+}
+
+.panvas-library-card {
+  border-color: rgb(var(--border-default));
+  box-shadow: 0 1px 1px rgb(25 23 18 / 0.03);
+}
+
+.panvas-library-card:hover {
+  border-color: rgb(var(--border-strong) / 0.56);
+  box-shadow: 0 13px 28px rgb(35 31 22 / 0.09);
+}
+
+.panvas-library-preview {
+  background-image: linear-gradient(135deg, rgb(var(--bg-secondary)), rgb(var(--bg-tertiary) / 0.7));
+}
+
+.panvas-notebook-workspace {
+  background: rgb(var(--bg-secondary));
+}
+
+.panvas-notebook-chrome {
+  padding: 0.85rem 1rem;
+}
+
+.panvas-notebook-viewport {
+  background:
+    radial-gradient(circle at 50% 0%, rgb(var(--bg-primary) / 0.76), transparent 28rem),
+    rgb(var(--bg-secondary));
+}
+
+.panvas-floating-toolbar {
+  padding-top: 0.15rem;
+}
+
+.panvas-toolbar-surface {
+  border: 1px solid rgb(var(--border-default));
+  background: rgb(var(--bg-elevated) / 0.92);
+  box-shadow: 0 12px 28px rgb(30 27 22 / 0.16), 0 1px 2px rgb(30 27 22 / 0.08);
+}
+
+.panvas-workspace-controls,
+.panvas-page-utilities {
+  border: 1px solid rgb(var(--border-default));
+  background: rgb(var(--bg-elevated) / 0.92);
+  box-shadow: 0 8px 20px rgb(29 26 21 / 0.14), 0 1px 2px rgb(29 26 21 / 0.08);
+}
+
+.panvas-local-mode-prompt {
+  border-color: rgb(var(--border-default));
+  background: rgb(var(--bg-elevated) / 0.96);
+  box-shadow: 0 14px 34px rgb(30 28 23 / 0.17);
+}
+
+.panvas-local-mode-prompt h3 {
+  color: rgb(var(--text-primary)) !important;
+}
+
+.panvas-local-mode-prompt p {
+  color: rgb(var(--text-secondary)) !important;
+}
+
+.panvas-toast {
+  max-width: min(24rem, calc(100vw - 2rem));
+}
+
+@media (max-width: 720px) {
+  .panvas-toast {
+    left: 1rem;
+    right: 1rem;
+    top: auto;
+    bottom: 4rem;
+  }
+}
+
+.panvas-properties-panel {
+  background: rgb(var(--bg-primary) / 0.96);
+  border-color: rgb(var(--border-default));
+  box-shadow: -12px 0 28px rgb(27 25 20 / 0.08);
+}
+
+.panvas-properties-panel > div:first-child {
+  background: rgb(var(--bg-secondary) / 0.62);
+}
+
+.panvas-notebook-workspace .notebook-viewport > div > div {
+  filter: drop-shadow(0 10px 18px rgb(34 31 23 / 0.08));
+}
+
+.panvas-handwriting-dialog {
+  background: rgb(var(--bg-elevated));
+  border-color: rgb(var(--border-default));
+  box-shadow: 0 24px 65px rgb(0 0 0 / 0.28), 0 2px 8px rgb(0 0 0 / 0.12);
+}
+
+@media (max-width: 1023px) {
+  .panvas-topbar { height: 3rem; }
+  .panvas-document-tabs { height: 2.2rem; }
+  .panvas-library > div { padding-left: 1.25rem; padding-right: 1.25rem; }
+}
+
+@media (max-width: 639px) {
+  .panvas-library > div { padding-top: 1.25rem; gap: 1.25rem; }
+  .panvas-library header h1 { font-size: 1.65rem; }
+  .panvas-notebook-chrome { padding-left: 0.5rem; padding-right: 0.5rem; }
+}
+
+/*
+ * Mobile presentation (<600px, phones only). Desktop and tablet rendering
+ * is deliberately untouched. Floating surfaces clamp to the viewport instead
+ * of overflowing it, and the Page & View sheet renders as viewport-level
+ * chrome with a top-lit shadow and safe-area padding.
+ */
+@media (max-width: 599px) {
+  .panvas-floating-surface {
+    max-width: calc(100vw - 1rem);
+    /* Tighter mobile chrome: smaller radius and a lighter lift so floating
+       controls read as compact phone UI instead of scaled desktop surfaces. */
+    border-radius: 0.75rem;
+    box-shadow: 0 6px 18px rgb(30 27 22 / 0.14), 0 1px 2px rgb(30 27 22 / 0.10);
+  }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  .panvas-properties-panel {
+    box-shadow: 0 -18px 40px rgb(27 25 20 / 0.16);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }

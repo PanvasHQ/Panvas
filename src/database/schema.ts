@@ -7,9 +7,18 @@ import Dexie, { type Table } from 'dexie';
 import type { Workspace, Folder, CanvasFile } from '@/types/workspace';
 import type { CanvasData, CustomBlock, PdfFileData, ImageFileData } from '@/types/canvas';
 import type { SyncQueueItem } from '@/types/sync';
-import type { Notebook, NotebookSection, NotebookPage } from '@/types/notebook';
+import type {
+  Notebook,
+  NotebookPage,
+  NotebookPageContentRecord,
+  NotebookPageDrawingRecord,
+  NotebookSection,
+} from '@/types/notebook';
 import type { PdfAnnotation } from '@/types/pdfAnnotation';
-import { generateId } from '@/lib/utils/id';
+import type { SyncJournalEntry } from '@/services/cloudsync/types';
+
+export const SYSTEM_DEFAULT_WORKSPACE_ID = 'ws-system-default-v1';
+export const SYSTEM_WELCOME_CANVAS_ID = 'canvas-system-welcome-v1';
 
 export class PanvasDB extends Dexie {
   workspaces!: Table<Workspace>;
@@ -22,7 +31,10 @@ export class PanvasDB extends Dexie {
   notebooks!: Table<Notebook>;
   notebookSections!: Table<NotebookSection>;
   notebookPages!: Table<NotebookPage>;
+  notebookPageContents!: Table<NotebookPageContentRecord>;
+  notebookPageDrawings!: Table<NotebookPageDrawingRecord>;
   imageFiles!: Table<ImageFileData>;
+  syncJournal!: Table<SyncJournalEntry>;
 
   constructor() {
     super('panvas');
@@ -121,6 +133,56 @@ export class PanvasDB extends Dexie {
       notebookPages: 'id, notebookId, sectionId, order, updatedAt, userId',
       imageFiles: 'id, canvasFileId, userId',
     });
+
+    // Version 5: browser-local notebook payloads. Electron persists these
+    // payloads as per-page JSON files; browser mode needs an equivalent
+    // canonical IndexedDB path instead of silently dropping writes.
+    this.version(5).stores({
+      workspaces: 'id, name, updatedAt, isPinned, syncStatus, userId',
+      folders: 'id, workspaceId, parentId, order, syncStatus, userId',
+      canvasFiles: 'id, workspaceId, folderId, updatedAt, lastOpenedAt, isPinned, syncStatus, userId',
+      canvasData: 'canvasFileId, userId',
+      customBlocks: 'id, canvasFileId, type, userId',
+      pdfFiles: 'id, canvasFileId, userId',
+      syncQueue: '++id, entityType, entityId, status, createdAt',
+      notebooks: 'id, workspaceId, folderId, order, updatedAt, userId',
+      notebookSections: 'id, notebookId, order, updatedAt, userId',
+      notebookPages: 'id, notebookId, sectionId, order, updatedAt, userId',
+      notebookPageContents: 'pageId, workspaceId, notebookId, updatedAt, userId',
+      notebookPageDrawings: 'pageId, workspaceId, notebookId, updatedAt, userId',
+      imageFiles: 'id, canvasFileId, userId',
+    }).upgrade(tx => {
+      // Older browser rows predate trash parity. Normalizing the marker keeps
+      // read-path filtering and restore behavior deterministic after upgrade.
+      tx.table('notebooks').toCollection().modify(item => {
+        if (item.deletedAt === undefined) item.deletedAt = null;
+      });
+      tx.table('notebookSections').toCollection().modify(item => {
+        if (item.deletedAt === undefined) item.deletedAt = null;
+      });
+      tx.table('notebookPages').toCollection().modify(item => {
+        if (item.deletedAt === undefined) item.deletedAt = null;
+      });
+    });
+
+    // Version 6: provider-neutral sync journal (Cloud Sync Phase 1).
+    // Strictly additive — every existing store definition is unchanged.
+    this.version(6).stores({
+      workspaces: 'id, name, updatedAt, isPinned, syncStatus, userId',
+      folders: 'id, workspaceId, parentId, order, syncStatus, userId',
+      canvasFiles: 'id, workspaceId, folderId, updatedAt, lastOpenedAt, isPinned, syncStatus, userId',
+      canvasData: 'canvasFileId, userId',
+      customBlocks: 'id, canvasFileId, type, userId',
+      pdfFiles: 'id, canvasFileId, userId',
+      syncQueue: '++id, entityType, entityId, status, createdAt',
+      notebooks: 'id, workspaceId, folderId, order, updatedAt, userId',
+      notebookSections: 'id, notebookId, order, updatedAt, userId',
+      notebookPages: 'id, notebookId, sectionId, order, updatedAt, userId',
+      notebookPageContents: 'pageId, workspaceId, notebookId, updatedAt, userId',
+      notebookPageDrawings: 'pageId, workspaceId, notebookId, updatedAt, userId',
+      imageFiles: 'id, canvasFileId, userId',
+      syncJournal: 'entryId, entityId, entityType, workspaceId, state, updatedAt',
+    });
   }
 }
 
@@ -130,14 +192,20 @@ export const db = new PanvasDB();
 // Initialize with a default workspace if empty
 export async function initializeDatabase(userId: string | null = null): Promise<void> {
   // Only check workspaces belonging to the targeted userId context
-  const workspaceCount = await db.workspaces.where('userId').equals(userId ?? '').count();
+  const workspaceCount = await db.workspaces
+    .filter(workspace => (workspace.userId ?? null) === (userId ?? null) && !workspace.deletedAt)
+    .count();
   if (workspaceCount === 0) {
     const now = Date.now();
-    const defaultWorkspaceId = generateId('ws');
-    const defaultCanvasId = generateId('canvas');
+    const defaultWorkspaceId = SYSTEM_DEFAULT_WORKSPACE_ID;
+    const defaultCanvasId = SYSTEM_WELCOME_CANVAS_ID;
 
     await db.transaction('rw', [db.workspaces, db.canvasFiles, db.canvasData], async () => {
-      await db.workspaces.add({
+      const existingSystemWorkspace = await db.workspaces.get(defaultWorkspaceId);
+      if (existingSystemWorkspace && (existingSystemWorkspace.userId ?? null) !== (userId ?? null)) {
+        await db.workspaces.update(defaultWorkspaceId, { userId, syncStatus: userId ? 'pending' : 'local' });
+      }
+      if (!existingSystemWorkspace) await db.workspaces.add({
         id: defaultWorkspaceId,
         name: 'My Workspace',
         createdAt: now,
@@ -146,9 +214,16 @@ export async function initializeDatabase(userId: string | null = null): Promise<
         syncStatus: userId ? 'pending' : 'local',
         userId: userId,
         deletedAt: null,
+        isSystem: true,
+        systemType: 'default',
       });
 
-      await db.canvasFiles.add({
+      const existingWelcomeCanvas = await db.canvasFiles.get(defaultCanvasId);
+      if (existingWelcomeCanvas && (existingWelcomeCanvas.userId ?? null) !== (userId ?? null)) {
+        await db.canvasFiles.update(defaultCanvasId, { userId, workspaceId: defaultWorkspaceId, syncStatus: userId ? 'pending' : 'local' });
+        await db.canvasData.update(defaultCanvasId, { userId });
+      }
+      if (!existingWelcomeCanvas) await db.canvasFiles.add({
         id: defaultCanvasId,
         workspaceId: defaultWorkspaceId,
         folderId: null,
@@ -161,9 +236,11 @@ export async function initializeDatabase(userId: string | null = null): Promise<
         syncStatus: userId ? 'pending' : 'local',
         userId: userId,
         deletedAt: null,
+        isSystem: true,
+        systemType: 'welcome',
       });
 
-      await db.canvasData.add({
+      if (!(await db.canvasData.get(defaultCanvasId))) await db.canvasData.add({
         canvasFileId: defaultCanvasId,
         elements: [],
         appState: {},
@@ -174,13 +251,13 @@ export async function initializeDatabase(userId: string | null = null): Promise<
         userId: userId,
       });
 
-      if (userId) {
+      if (userId && !existingSystemWorkspace && !existingWelcomeCanvas) {
         await db.syncQueue.bulkAdd([
           {
             entityType: 'workspace',
             entityId: defaultWorkspaceId,
             action: 'create',
-            data: { id: defaultWorkspaceId, name: 'My Workspace', createdAt: now, updatedAt: now, isPinned: false, userId },
+            data: { id: defaultWorkspaceId, name: 'My Workspace', createdAt: now, updatedAt: now, isPinned: false, userId, isSystem: true, systemType: 'default' },
             status: 'pending',
             attempts: 0,
             createdAt: now,
@@ -189,7 +266,7 @@ export async function initializeDatabase(userId: string | null = null): Promise<
             entityType: 'canvasFile',
             entityId: defaultCanvasId,
             action: 'create',
-            data: { id: defaultCanvasId, workspaceId: defaultWorkspaceId, folderId: null, name: 'Welcome Canvas', createdAt: now, updatedAt: now, lastOpenedAt: now, order: 0, isPinned: false, userId },
+            data: { id: defaultCanvasId, workspaceId: defaultWorkspaceId, folderId: null, name: 'Welcome Canvas', createdAt: now, updatedAt: now, lastOpenedAt: now, order: 0, isPinned: false, userId, isSystem: true, systemType: 'welcome' },
             status: 'pending',
             attempts: 0,
             createdAt: now,
@@ -218,8 +295,9 @@ export async function clearDatabase(): Promise<void> {
   await Dexie.delete('panvas');
   
   // Clear stored memory pointers that might re-hydrate stale data
-  window.localStorage.removeItem('panvas.activeWorkspaceId');
-  window.localStorage.removeItem('panvas.activeCanvasId');
+  const localStorage = (globalThis as any).localStorage;
+  localStorage?.removeItem('panvas.activeWorkspaceId');
+  localStorage?.removeItem('panvas.activeCanvasId');
   
   // Re-open and re-initialize with a fresh default state
   await db.open();

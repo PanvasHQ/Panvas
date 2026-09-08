@@ -7,6 +7,8 @@ import { useLocation } from 'wouter';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, Cloud, ShieldAlert, X } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
+import { useCloudSyncStore } from '@/stores/cloudSyncStore';
+import { CLOUD_SYNC_ENABLED } from '@/config/features';
 
 interface AuthGuardProps {
   children: React.ReactNode;
@@ -14,6 +16,7 @@ interface AuthGuardProps {
 
 export function AuthGuard({ children }: AuthGuardProps) {
   const { isAuthenticated, isLoading } = useAuthStore();
+  const googleDriveConnection = useCloudSyncStore(state => state.connectionByProvider.googledrive);
   const [, navigate] = useLocation();
   const [showSoftPrompt, setShowSoftPrompt] = useState(false);
 
@@ -21,14 +24,14 @@ export function AuthGuard({ children }: AuthGuardProps) {
   // Instead, we just show a soft prompt if they aren't authenticated, letting them know
   // cloud sync is disabled, but allowing them to continue offline.
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
+    if (!isLoading && !isAuthenticated && !googleDriveConnection) {
       // Small delay before showing prompt to not be too aggressive
       const timer = setTimeout(() => setShowSoftPrompt(true), 1500);
       return () => clearTimeout(timer);
     } else {
       setShowSoftPrompt(false);
     }
-  }, [isLoading, isAuthenticated]);
+  }, [isLoading, isAuthenticated, googleDriveConnection]);
 
   if (isLoading) {
     return (
@@ -47,12 +50,12 @@ export function AuthGuard({ children }: AuthGuardProps) {
 
       {/* Soft prompt overlay for unauthenticated users in the workspace */}
       <AnimatePresence>
-        {showSoftPrompt && (
+        {showSoftPrompt && CLOUD_SYNC_ENABLED && !googleDriveConnection && (
           <motion.div
             initial={{ opacity: 0, y: 50, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="fixed bottom-6 right-6 z-50 w-[340px] rounded-xl glass-panel p-5 shadow-2xl border border-white/10"
+            className="panvas-local-mode-prompt panvas-layer-system fixed bottom-16 right-5 w-[300px] rounded-xl glass-panel p-4 shadow-2xl"
           >
             <button 
               onClick={() => setShowSoftPrompt(false)} 
@@ -69,9 +72,9 @@ export function AuthGuard({ children }: AuthGuardProps) {
               <div>
                 <h3 className="text-sm font-semibold text-[#E8E8E8]">Local Mode Active</h3>
                 <p className="text-xs text-[#737373] mt-1 leading-relaxed">
-                  You're using Panvas offline. Your data is safely stored on this device, but won't sync to the cloud.
+                  Your data is stored on this device. Cloud sync is {CLOUD_SYNC_ENABLED ? 'available after you sign in' : 'disabled in this build'}.
                 </p>
-                <div className="mt-3 flex gap-2">
+                {CLOUD_SYNC_ENABLED && <div className="mt-3 flex gap-2">
                   <button 
                     onClick={() => navigate('/auth/login')}
                     className="px-3 py-1.5 rounded-md bg-[#E8E8E8] text-[#0D0D0D] text-xs font-semibold hover:bg-white transition-colors flex items-center gap-1.5"
@@ -85,7 +88,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
                   >
                     Create Account
                   </button>
-                </div>
+                </div>}
               </div>
             </div>
           </motion.div>

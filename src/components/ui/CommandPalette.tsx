@@ -15,18 +15,26 @@ import {
   Sigma,
   FileUp,
   Cloud,
-  Clock3,
-  CornerDownRight,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { useUIStore } from '@/stores/uiStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { useCanvasStore } from '@/stores/canvasStore';
+import { useAuthStore } from '@/stores/authStore';
+import {
+  createLocalSearchScopeKey,
+  localSearchIndex,
+  rebuildLocalSearchIndex,
+  type LocalSearchDocument,
+  type LocalSearchSource,
+} from '@/services/search/LocalSearchIndex';
+import { subscribeToPageSearchSaves } from '@/services/search/searchIndexEvents';
 
 interface CommandItem {
   id: string;
   label: string;
-  description?: string;
+  description?: React.ReactNode;
+  searchText?: string;
   icon: React.ReactNode;
   category: string;
   action: () => void;
@@ -36,10 +44,16 @@ interface CommandItem {
 export function CommandPalette() {
   const [, navigate] = useLocation();
   const { isCommandPaletteOpen, closeCommandPalette, openCreateDialog, toggleSidebar } = useUIStore();
-  const { canvasFiles, setActiveCanvas } = useWorkspaceStore();
+  const {
+    activeWorkspaceId, folders, canvasFiles, notebooks, notebookSections, notebookPages,
+    setActiveWorkspace, loadWorkspaceContents, setActiveCanvas, setActiveNotebook, setActiveNotebookSection, setActivePage,
+  } = useWorkspaceStore();
   const { addBlock, currentData } = useCanvasStore();
+  const userId = useAuthStore(state => state.user?.id ?? null);
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [searchDocuments, setSearchDocuments] = useState<LocalSearchDocument[]>([]);
+  const [isIndexing, setIsIndexing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Build command list
@@ -128,16 +142,87 @@ export function CommandPalette() {
     return items;
   }, [canvasFiles, currentData, setActiveCanvas, closeCommandPalette, openCreateDialog, toggleSidebar, navigate, addBlock]);
 
+  useEffect(() => {
+    if (!isCommandPaletteOpen || !activeWorkspaceId) return;
+    let cancelled = false;
+    const source: LocalSearchSource = {
+      userId, workspaceId: activeWorkspaceId, folders, canvasFiles, notebooks,
+      sections: notebookSections, pages: notebookPages,
+    };
+    const scopeKey = createLocalSearchScopeKey(source);
+    if (localSearchIndex.isValidFor(scopeKey)) {
+      setSearchDocuments([...localSearchIndex.getAll()]);
+      setIsIndexing(false);
+      return () => { cancelled = true; };
+    }
+    setIsIndexing(true);
+    void rebuildLocalSearchIndex(source).then(documents => {
+      if (!cancelled) setSearchDocuments(documents);
+    }).catch(error => {
+      console.error('[CommandPalette] Local search rebuild failed:', error);
+      if (!cancelled) setSearchDocuments([]);
+    }).finally(() => {
+      if (!cancelled) setIsIndexing(false);
+    });
+    return () => { cancelled = true; };
+  }, [isCommandPaletteOpen, activeWorkspaceId, userId, folders, canvasFiles, notebooks, notebookSections, notebookPages]);
+
+  useEffect(() => {
+    if (!isCommandPaletteOpen) return;
+    return subscribeToPageSearchSaves(() => {
+      setSearchDocuments([...localSearchIndex.getAll()]);
+    });
+  }, [isCommandPaletteOpen]);
+
+  const contentCommands = useMemo<CommandItem[]>(() => localSearchIndex.search(query).map(result => ({
+    id: `content-${result.id}`,
+    label: result.title,
+    description: result.excerpt
+      ? <HighlightedSnippet text={result.excerpt} query={query} />
+      : `${result.kind} · local canonical record`,
+    searchText: result.excerpt,
+    category: result.matchSource === 'title' || result.matchSource === 'metadata'
+      ? 'Documents, canvases, and PDFs'
+      : 'Handwritten and rich-text notes',
+    icon: <Search size={15} className="text-panvas-accent-blue" />,
+    action: () => {
+      closeCommandPalette();
+      if (result.kind === 'canvas') {
+        setActiveCanvas(result.id);
+        navigate('/app');
+        return;
+      }
+      if (result.kind === 'folder') {
+        navigate('/app/library');
+        return;
+      }
+      const notebookId = result.notebookId ?? (result.kind === 'notebook' ? result.id : undefined);
+      if (!notebookId) return;
+      void (async () => {
+        if (result.workspaceId !== useWorkspaceStore.getState().activeWorkspaceId) {
+          setActiveWorkspace(result.workspaceId);
+          await loadWorkspaceContents(result.workspaceId);
+        }
+        await setActiveNotebook(notebookId);
+        if (result.sectionId) await setActiveNotebookSection(result.sectionId);
+        if (result.pageId) setActivePage(result.pageId);
+        if (result.pdfPageNumber) sessionStorage.setItem(`panvas.pdfTargetPage.${result.pageId}`, String(result.pdfPageNumber));
+        navigate('/app');
+      })();
+    },
+  })), [query, searchDocuments, closeCommandPalette, navigate, setActiveWorkspace, loadWorkspaceContents, setActiveCanvas, setActiveNotebook, setActiveNotebookSection, setActivePage]);
+
   // Filter commands
   const filteredCommands = useMemo(() => {
     if (!query.trim()) return commands;
     const q = query.toLowerCase();
-    return commands.filter(
+    return [...contentCommands, ...commands.filter(
       cmd => cmd.label.toLowerCase().includes(q) ||
              cmd.category.toLowerCase().includes(q) ||
-             cmd.description?.toLowerCase().includes(q)
-    );
-  }, [commands, query]);
+             cmd.searchText?.toLowerCase().includes(q) ||
+             (typeof cmd.description === 'string' && cmd.description.toLowerCase().includes(q))
+    )];
+  }, [commands, contentCommands, query]);
 
   // Group by category
   const groupedCommands = useMemo(() => {
@@ -178,7 +263,7 @@ export function CommandPalette() {
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]">
+      <div className="panvas-layer-modal fixed inset-0 flex items-start justify-center pt-[15vh]">
         {/* Backdrop */}
         <motion.div
           initial={{ opacity: 0 }}
@@ -204,7 +289,7 @@ export function CommandPalette() {
               value={query}
               onChange={e => { setQuery(e.target.value); setSelectedIndex(0); }}
               onKeyDown={handleKeyDown}
-              placeholder="Search files and commands..."
+              placeholder={isIndexing ? 'Indexing local content…' : 'Search titles, notes, canvases, and PDFs…'}
               className="flex-1 bg-transparent text-sm text-panvas-text-primary outline-none
                          placeholder:text-panvas-text-tertiary"
               id="command-palette-input"
@@ -274,21 +359,26 @@ export function CommandPalette() {
   );
 }
 
+function HighlightedSnippet({ text, query }: { text: string; query: string }) {
+  const rawTerms = query.trim().split(/\s+/).filter(Boolean);
+  if (rawTerms.length === 0) return <>{text}</>;
+  const escapedTerms = rawTerms.map(term => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const matcher = new RegExp(`(${escapedTerms.join('|')})`, 'ig');
+  const normalizedTerms = new Set(rawTerms.map(term => term.toLocaleLowerCase()));
+  return <>{text.split(matcher).map((part, index) => normalizedTerms.has(part.toLocaleLowerCase())
+    ? <mark key={`${part}-${index}`} className="rounded-sm bg-panvas-accent-amber/25 text-inherit">{part}</mark>
+    : <React.Fragment key={`${part}-${index}`}>{part}</React.Fragment>)}</>;
+}
+
 function CommandPaletteHome({ commands, selectedIndex, setSelectedIndex }: { commands: CommandItem[]; selectedIndex: number; setSelectedIndex: (index: number) => void }) {
   const quickActions = commands.filter(command => command.category === 'Actions');
   const files = commands.filter(command => command.category === 'Files').slice(0, 4);
   return <>
-    <PaletteHint icon={<Clock3 size={14} />} title="Recent Searches" description="Your recent searches will appear here." />
     <PaletteSection title="Quick Actions" items={quickActions} allItems={commands} selectedIndex={selectedIndex} setSelectedIndex={setSelectedIndex} />
-    <PaletteSection title="Jump To" items={files} allItems={commands} selectedIndex={selectedIndex} setSelectedIndex={setSelectedIndex} empty="Create a canvas to jump between work." />
-    <PaletteSection title="Recently Opened" items={files} allItems={commands} selectedIndex={selectedIndex} setSelectedIndex={setSelectedIndex} empty="Recently opened items will appear here." />
+    <PaletteSection title="Open canvases" items={files} allItems={commands} selectedIndex={selectedIndex} setSelectedIndex={setSelectedIndex} empty="No canvases are available in this workspace yet." />
   </>;
 }
 
-function PaletteHint({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
-  return <div className="mx-2 mb-2 flex items-center gap-3 rounded-lg border border-dashed border-panvas-border-subtle px-3 py-3 text-xs text-panvas-text-tertiary"><span>{icon}</span><div><div className="font-medium text-panvas-text-secondary">{title}</div><div className="mt-0.5 text-2xs">{description}</div></div></div>;
-}
-
 function PaletteSection({ title, items, allItems, selectedIndex, setSelectedIndex, empty }: { title: string; items: CommandItem[]; allItems: CommandItem[]; selectedIndex: number; setSelectedIndex: (index: number) => void; empty?: string }) {
-  return <div className="mb-2"><div className="px-4 py-1.5 text-2xs font-medium uppercase tracking-[0.12em] text-panvas-text-tertiary">{title}</div>{items.length === 0 && empty ? <div className="px-4 py-2 text-xs text-panvas-text-tertiary">{empty}</div> : items.map(item => { const index = allItems.indexOf(item); return <button key={`${title}-${item.id}`} onClick={item.action} onMouseEnter={() => setSelectedIndex(index)} className={`flex w-full items-center gap-3 px-4 py-2 text-left text-sm transition-colors ${index === selectedIndex ? 'bg-panvas-bg-hover text-panvas-text-primary' : 'text-panvas-text-secondary hover:bg-panvas-bg-hover/50'}`}><span className="flex w-5 flex-shrink-0 justify-center">{item.icon}</span><span className="min-w-0 flex-1 truncate">{item.label}</span>{item.shortcut ? <kbd className="rounded border border-panvas-border-subtle bg-panvas-bg-tertiary px-1.5 py-0.5 text-2xs text-panvas-text-tertiary">{item.shortcut}</kbd> : <CornerDownRight size={13} className="text-panvas-text-tertiary" />}</button>; })}</div>;
+  return <div className="mb-2"><div className="px-4 py-1.5 text-2xs font-medium uppercase tracking-[0.12em] text-panvas-text-tertiary">{title}</div>{items.length === 0 && empty ? <div className="mx-2 rounded-lg border border-dashed border-panvas-border-default px-3 py-3 text-xs text-panvas-text-tertiary">{empty}</div> : items.map(item => { const index = allItems.indexOf(item); return <button key={`${title}-${item.id}`} onClick={item.action} onMouseEnter={() => setSelectedIndex(index)} className={`flex w-full items-center gap-3 px-4 py-2 text-left text-sm transition-colors ${index === selectedIndex ? 'bg-panvas-bg-hover text-panvas-text-primary' : 'text-panvas-text-secondary hover:bg-panvas-bg-hover/50'}`}><span className="flex w-5 flex-shrink-0 justify-center">{item.icon}</span><span className="min-w-0 flex-1 truncate">{item.label}</span>{item.shortcut && <kbd className="rounded border border-panvas-border-subtle bg-panvas-bg-tertiary px-1.5 py-0.5 text-2xs text-panvas-text-tertiary">{item.shortcut}</kbd>}</button>; })}</div>;
 }

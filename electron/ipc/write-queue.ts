@@ -18,36 +18,32 @@ class WriteQueue {
     });
   }
 
-  private async processNext() {
+  private async processNext(): Promise<void> {
     if (this.isWriting || this.queue.length === 0) return;
     this.isWriting = true;
-    
-    // Coalesce writes to the same file: take the last one in the queue for each file
-    const taskMap = new Map<string, WriteTask>();
-    const callbacksToResolve: { resolve: () => void, reject: (e: Error) => void }[] = [];
-    
-    while (this.queue.length > 0) {
-      const task = this.queue.shift()!;
-      // Overwrite previous task for the same file
-      taskMap.set(task.filePath, task);
-      callbacksToResolve.push({ resolve: task.resolve, reject: task.reject });
-    }
-    
-    for (const [filePath, task] of taskMap.entries()) {
-      try {
-        await this.atomicWrite(filePath, task.data);
-      } catch (err) {
-        console.error('Failed atomic write:', err);
+    try {
+      // Coalesce writes to the same file while preserving each caller's result.
+      const taskMap = new Map<string, WriteTask[]>();
+      while (this.queue.length > 0) {
+        const task = this.queue.shift()!;
+        const tasks = taskMap.get(task.filePath) ?? [];
+        tasks.push(task);
+        taskMap.set(task.filePath, tasks);
       }
-    }
-    
-    for (const cb of callbacksToResolve) {
-      cb.resolve();
-    }
-    
-    this.isWriting = false;
-    if (this.queue.length > 0) {
-      this.processNext();
+
+      for (const [filePath, tasks] of taskMap.entries()) {
+        const latest = tasks[tasks.length - 1];
+        try {
+          await this.atomicWrite(filePath, latest.data);
+          tasks.forEach(({ resolve }) => resolve());
+        } catch (error) {
+          const failure = error instanceof Error ? error : new Error('Atomic write failed.');
+          tasks.forEach(({ reject }) => reject(failure));
+        }
+      }
+    } finally {
+      this.isWriting = false;
+      if (this.queue.length > 0) void this.processNext();
     }
   }
 

@@ -1,7 +1,7 @@
 import { ReactRenderer } from '@tiptap/react';
 import tippy from 'tippy.js';
 import SlashMenuList from './SlashMenuList';
-import { Type, Heading1, Heading2, Heading3, List, ListChecks, Quote, Code2 } from 'lucide-react';
+import { Type, Heading1, Heading2, Heading3, List, ListChecks, Quote, Code2, StickyNote } from 'lucide-react';
 import React from 'react';
 
 export const getSuggestionItems = ({ query }: { query: string }) => {
@@ -11,6 +11,14 @@ export const getSuggestionItems = ({ query }: { query: string }) => {
       icon: React.createElement(Type, { size: 14 }),
       command: ({ editor, range }: any) => {
         editor.chain().focus().deleteRange(range).setParagraph().run();
+      },
+    },
+    {
+      title: 'Sticky Note',
+      icon: React.createElement(StickyNote, { size: 14 }),
+      command: ({ editor, range }: any) => {
+        editor.chain().focus().deleteRange(range).run();
+        document.dispatchEvent(new CustomEvent('panvas:create-sticky-note'));
       },
     },
     {

@@ -5,7 +5,7 @@
 
 import { create } from 'zustand';
 import type { Workspace, Folder, CanvasFile } from '@/types/workspace';
-import type { Notebook, NotebookPage, NotebookSection } from '@/types/notebook';
+import type { Notebook, NotebookPage, NotebookSection, NotebookCover } from '@/types/notebook';
 import { workspaceRepository } from '@/repositories/WorkspaceRepository';
 import { folderRepository } from '@/repositories/FolderRepository';
 import { canvasRepository } from '@/repositories/CanvasRepository';
@@ -14,10 +14,30 @@ import { useAuthStore } from './authStore';
 import { useSyncStore } from './syncStore';
 import { useNotebookSettingsStore } from './notebookSettingsStore';
 import { createDefaultDrawingData } from '@/components/notebook/engine/drawingTypes';
+import { useLayoutStore } from './layoutStore';
+import { recordLocalChangeDetached, type LocalChangeRecord } from '@/services/cloudsync/recordLocalChange';
+import { purgeEligibleRoots } from '@/services/cloudsync/trash';
+import type { SyncEntityKind } from '@/services/cloudsync/types';
 
 const ACTIVE_WORKSPACE_KEY = 'panvas.activeWorkspaceId';
 const ACTIVE_CANVAS_KEY = 'panvas.activeCanvasId';
 const ACTIVE_PAGE_KEY = 'panvas.activePageId';
+
+/**
+ * Cloud Sync Phase 1 journaling: local save first, journal second (detached,
+ * never throws into editing). Payloads are metadata representations only.
+ */
+function journalChange(change: LocalChangeRecord): void {
+  recordLocalChangeDetached(change);
+}
+
+// Canonical reloads can overlap during startup, workspace changes, and
+// mutations. Only the newest request in each stream may publish a snapshot.
+let workspaceLoadSequence = 0;
+let contentLoadSequence = 0;
+let recentLoadSequence = 0;
+let trashLoadSequence = 0;
+let isSweepingTrash = false;
 
 function readStoredId(key: string): string | null {
   try {
@@ -53,6 +73,9 @@ interface WorkspaceState {
   deletedWorkspaces: Workspace[];
   deletedFolders: Folder[];
   deletedCanvases: CanvasFile[];
+  deletedNotebooks: Notebook[];
+  deletedSections: NotebookSection[];
+  deletedPages: NotebookPage[];
 
   // Selection
   activeWorkspaceId: string | null;
@@ -65,23 +88,31 @@ interface WorkspaceState {
   // Loading
   isLoading: boolean;
 
+  // Startup. True once the bootstrap pass has finished loading the canonical
+  // workspace contents and restoring the persisted active document, so the
+  // /app → Library fallback may trust null active ids.
+  initialDocumentRestoreComplete: boolean;
+
   // Actions
   loadWorkspaces: () => Promise<void>;
   loadWorkspaceContents: (workspaceId: string) => Promise<void>;
   loadRecentFiles: () => Promise<void>;
-  setActiveWorkspace: (id: string | null) => void;
-  setActiveCanvas: (id: string | null) => void;
-  setActivePage: (id: string | null) => void;
-  setActiveNotebook: (id: string | null) => void;
-  setActiveNotebookSection: (id: string | null) => void;
+  markInitialDocumentRestoreComplete: () => void;
+  setActiveWorkspace: (id: string | null) => Promise<void>;
+  setActiveCanvas: (id: string | null, recordOpen?: boolean) => Promise<void>;
+  setActivePage: (id: string | null, recordOpen?: boolean) => Promise<void>;
+  setActiveNotebook: (id: string | null) => Promise<void>;
+  setActiveNotebookSection: (id: string | null) => Promise<void>;
   toggleWorkspaceExpanded: (id: string) => void;
   expandWorkspace: (id: string) => void;
   reset: () => void;
   
   // Trash Actions
   loadTrash: () => Promise<void>;
-  restoreItem: (id: string, type: 'workspace' | 'folder' | 'canvas') => Promise<void>;
-  permanentlyDeleteItem: (id: string, type: 'workspace' | 'folder' | 'canvas') => Promise<void>;
+  restoreItem: (id: string, type: 'workspace' | 'folder' | 'canvas' | 'notebook' | 'section' | 'page') => Promise<void>;
+  permanentlyDeleteItem: (id: string, type: 'workspace' | 'folder' | 'canvas' | 'notebook' | 'section' | 'page') => Promise<void>;
+  permanentlyDeleteAllTrash: () => Promise<{ deleted: number; failed: number }>;
+  sweepExpiredTrash: () => Promise<number>;
 
   // CRUD
   createWorkspace: (name: string) => Promise<Workspace>;
@@ -91,24 +122,27 @@ interface WorkspaceState {
 
   createFolder: (parentId: string | null, name: string) => Promise<Folder>;
   renameFolder: (id: string, name: string) => Promise<void>;
+  updateFolderAppearance: (id: string, appearance: Pick<Folder, 'color' | 'icon'>) => Promise<void>;
   deleteFolder: (id: string) => Promise<void>;
   toggleFolderExpanded: (id: string) => Promise<void>;
   moveFolder: (id: string, newWorkspaceId: string, newParentId?: string | null) => Promise<void>;
 
-  createCanvas: (folderId: string | null, name: string) => Promise<CanvasFile>;
+  createCanvas: (folderId: string | null, notebookId: string | null, sectionId: string | null, name: string) => Promise<CanvasFile>;
   renameCanvas: (id: string, name: string) => Promise<void>;
   deleteCanvas: (id: string) => Promise<void>;
   togglePinCanvas: (id: string) => Promise<void>;
   duplicateCanvas: (id: string) => Promise<CanvasFile | null>;
-  moveCanvas: (id: string, newWorkspaceId: string, newFolderId: string | null) => Promise<void>;
+  moveCanvas: (id: string, newWorkspaceId: string, newFolderId: string | null, newNotebookId: string | null, newSectionId: string | null) => Promise<void>;
 
-  createNotebook: (folderId: string | null, name: string) => Promise<Notebook>;
+  createNotebook: (folderId: string | null, name: string, cover?: NotebookCover) => Promise<Notebook>;
   createNotebookSection: (notebookId: string, name: string) => Promise<NotebookSection>;
   createNotebookPage: (sectionId: string, title: string) => Promise<NotebookPage>;
   reorderPages: (itemIds: string[]) => Promise<void>;
   toggleNotebookExpanded: (id: string) => Promise<void>;
   toggleNotebookSectionExpanded: (id: string) => Promise<void>;
+  togglePinNotebook: (id: string) => Promise<void>;
   renameNotebook: (id: string, name: string) => Promise<void>;
+  updateNotebookCover: (id: string, cover: NotebookCover) => Promise<void>;
   renameNotebookSection: (id: string, name: string) => Promise<void>;
   renameNotebookPage: (id: string, title: string) => Promise<void>;
   deleteNotebook: (id: string) => Promise<void>;
@@ -145,6 +179,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   deletedWorkspaces: [],
   deletedFolders: [],
   deletedCanvases: [],
+  deletedNotebooks: [],
+  deletedSections: [],
+  deletedPages: [],
   activeWorkspaceId: null,
   activeCanvasId: null,
   activePageId: null,
@@ -152,8 +189,17 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   activeNotebookSectionId: null,
   expandedWorkspaceIds: getExpandedWorkspaces(),
   isLoading: true,
+  initialDocumentRestoreComplete: false,
+
+  markInitialDocumentRestoreComplete: () => {
+    set({ initialDocumentRestoreComplete: true });
+  },
 
   reset: () => {
+    workspaceLoadSequence += 1;
+    contentLoadSequence += 1;
+    recentLoadSequence += 1;
+    trashLoadSequence += 1;
     set({
       workspaces: [],
       folders: [],
@@ -165,6 +211,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       deletedWorkspaces: [],
       deletedFolders: [],
       deletedCanvases: [],
+      deletedNotebooks: [],
+      deletedSections: [],
+      deletedPages: [],
       activeWorkspaceId: null,
       activeCanvasId: null,
       activePageId: null,
@@ -176,68 +225,69 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   loadWorkspaces: async () => {
+    const requestId = ++workspaceLoadSequence;
     set({ isLoading: true });
     const userId = useAuthStore.getState().user?.id ?? null;
-    const workspaces = await workspaceRepository.getAll(userId);
-    
-    // Preload ALL folders and canvases instantly
-    const folders = await folderRepository.getAll(userId);
-    const canvasFiles = await canvasRepository.getAll(userId);
-    const notebooks = await notebookRepository.getAll(userId);
-    const notebookSections = await notebookRepository.getSections(userId);
-    const notebookPages = await notebookRepository.getPages(userId);
-    
-    set({ workspaces, folders, canvasFiles, notebooks, notebookSections, notebookPages, isLoading: false });
+    const [workspaces, folders, canvasFiles, notebooks, notebookSections, notebookPages] = await Promise.all([
+      workspaceRepository.getAll(userId),
+      folderRepository.getAll(userId),
+      canvasRepository.getAll(userId),
+      notebookRepository.getAll(userId),
+      notebookRepository.getSections(userId),
+      notebookRepository.getPages(userId),
+    ]);
+    if (requestId !== workspaceLoadSequence) return;
 
-    // Restore previous workspace if available, otherwise select the first one.
-    if (!get().activeWorkspaceId && workspaces.length > 0) {
-      const storedWorkspaceId = readStoredId(ACTIVE_WORKSPACE_KEY);
-      const restoredWorkspace = workspaces.find(ws => ws.id === storedWorkspaceId);
-      const newActiveId = restoredWorkspace?.id ?? workspaces[0].id;
-      get().setActiveWorkspace(newActiveId);
-      get().expandWorkspace(newActiveId);
-    }
+    const currentActiveId = get().activeWorkspaceId;
+    const storedWorkspaceId = readStoredId(ACTIVE_WORKSPACE_KEY);
+    const activeWorkspaceId = workspaces.some(item => item.id === currentActiveId)
+      ? currentActiveId
+      : workspaces.find(item => item.id === storedWorkspaceId)?.id ?? workspaces[0]?.id ?? null;
+    set({ workspaces, folders, canvasFiles, notebooks, notebookSections, notebookPages, activeWorkspaceId, isLoading: false });
+    writeStoredId(ACTIVE_WORKSPACE_KEY, activeWorkspaceId);
+    if (activeWorkspaceId) get().expandWorkspace(activeWorkspaceId);
   },
 
   loadWorkspaceContents: async (workspaceId: string) => {
-    // With global loading, this is mostly just triggering active canvas checks
-    // We still load specific to be safe on explicit transitions, but global load handles the main tree
+    const requestId = ++contentLoadSequence;
     const userId = useAuthStore.getState().user?.id ?? null;
-    const folders = await folderRepository.getAll(userId);
-    const canvasFiles = await canvasRepository.getAll(userId);
-    const notebooks = await notebookRepository.getAll(userId);
-    const notebookSections = await notebookRepository.getSections(userId);
-    const notebookPages = await notebookRepository.getPages(userId);
+    const [folders, canvasFiles, notebooks, notebookSections, notebookPages] = await Promise.all([
+      folderRepository.getAll(userId),
+      canvasRepository.getAll(userId),
+      notebookRepository.getAll(userId),
+      notebookRepository.getSections(userId),
+      notebookRepository.getPages(userId),
+    ]);
+    if (requestId !== contentLoadSequence) return;
     set({ folders, canvasFiles, notebooks, notebookSections, notebookPages });
 
     const storedCanvasId = readStoredId(ACTIVE_CANVAS_KEY);
+    const storedPageId = readStoredId(ACTIVE_PAGE_KEY);
     const activeCanvasId = get().activeCanvasId;
+    const activePageId = get().activePageId;
 
-    if (!activeCanvasId && storedCanvasId && canvasFiles.some(canvas => canvas.id === storedCanvasId)) {
-      get().setActiveCanvas(storedCanvasId);
+    if (!activeCanvasId && !activePageId && storedCanvasId && canvasFiles.some(canvas => canvas.id === storedCanvasId && canvas.workspaceId === workspaceId)) {
+      await get().setActiveCanvas(storedCanvasId, false);
+    } else if (!activeCanvasId && !activePageId && storedPageId) {
+      const storedPage = notebookPages.find(page => page.id === storedPageId);
+      const owner = storedPage ? notebooks.find(notebook => notebook.id === storedPage.notebookId) : undefined;
+      if (owner?.workspaceId === workspaceId) await get().setActivePage(storedPageId, false);
     }
   },
 
   loadRecentFiles: async () => {
+    const requestId = ++recentLoadSequence;
     const userId = useAuthStore.getState().user?.id ?? null;
     const recentFiles = await canvasRepository.getRecent(userId, 8);
+    if (requestId !== recentLoadSequence) return;
     set({ recentFiles });
-
-    if (!get().activeCanvasId) {
-      const storedCanvasId = readStoredId(ACTIVE_CANVAS_KEY);
-      const canvasToRestore = recentFiles.find(canvas => canvas.id === storedCanvasId) ?? recentFiles[0];
-
-      if (canvasToRestore) {
-        get().setActiveCanvas(canvasToRestore.id);
-      }
-    }
   },
 
-  setActiveWorkspace: (id: string | null) => {
+  setActiveWorkspace: async (id: string | null) => {
     set({ activeWorkspaceId: id });
     writeStoredId(ACTIVE_WORKSPACE_KEY, id);
     if (id) {
-      get().loadWorkspaceContents(id);
+      await Promise.all([get().loadWorkspaceContents(id), get().loadTrash()]);
     }
   },
 
@@ -265,7 +315,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     });
   },
 
-  setActiveCanvas: (id: string | null) => {
+  setActiveCanvas: async (id: string | null, recordOpen = true) => {
     const previousWorkspaceId = get().activeWorkspaceId;
     const canvas = id
       ? get().canvasFiles.find(c => c.id === id) ?? get().recentFiles.find(c => c.id === id)
@@ -278,32 +328,59 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       activeWorkspaceId: canvas?.workspaceId ?? get().activeWorkspaceId,
     });
     writeStoredId(ACTIVE_CANVAS_KEY, id);
+    if (canvas) {
+      useLayoutStore.getState().openTab({ id: canvas.id, type: 'canvas', title: canvas.name });
+    } else {
+      useLayoutStore.getState().setActiveTab(null);
+    }
 
     if (canvas?.workspaceId && canvas.workspaceId !== previousWorkspaceId) {
       writeStoredId(ACTIVE_WORKSPACE_KEY, canvas.workspaceId);
-      get().loadWorkspaceContents(canvas.workspaceId);
+      await get().loadWorkspaceContents(canvas.workspaceId);
     }
 
-    if (id) {
-      canvasRepository.updateLastOpened(id).then(() => {
-        get().loadRecentFiles();
-      });
+    if (id && canvas && recordOpen) {
+      const now = Date.now();
+      await canvasRepository.updateLastOpened(canvas.workspaceId, id, now);
+      set(state => ({
+        canvasFiles: state.canvasFiles.map(c => c.id === id ? { ...c, lastOpenedAt: now } : c),
+        recentFiles: state.recentFiles.map(c => c.id === id ? { ...c, lastOpenedAt: now } : c),
+      }));
+      await get().loadRecentFiles();
     }
   },
 
-  setActivePage: (id: string | null) => {
+  setActivePage: async (id: string | null, recordOpen = true) => {
     const page = id ? get().notebookPages.find(item => item.id === id) : null;
     const notebook = page ? get().notebooks.find(item => item.id === page.notebookId) : null;
+    const wsId = notebook?.workspaceId ?? get().activeWorkspaceId;
 
     set({
       activePageId: id,
       activeCanvasId: null,
       activeNotebookId: notebook?.id ?? get().activeNotebookId,
       activeNotebookSectionId: page?.sectionId ?? get().activeNotebookSectionId,
-      activeWorkspaceId: notebook?.workspaceId ?? get().activeWorkspaceId,
+      activeWorkspaceId: wsId,
     });
     writeStoredId(ACTIVE_PAGE_KEY, id);
     writeStoredId(ACTIVE_CANVAS_KEY, null);
+    if (notebook?.workspaceId) writeStoredId(ACTIVE_WORKSPACE_KEY, notebook.workspaceId);
+    if (page) {
+      useLayoutStore.getState().openTab({ id: page.id, type: page.type === 'pdf' ? 'pdf' : 'notebook', title: page.title, pageId: page.id });
+    } else {
+      useLayoutStore.getState().setActiveTab(null);
+    }
+    if (page && notebook && wsId && recordOpen) {
+      const now = Date.now();
+      await Promise.all([
+        notebookRepository.updateLastOpened(wsId, notebook.id, now),
+        notebookRepository.updatePageLastOpened(wsId, page.id, now),
+      ]);
+      set(state => ({
+        notebooks: state.notebooks.map(item => item.id === notebook.id ? { ...item, lastOpenedAt: now } : item),
+        notebookPages: state.notebookPages.map(item => item.id === page.id ? { ...item, lastOpenedAt: now } : item),
+      }));
+    }
   },
 
   setActiveNotebook: async (id: string | null) => {
@@ -311,12 +388,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       set({ activeNotebookId: null, activeNotebookSectionId: null });
       return;
     }
-    set({ activeNotebookId: id, activeNotebookSectionId: null });
-    let sections = get().notebookSections.filter(s => s.notebookId === id);
-    let pages = get().notebookPages.filter(p => p.notebookId === id);
-    
+    const notebook = get().notebooks.find(item => item.id === id);
+    if (!notebook) return;
+    const wsId = notebook.workspaceId;
+    set({ activeNotebookId: id, activeNotebookSectionId: null, activeWorkspaceId: wsId });
+    writeStoredId(ACTIVE_WORKSPACE_KEY, wsId);
+    const pages = get().notebookPages
+      .filter(page => page.notebookId === id && !page.deletedAt)
+      .sort((left, right) => left.order - right.order);
     if (pages.length > 0) {
-      get().setActivePage(pages[0].id);
+      await get().setActivePage(pages[0].id);
+    } else {
+      const now = Date.now();
+      await notebookRepository.updateLastOpened(wsId, id, now);
+      set(state => ({ notebooks: state.notebooks.map(item => item.id === id ? { ...item, lastOpenedAt: now } : item) }));
+      useLayoutStore.getState().openTab({ id: notebook.id, type: 'notebook', title: notebook.name });
     }
   },
 
@@ -326,27 +412,138 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       return;
     }
     const section = get().notebookSections.find(item => item.id === id);
-    set({ activeNotebookSectionId: id, activeNotebookId: section?.notebookId ?? get().activeNotebookId });
-    let pages = get().notebookPages.filter(p => p.sectionId === id);
+    const notebook = section ? get().notebooks.find(item => item.id === section.notebookId) : undefined;
+    if (!section || !notebook) return;
+    set({ activeNotebookSectionId: id, activeNotebookId: section.notebookId, activeWorkspaceId: notebook.workspaceId });
+    writeStoredId(ACTIVE_WORKSPACE_KEY, notebook.workspaceId);
+    const pages = get().notebookPages
+      .filter(page => page.sectionId === id && !page.deletedAt)
+      .sort((left, right) => left.order - right.order);
     if (pages.length > 0) {
-      get().setActivePage(pages[0].id);
+      await get().setActivePage(pages[0].id);
+    } else {
+      const now = Date.now();
+      await notebookRepository.updateLastOpened(notebook.workspaceId, notebook.id, now);
+      set(state => ({ notebooks: state.notebooks.map(item => item.id === notebook.id ? { ...item, lastOpenedAt: now } : item) }));
     }
   },
 
   // ---- Trash Actions ----
   loadTrash: async () => {
-    const userId = useAuthStore.getState().user?.id ?? null;
-    const { workspaces, folders, canvasFiles } = await import('@/database/workspaceDB').then(m => m.getDeletedItems(userId));
-    set({
-      deletedWorkspaces: workspaces,
-      deletedFolders: folders,
-      deletedCanvases: canvasFiles
-    });
-  },
-
-  restoreItem: async (id: string, type: 'workspace' | 'folder' | 'canvas') => {
+    const requestId = ++trashLoadSequence;
     const userId = useAuthStore.getState().user?.id ?? null;
     const wsId = get().activeWorkspaceId;
+    let roots;
+    try {
+      if (typeof window !== 'undefined' && window.panvas) {
+        const trash = await window.panvas.trash.getAll(null);
+        roots = {
+          workspaces: trash.workspaces,
+          folders: trash.folders,
+          canvasFiles: trash.canvasFiles,
+          notebooks: trash.notebooks,
+          sections: trash.sections,
+          pages: trash.pages,
+        };
+      } else {
+        roots = await import('@/database/workspaceDB').then(module => module.getDeletedItems(userId));
+      }
+    } catch (error) {
+      // A failed read must not masquerade as an empty Trash and erase a newer
+      // canonical projection from memory.
+      if (requestId === trashLoadSequence) console.warn('[WorkspaceStore] Could not refresh Trash:', error);
+      return;
+    }
+    if (requestId !== trashLoadSequence || wsId !== get().activeWorkspaceId) return;
+    if (requestId !== trashLoadSequence) return;
+
+    const notebookById = new Map([...get().notebooks, ...roots.notebooks].map(item => [item.id, item]));
+    const sectionById = new Map([...get().notebookSections, ...roots.sections].map(item => [item.id, item]));
+    const inWorkspace = (record: { workspaceId?: string | null; notebookId?: string | null; sectionId?: string | null }) => {
+      if (!wsId) return false;
+      if (record.workspaceId) return record.workspaceId === wsId;
+      if (record.notebookId) return notebookById.get(record.notebookId)?.workspaceId === wsId;
+      if (record.sectionId) {
+        const section = sectionById.get(record.sectionId);
+        return section ? notebookById.get(section.notebookId ?? '')?.workspaceId === wsId : false;
+      }
+      return false;
+    };
+
+    set({
+      deletedWorkspaces: roots.workspaces as Workspace[],
+      deletedFolders: roots.folders as Folder[],
+      deletedCanvases: roots.canvasFiles as CanvasFile[],
+      deletedNotebooks: roots.notebooks as Notebook[],
+      deletedSections: roots.sections as NotebookSection[],
+      deletedPages: roots.pages as NotebookPage[],
+    });
+    // 30-day retention sweep (detached — never delays the Trash projection).
+    void get().sweepExpiredTrash();
+  },
+
+  restoreItem: async (id: string, type: 'workspace' | 'folder' | 'canvas' | 'notebook' | 'section' | 'page') => {
+    const userId = useAuthStore.getState().user?.id ?? null;
+    const state = get();
+    const allNotebooks = [...state.notebooks, ...state.deletedNotebooks];
+    const allSections = [...state.notebookSections, ...state.deletedSections];
+    const allFolders = [...state.folders, ...state.deletedFolders];
+    const notebookById = new Map(allNotebooks.map(item => [item.id, item]));
+    const sectionById = new Map(allSections.map(item => [item.id, item]));
+
+    let wsId: string | null | undefined;
+    let parentFolderId: string | null | undefined;
+    let parentNotebookId: string | null | undefined;
+    let parentSectionId: string | null | undefined;
+
+    if (type === 'workspace') {
+      wsId = id;
+    } else if (type === 'folder') {
+      const folder = allFolders.find(item => item.id === id);
+      wsId = folder?.workspaceId;
+      parentFolderId = folder?.parentId;
+    } else if (type === 'canvas') {
+      const canvas = [...state.canvasFiles, ...state.deletedCanvases].find(item => item.id === id);
+      wsId = canvas?.workspaceId;
+      parentFolderId = canvas?.folderId;
+    } else if (type === 'notebook') {
+      const notebook = notebookById.get(id);
+      wsId = notebook?.workspaceId;
+      parentFolderId = notebook?.folderId;
+    } else if (type === 'section') {
+      const section = sectionById.get(id);
+      parentNotebookId = section?.notebookId;
+      const notebook = parentNotebookId ? notebookById.get(parentNotebookId) : undefined;
+      wsId = notebook?.workspaceId;
+      parentFolderId = notebook?.folderId;
+    } else if (type === 'page') {
+      const page = [...state.notebookPages, ...state.deletedPages].find(item => item.id === id);
+      parentNotebookId = page?.notebookId;
+      parentSectionId = page?.sectionId;
+      const notebook = parentNotebookId ? notebookById.get(parentNotebookId) : undefined;
+      wsId = notebook?.workspaceId;
+      parentFolderId = notebook?.folderId;
+    }
+
+    if (!wsId && type !== 'workspace') {
+      wsId = state.activeWorkspaceId;
+    }
+
+    // Gracefully restore parent chain if parents are also deleted
+    if (wsId && state.deletedWorkspaces.some(w => w.id === wsId)) {
+      await workspaceRepository.restore(userId, wsId);
+      await get().loadWorkspaces();
+    }
+    if (parentFolderId && wsId && state.deletedFolders.some(f => f.id === parentFolderId)) {
+      await folderRepository.restore(userId, wsId, parentFolderId);
+    }
+    if (parentNotebookId && wsId && state.deletedNotebooks.some(n => n.id === parentNotebookId)) {
+      await notebookRepository.restoreEntity(wsId, parentNotebookId, 'notebook');
+    }
+    if (parentSectionId && wsId && state.deletedSections.some(s => s.id === parentSectionId)) {
+      await notebookRepository.restoreEntity(wsId, parentSectionId, 'section');
+    }
+
     if (type === 'workspace') {
       await workspaceRepository.restore(userId, id);
       await get().loadWorkspaces();
@@ -357,28 +554,128 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       await canvasRepository.restore(wsId, id);
       await get().loadWorkspaceContents(wsId);
       await get().loadRecentFiles();
+    } else if ((type === 'notebook' || type === 'section' || type === 'page') && wsId) {
+      await notebookRepository.restoreEntity(wsId, id, type);
+      await get().loadWorkspaceContents(wsId);
+    }
+    const restoredKind = type === 'section' ? 'notebookSection' : type === 'page' ? 'notebookPage' : type === 'canvas' ? 'canvasFile' : type;
+    if (wsId || type === 'workspace') {
+      journalChange({ entityType: restoredKind, entityId: id, workspaceId: wsId ?? id, operation: 'restore' });
     }
     useSyncStore.getState().incrementPending();
     await get().loadTrash();
   },
 
-  permanentlyDeleteItem: async (id: string, type: 'workspace' | 'folder' | 'canvas') => {
+  permanentlyDeleteItem: async (id: string, type: 'workspace' | 'folder' | 'canvas' | 'notebook' | 'section' | 'page') => {
     const userId = useAuthStore.getState().user?.id ?? null;
-    const wsId = get().activeWorkspaceId;
+    const state = get();
+    const allNotebooks = [...state.notebooks, ...state.deletedNotebooks];
+    const allSections = [...state.notebookSections, ...state.deletedSections];
+    const notebookById = new Map(allNotebooks.map(item => [item.id, item]));
+    const sectionById = new Map(allSections.map(item => [item.id, item]));
+    const wsId =
+      type === 'workspace'
+        ? id
+        : type === 'folder'
+          ? [...state.folders, ...state.deletedFolders].find(item => item.id === id)?.workspaceId
+          : type === 'canvas'
+            ? [...state.canvasFiles, ...state.deletedCanvases].find(item => item.id === id)?.workspaceId
+            : type === 'notebook'
+              ? notebookById.get(id)?.workspaceId
+              : type === 'section'
+                ? notebookById.get(sectionById.get(id)?.notebookId ?? '')?.workspaceId
+                : type === 'page'
+                  ? notebookById.get([...state.notebookPages, ...state.deletedPages].find(item => item.id === id)?.notebookId ?? '')?.workspaceId
+                  : state.activeWorkspaceId;
+
     if (type === 'workspace') {
       await workspaceRepository.permanentlyDelete(id);
     } else if (type === 'folder' && wsId) {
       await folderRepository.permanentlyDelete(userId, wsId, id);
     } else if (type === 'canvas' && wsId) {
       await canvasRepository.permanentlyDelete(wsId, id);
+    } else if ((type === 'notebook' || type === 'section' || type === 'page') && wsId) {
+      await notebookRepository.permanentlyDeleteEntity(wsId, id, type);
+    } else {
+      throw new Error('Trash item owner workspace could not be resolved.');
+    }
+    // Payload is purged, but the sync tombstone persists so an offline
+    // device cannot resurrect the item (SYNC-0 delete rule).
+    const entityType: SyncEntityKind = type === 'canvas' ? 'canvasFile' : type === 'section' ? 'notebookSection' : type === 'page' ? 'notebookPage' : type;
+    journalChange({
+      entityType,
+      entityId: id,
+      workspaceId: type === 'workspace' ? id : wsId ?? '',
+      operation: 'delete',
+      deletedAt: Date.now(),
+    });
+    await get().loadTrash();
+  },
+
+  permanentlyDeleteAllTrash: async () => {
+    // Delete descendants before their roots so each provider can clean up
+    // payloads without relying on a parent record that may already be gone.
+    const state = get();
+    const items: Array<{ id: string; type: 'workspace' | 'folder' | 'canvas' | 'notebook' | 'section' | 'page' }> = [
+      ...state.deletedPages.map(item => ({ id: item.id, type: 'page' as const })),
+      ...state.deletedSections.map(item => ({ id: item.id, type: 'section' as const })),
+      ...state.deletedNotebooks.map(item => ({ id: item.id, type: 'notebook' as const })),
+      ...state.deletedCanvases.map(item => ({ id: item.id, type: 'canvas' as const })),
+      ...state.deletedFolders.map(item => ({ id: item.id, type: 'folder' as const })),
+      ...state.deletedWorkspaces.map(item => ({ id: item.id, type: 'workspace' as const })),
+    ];
+    let deleted = 0;
+    let failed = 0;
+    for (const item of items) {
+      try {
+        await get().permanentlyDeleteItem(item.id, item.type);
+        deleted += 1;
+      } catch (error) {
+        failed += 1;
+        console.warn('[WorkspaceStore] permanent trash purge failed:', error instanceof Error ? error.name : 'unknown');
+      }
     }
     await get().loadTrash();
+    return { deleted, failed };
+  },
+
+  /**
+   * 30-day Trash lifecycle: permanently purges payloads whose retention has
+   * elapsed, through the existing explicit permanent-delete path (which
+   * journals the durable sync tombstone). Runs opportunistically after Trash
+   * loads; user-visible countdowns come from trashCountdown().
+   */
+  sweepExpiredTrash: async () => {
+    if (isSweepingTrash) return 0;
+    isSweepingTrash = true;
+    try {
+      const now = Date.now();
+      const expired: Array<{ id: string; type: 'workspace' | 'folder' | 'canvas' | 'notebook' | 'section' | 'page' }> = [
+        ...purgeEligibleRoots(get().deletedWorkspaces, now).map(id => ({ id, type: 'workspace' as const })),
+        ...purgeEligibleRoots(get().deletedFolders, now).map(id => ({ id, type: 'folder' as const })),
+        ...purgeEligibleRoots(get().deletedCanvases, now).map(id => ({ id, type: 'canvas' as const })),
+        ...purgeEligibleRoots(get().deletedNotebooks, now).map(id => ({ id, type: 'notebook' as const })),
+        ...purgeEligibleRoots(get().deletedSections, now).map(id => ({ id, type: 'section' as const })),
+        ...purgeEligibleRoots(get().deletedPages, now).map(id => ({ id, type: 'page' as const })),
+      ];
+      for (const item of expired) {
+        try {
+          await get().permanentlyDeleteItem(item.id, item.type);
+        } catch (error) {
+          console.warn('[WorkspaceStore] expired trash purge failed:', error instanceof Error ? error.name : 'unknown');
+        }
+      }
+      return expired.length;
+    } finally {
+      isSweepingTrash = false;
+    }
   },
 
   // ---- CRUD: Workspaces ----
   createWorkspace: async (name: string) => {
     const userId = useAuthStore.getState().user?.id ?? null;
     const workspace = await workspaceRepository.create(userId, name);
+    journalChange({ entityType: 'workspace', entityId: workspace.id, workspaceId: workspace.id, operation: 'create', payload: { name: workspace.name } });
     useSyncStore.getState().incrementPending();
     await get().loadWorkspaces();
     return workspace;
@@ -393,6 +690,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   deleteWorkspace: async (id: string) => {
     await workspaceRepository.delete(id);
+    journalChange({ entityType: 'workspace', entityId: id, workspaceId: id, operation: 'delete', deletedAt: Date.now() });
     useSyncStore.getState().incrementPending();
     if (get().activeWorkspaceId === id) {
       set({ activeWorkspaceId: null, activeCanvasId: null });
@@ -416,6 +714,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     if (!wsId) throw new Error('No active workspace');
     const userId = useAuthStore.getState().user?.id ?? null;
     const folder = await folderRepository.create(userId, wsId, parentId, name);
+    journalChange({ entityType: 'folder', entityId: folder.id, workspaceId: wsId, operation: 'create', payload: { name: folder.name, parentId } });
     useSyncStore.getState().incrementPending();
     await get().loadWorkspaceContents(wsId);
     return folder;
@@ -430,11 +729,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     await get().loadWorkspaceContents(wsId);
   },
 
-  deleteFolder: async (id: string) => {
+  updateFolderAppearance: async (id: string, appearance: Pick<Folder, 'color' | 'icon'>) => {
     const wsId = get().activeWorkspaceId;
     if (!wsId) return;
     const userId = useAuthStore.getState().user?.id ?? null;
+    await folderRepository.updateAppearance(userId, wsId, id, appearance);
+    useSyncStore.getState().incrementPending();
+    await get().loadWorkspaceContents(wsId);
+  },
+
+  deleteFolder: async (id: string) => {
+    const wsId = get().folders.find(item => item.id === id)?.workspaceId;
+    if (!wsId) return;
+    const userId = useAuthStore.getState().user?.id ?? null;
     await folderRepository.delete(userId, wsId, id);
+    journalChange({ entityType: 'folder', entityId: id, workspaceId: wsId, operation: 'delete', deletedAt: Date.now() });
     useSyncStore.getState().incrementPending();
     await get().loadWorkspaceContents(wsId);
     await get().loadTrash();
@@ -458,11 +767,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   // ---- CRUD: Canvases ----
-  createCanvas: async (folderId: string | null, name: string) => {
+  createCanvas: async (folderId: string | null, notebookId: string | null, sectionId: string | null, name: string) => {
     const wsId = get().activeWorkspaceId;
     if (!wsId) throw new Error('No active workspace');
     const userId = useAuthStore.getState().user?.id ?? null;
-    const canvas = await canvasRepository.create(userId, wsId, folderId, name);
+    const canvas = await canvasRepository.create(userId, wsId, folderId, notebookId, sectionId, name);
+    journalChange({ entityType: 'canvasFile', entityId: canvas.id, workspaceId: wsId, operation: 'create', payload: { name: canvas.name, folderId, notebookId, sectionId } });
     useSyncStore.getState().incrementPending();
     await get().loadWorkspaceContents(wsId);
     await get().loadRecentFiles();
@@ -479,9 +789,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   deleteCanvas: async (id: string) => {
-    const wsId = get().activeWorkspaceId;
+    const wsId = get().canvasFiles.find(item => item.id === id)?.workspaceId;
     if (!wsId) return;
     await canvasRepository.delete(wsId, id);
+    journalChange({ entityType: 'canvasFile', entityId: id, workspaceId: wsId, operation: 'delete', deletedAt: Date.now() });
     useSyncStore.getState().incrementPending();
     if (get().activeCanvasId === id) {
       set({ activeCanvasId: null });
@@ -493,11 +804,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   togglePinCanvas: async (id: string) => {
-    const wsId = get().activeWorkspaceId;
-    if (!wsId) return;
     const canvas = get().canvasFiles.find(c => c.id === id);
     if (!canvas) return;
+    const wsId = canvas.workspaceId;
     await canvasRepository.togglePin(wsId, id, !canvas.isPinned);
+    journalChange({ entityType: 'canvasFile', entityId: id, workspaceId: wsId, operation: 'update', payload: { isPinned: !canvas.isPinned } });
     useSyncStore.getState().incrementPending();
     await get().loadWorkspaceContents(wsId);
   },
@@ -512,9 +823,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     return canvas;
   },
 
-  moveCanvas: async (id: string, newWorkspaceId: string, newFolderId: string | null) => {
+  moveCanvas: async (id: string, newWorkspaceId: string, newFolderId: string | null, newNotebookId: string | null, newSectionId: string | null) => {
     const userId = useAuthStore.getState().user?.id ?? null;
-    await canvasRepository.move(userId, id, newWorkspaceId, newFolderId);
+    await canvasRepository.move(userId, id, newWorkspaceId, newFolderId, newNotebookId, newSectionId);
     useSyncStore.getState().incrementPending();
     const wsId = get().activeWorkspaceId;
     if (wsId) await get().loadWorkspaceContents(wsId);
@@ -522,12 +833,40 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   // ---- Notebook foundation ----
-  createNotebook: async (folderId: string | null, name: string) => {
+  createNotebook: async (folderId: string | null, name: string, cover?: NotebookCover) => {
     const workspaceId = get().activeWorkspaceId;
     if (!workspaceId) throw new Error('No active workspace');
     const userId = useAuthStore.getState().user?.id ?? null;
     const notebook = await notebookRepository.create(userId, workspaceId, folderId, name);
+    journalChange({ entityType: 'notebook', entityId: notebook.id, workspaceId, operation: 'create', payload: { name: notebook.name, folderId } });
+    const settings = useNotebookSettingsStore.getState();
+    const defaults = {
+      paperColor: settings.paperColor,
+      template: settings.template,
+      ruleLineColor: '#e0e0e0',
+      orientation: settings.orientation.toLowerCase() as 'portrait' | 'landscape',
+      pageSize: settings.pageSize,
+      margins: settings.margins,
+    };
+    await notebookRepository.setNotebookPageDefaults(workspaceId, notebook.id, defaults);
+    notebook.defaultPageProperties = defaults;
+    if (cover) {
+      await notebookRepository.updateCover(workspaceId, notebook.id, cover);
+      notebook.cover = cover;
+    }
+    // A notebook is only useful once it has an addressable first page. Keep
+    // this creation path equivalent to creating the section and page manually:
+    // initialize the canonical drawing payload before exposing the notebook.
+    const section = await notebookRepository.createSection(userId, workspaceId, notebook.id, 'Section 1');
+    const page = await notebookRepository.createPage(userId, workspaceId, notebook.id, section.id, 'Page 1');
+    await notebookRepository.saveDrawingData(
+      workspaceId,
+      notebook.id,
+      page.id,
+      createDefaultDrawingData(defaults),
+    );
     await get().loadWorkspaceContents(workspaceId);
+    get().setActivePage(page.id);
     return notebook;
   },
 
@@ -536,6 +875,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const workspaceId = get().activeWorkspaceId;
     if (!workspaceId) throw new Error('No active workspace');
     const section = await notebookRepository.createSection(userId, workspaceId, notebookId, name);
+    journalChange({ entityType: 'notebookSection', entityId: section.id, workspaceId, operation: 'create', payload: { name: section.name, notebookId } });
     await get().loadWorkspaceContents(workspaceId);
     return section;
   },
@@ -549,15 +889,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const page = await notebookRepository.createPage(userId, workspaceId, section.notebookId, sectionId, title);
     
     // Immediately initialize with canonical default settings to avoid black/missing page contents
+    const owningNotebook = get().notebooks.find(item => item.id === section.notebookId);
     const defaultSettings = useNotebookSettingsStore.getState();
-    const defaultData = createDefaultDrawingData({
+    const defaultData = createDefaultDrawingData(owningNotebook?.defaultPageProperties ?? {
       paperColor: defaultSettings.paperColor,
       template: defaultSettings.template,
-      orientation: defaultSettings.orientation as any,
+      ruleLineColor: '#e0e0e0',
+      orientation: defaultSettings.orientation.toLowerCase() as 'portrait' | 'landscape',
       pageSize: defaultSettings.pageSize,
-      margins: defaultSettings.margins
+      margins: defaultSettings.margins,
     });
     await notebookRepository.saveDrawingData(workspaceId, section.notebookId, page.id, defaultData);
+    journalChange({ entityType: 'notebookPage', entityId: page.id, workspaceId, operation: 'create', payload: { title: page.title, notebookId: section.notebookId, sectionId } });
 
     if (workspaceId) await get().loadWorkspaceContents(workspaceId);
     get().setActivePage(page.id);
@@ -599,10 +942,28 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     await get().loadWorkspaceContents(workspaceId);
   },
 
+  togglePinNotebook: async (id: string) => {
+    const notebook = get().notebooks.find(n => n.id === id);
+    if (!notebook) return;
+    const wsId = notebook.workspaceId;
+    const nextPinned = !notebook.isPinned;
+    await notebookRepository.togglePin(wsId, id, nextPinned);
+    journalChange({ entityType: 'notebook', entityId: id, workspaceId: wsId, operation: 'update', payload: { isPinned: nextPinned } });
+    useSyncStore.getState().incrementPending();
+    await get().loadWorkspaceContents(wsId);
+  },
+
   renameNotebook: async (id: string, name: string) => {
     const wsId = get().activeWorkspaceId;
     if (!wsId) return;
     await notebookRepository.rename(wsId, id, name);
+    useSyncStore.getState().incrementPending();
+    await get().loadWorkspaceContents(wsId);
+  },
+  updateNotebookCover: async (id: string, cover: NotebookCover) => {
+    const wsId = get().activeWorkspaceId;
+    if (!wsId) return;
+    await notebookRepository.updateCover(wsId, id, cover);
     useSyncStore.getState().incrementPending();
     await get().loadWorkspaceContents(wsId);
   },
@@ -621,31 +982,39 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     await get().loadWorkspaceContents(wsId);
   },
   deleteNotebook: async (id: string) => {
-    const wsId = get().activeWorkspaceId;
+    const wsId = get().notebooks.find(item => item.id === id)?.workspaceId;
     if (!wsId) return;
     await notebookRepository.delete(wsId, id);
+    journalChange({ entityType: 'notebook', entityId: id, workspaceId: wsId, operation: 'delete', deletedAt: Date.now() });
     useSyncStore.getState().incrementPending();
     if (get().activeNotebookId === id) {
       set({ activeNotebookId: null, activePageId: null });
     }
     await get().loadWorkspaceContents(wsId);
+    await get().loadTrash();
   },
   deleteNotebookSection: async (id: string) => {
-    const wsId = get().activeWorkspaceId;
+    const section = get().notebookSections.find(item => item.id === id);
+    const wsId = section ? get().notebooks.find(item => item.id === section.notebookId)?.workspaceId : undefined;
     if (!wsId) return;
     await notebookRepository.deleteSection(wsId, id);
+    journalChange({ entityType: 'notebookSection', entityId: id, workspaceId: wsId, operation: 'delete', deletedAt: Date.now() });
     useSyncStore.getState().incrementPending();
     await get().loadWorkspaceContents(wsId);
+    await get().loadTrash();
   },
   deleteNotebookPage: async (id: string) => {
-    const wsId = get().activeWorkspaceId;
+    const page = get().notebookPages.find(item => item.id === id);
+    const wsId = page ? get().notebooks.find(item => item.id === page.notebookId)?.workspaceId : undefined;
     if (!wsId) return;
     await notebookRepository.deletePage(wsId, id);
+    journalChange({ entityType: 'notebookPage', entityId: id, workspaceId: wsId, operation: 'delete', deletedAt: Date.now() });
     useSyncStore.getState().incrementPending();
     if (get().activePageId === id) {
       set({ activePageId: null });
     }
     await get().loadWorkspaceContents(wsId);
+    await get().loadTrash();
   },
   moveNotebook: async (id: string, newWorkspaceId: string, newFolderId: string | null) => {
     await notebookRepository.move(id, newWorkspaceId, newFolderId);

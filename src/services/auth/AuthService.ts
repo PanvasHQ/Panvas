@@ -17,6 +17,21 @@ export interface SimpleResult {
   error: string | null;
 }
 
+const AUTH_BOOT_TIMEOUT_MS = 2_000;
+const SESSION_EXPIRY_SKEW_MS = 30_000;
+
+export async function settleWithin<T>(operation: Promise<T>, timeoutMs: number): Promise<T | null> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<null>(resolve => { timeout = setTimeout(() => resolve(null), timeoutMs); }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 export class AuthService {
   // ---- Email/Password Sign In ----
   async signIn(email: string, password: string): Promise<AuthResult> {
@@ -193,8 +208,26 @@ export class AuthService {
   // ---- Get Current Session ----
   async getSession(): Promise<Session | null> {
     if (!supabase) return null;
-    const { data } = await supabase.auth.getSession();
-    return data.session;
+    try {
+      const result = await settleWithin(supabase.auth.getSession(), AUTH_BOOT_TIMEOUT_MS);
+      if (!result) {
+        console.warn('[AuthService] Session restoration timed out; continuing in local-only mode.');
+        return null;
+      }
+      if (result.error) {
+        console.warn('[AuthService] Session restoration failed; continuing in local-only mode:', result.error.message);
+        return null;
+      }
+      const session = result.data.session;
+      if (session?.expires_at && session.expires_at * 1_000 <= Date.now() + SESSION_EXPIRY_SKEW_MS) {
+        console.warn('[AuthService] Stored session is expired; continuing in local-only mode.');
+        return null;
+      }
+      return session;
+    } catch (error) {
+      console.warn('[AuthService] Auth backend unavailable; continuing in local-only mode:', error);
+      return null;
+    }
   }
 
   // ---- Listen for Auth State Changes ----

@@ -1,10 +1,57 @@
 <!DOCTYPE html>
 <html lang="en" class="dark">
   <head>
-    <script>
-      // Allow Excalidraw to load web workers and fonts from its CDN
-      window.EXCALIDRAW_ASSET_PATH = "https://unpkg.com/@excalidraw/excalidraw@0.18.0/dist/prod/";
-    </script>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://*.supabase.co https://*.posthog.com https://huggingface.co https://*.huggingface.co https://*.hf.co https://cas-bridge.xethub.hf.co https://www.googleapis.com https://*.googleapis.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://accounts.google.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-src https://accounts.google.com/gsi/; form-action 'self'" />
+    <style>
+      html, body, #root { min-height: 100%; margin: 0; }
+      /* Pre-React bootstrap fallback in Panvas's paper language: warm neutral
+         light by default, ink dark via the OS preference (reading the
+         persisted theme would require an inline script, which CSP blocks). */
+      .panvas-bootstrap-fallback, .panvas-bootstrap-failure {
+        min-height: 100vh; display: grid; place-content: center; justify-items: center;
+        gap: 12px; box-sizing: border-box; padding: 32px; text-align: center;
+        color: #33302a; background: #f7f4ec; font-family: Inter, system-ui, sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        .panvas-bootstrap-fallback, .panvas-bootstrap-failure {
+          color: #d8d3c8; background: #1a1815;
+        }
+      }
+      .panvas-bootstrap-logo {
+        width: 64px; height: 64px; border-radius: 16px; display: block;
+        box-shadow: 0 8px 22px rgb(30 27 22 / 0.14), 0 1px 2px rgb(30 27 22 / 0.10);
+      }
+      .panvas-bootstrap-fallback h1, .panvas-bootstrap-failure h1,
+      .panvas-bootstrap-fallback p, .panvas-bootstrap-failure p { margin: 0; }
+      .panvas-bootstrap-wordmark { font-size: 0.95rem; font-weight: 600; letter-spacing: -0.01em; }
+      .panvas-bootstrap-bar {
+        width: 96px; height: 3px; border-radius: 999px; overflow: hidden;
+        background: rgb(51 48 42 / 0.14);
+      }
+      @media (prefers-color-scheme: dark) {
+        .panvas-bootstrap-bar { background: rgb(216 211 200 / 0.16); }
+      }
+      .panvas-bootstrap-bar span {
+        display: block; width: 40%; height: 100%; border-radius: 999px;
+        background: rgb(51 48 42 / 0.55);
+        animation: panvas-bootstrap-slide 1.4s ease-in-out infinite;
+      }
+      @media (prefers-color-scheme: dark) {
+        .panvas-bootstrap-bar span { background: rgb(216 211 200 / 0.6); }
+      }
+      @keyframes panvas-bootstrap-slide {
+        0% { transform: translateX(-110%); }
+        100% { transform: translateX(280%); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .panvas-bootstrap-bar span { animation: none; transform: translateX(0); opacity: 0.5; }
+      }
+      .panvas-bootstrap-failure button {
+        justify-self: center; margin-top: 8px; padding: 10px 16px; border: 1px solid #505967;
+        border-radius: 8px; color: #0d1117; background: #e8e8e8; cursor: pointer;
+      }
+    </style>
+    <script src="./excalidraw-config.js"></script>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/panvas-logo-1.1.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -23,12 +70,18 @@
     <meta property="twitter:image" content="/og-image.png" />
 
     <title>Panvas — Visual Research Workspace</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600;700&family=Kalam:wght@300;400;700&family=Patrick+Hand&family=Permanent+Marker&family=Shadows+Into+Light&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <!-- Activated by the editor boundary, never render-blocking on the public page. -->
+    <link data-panvas-editor-fonts data-href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600;700&family=Kalam:wght@300;400;700&family=Patrick+Hand&family=Permanent+Marker&family=Shadows+Into+Light&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400..700;1,6..72,400..700&display=swap" />
   </head>
   <body class="bg-[#0D1117] text-white antialiased">
-    <div id="root"></div>
+    <div id="root">
+      <main class="panvas-bootstrap-fallback" role="status" aria-live="polite">
+        <img src="/panvas-logo-1.1.png" alt="" class="panvas-bootstrap-logo" />
+        <p class="panvas-bootstrap-wordmark">Panvas</p>
+        <div class="panvas-bootstrap-bar" aria-hidden="true"><span></span></div>
+        <noscript>Panvas requires JavaScript. Your local data has not been changed.</noscript>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

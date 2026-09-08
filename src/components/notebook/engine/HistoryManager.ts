@@ -4,7 +4,7 @@
 // Single command history shared across text and drawing.
 // Every user action becomes a HistoryCommand with execute() and undo().
 
-import type { HistoryCommand } from './drawingTypes';
+import type { HistoryCommand } from './drawingTypes.ts';
 
 export type HistoryChangeListener = (canUndo: boolean, canRedo: boolean) => void;
 
@@ -43,6 +43,23 @@ export class HistoryManager {
     }
 
     // New action invalidates redo
+    this.redoStack.length = 0;
+    this.notify();
+  }
+
+  /**
+   * Executes one atomic transform and removes the earlier creation commands for
+   * the exact source objects it consumed. Undo then steps between transforms,
+   * rather than exposing the implementation detail of each source stroke.
+   */
+  pushReplacingCreations(command: HistoryCommand, replacedObjectIds: readonly string[]): void {
+    command.execute();
+    const replaced = new Set(replacedObjectIds);
+    this.undoStack = this.undoStack.filter(existing => (
+      !existing.createdObjectIds?.some(id => replaced.has(id))
+    ));
+    this.undoStack.push(command);
+    if (this.undoStack.length > this.maxSize) this.undoStack.shift();
     this.redoStack.length = 0;
     this.notify();
   }

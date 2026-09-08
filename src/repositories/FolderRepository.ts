@@ -5,7 +5,7 @@
 
 import * as workspaceDB from '@/database/workspaceDB';
 import { db } from '@/database/schema';
-import type { Folder } from '@/types/workspace';
+import { normalizeFolderAppearance, type Folder } from '@/types/workspace';
 import type { SyncQueueItem } from '@/types/sync';
 
 export class FolderRepository {
@@ -30,6 +30,17 @@ export class FolderRepository {
     if (updated) {
       await this.queueSync('folder', id, 'update', updated);
     }
+  }
+
+  async updateAppearance(userId: string | null, workspaceId: string, id: string, appearance: Pick<Folder, 'color' | 'icon'>): Promise<void> {
+    const normalized = normalizeFolderAppearance(appearance);
+    if (typeof window !== 'undefined' && window.panvas) {
+      await window.panvas.folder.update(workspaceId, id, normalized);
+      return;
+    }
+    await workspaceDB.updateFolderAppearance(id, normalized);
+    const updated = await db.folders.get(id);
+    if (updated) await this.queueSync('folder', id, 'update', updated);
   }
 
   async move(userId: string | null, id: string, workspaceId: string, parentId: string | null): Promise<void> {
@@ -89,7 +100,7 @@ export class FolderRepository {
 
   async permanentlyDelete(userId: string | null, workspaceId: string, id: string): Promise<void> {
     if (typeof window !== 'undefined' && window.panvas) {
-      await window.panvas.folder.delete(workspaceId, id);
+      await window.panvas.trash.permanentlyDelete(workspaceId, id, 'folder');
       return;
     }
     await workspaceDB.deleteFolder(id, false);
@@ -116,7 +127,7 @@ export class FolderRepository {
       // Let's implement getting ALL folders from ALL workspaces via IPC.
       const workspaces = await window.panvas.workspace.getAll();
       let allFolders: Folder[] = [];
-      for (const ws of workspaces) {
+      for (const ws of workspaces.filter((workspace: any) => !workspace.deletedAt)) {
         const folders = await window.panvas.folder.getAll(ws.id);
         allFolders = allFolders.concat(folders.filter((f: any) => !f.deletedAt));
       }
