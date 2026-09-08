@@ -17,8 +17,9 @@ import { initializeDatabase } from '@/database/schema';
 import { migrateFromDexieToFs } from '@/lib/migration';
 import { syncScheduler } from '@/services/sync/SyncScheduler';
 import { bootstrapCloudSync, getPendingCount, getLastSyncError } from '@/services/sync/SyncEngine';
-import { Route, Switch, Router } from 'wouter';
+import { Redirect, Route, Switch, Router, useLocation } from 'wouter';
 import { useHashLocation } from 'wouter/use-hash-location';
+import { usePanvasLocation, isDesktop } from '@/lib/location';
 import { LandingPage } from '@/components/marketing/LandingPage';
 import { ComingSoonPage } from '@/components/marketing/ComingSoonPage';
 import { RoadmapPage } from '@/components/marketing/RoadmapPage';
@@ -34,13 +35,21 @@ import { VerifyEmailPage } from '@/components/auth/VerifyEmailPage';
 import { ForgotPasswordPage } from '@/components/auth/ForgotPasswordPage';
 import { ResetPasswordPage } from '@/components/auth/ResetPasswordPage';
 import { SettingsLayout } from '@/components/settings/SettingsLayout';
-import { PdfWorkspace } from '@/components/pdf/PdfWorkspace';
-import { CanvasWorkspace } from '@/components/canvas/CanvasWorkspace';
 import { LibraryWorkspace } from '@/components/library/LibraryWorkspace';
-import { WorkspaceExplorerPreview } from '@/components/workspace/WorkspaceExplorerPreview';
-import { PenToolbarPreview } from '@/components/pen-toolbar/PenToolbarPreview';
-import { AppearanceStudio } from '@/components/appearance/AppearanceStudio';
-import { SystemPreview } from '@/components/system/SystemPreview';
+import { KnowledgeWorkspace } from '@/components/knowledge/KnowledgeWorkspace';
+import { CLOUD_SYNC_ENABLED } from '@/config/features';
+import { rememberAppRoute } from '@/services/library/libraryRouteState';
+import { scheduleDeferredLocalModelPreparation } from '@/services/recognition/modelPreparation';
+
+function AppRouteMemory() {
+  const [location] = useLocation();
+  useEffect(() => rememberAppRoute(location), [location]);
+  return null;
+}
+
+// Developer-only handwriting-fallback benchmark lab; lazy so the model-facing
+// harness code never touches the startup bundle.
+const HandwritingBenchmarkLab = React.lazy(() => import('@/dev/HandwritingBenchmarkLab'));
 
 export function App() {
   const [isReady, setIsReady] = useState(false);
@@ -51,6 +60,17 @@ export function App() {
 
   // Register keyboard shortcuts
   useKeyboardShortcuts();
+
+  // In desktop Electron (hash location), ensure unhashed /landing routes into #/landing.
+  useEffect(() => {
+    if (!isDesktop) return;
+    const pathname = window.location.pathname;
+    if (pathname.includes('/landing')) {
+      if (!window.location.hash || window.location.hash === '#' || window.location.hash === '#/') {
+        window.location.hash = '#/landing';
+      }
+    }
+  }, []);
 
   // Initialize on mount
   useEffect(() => {
@@ -73,19 +93,37 @@ export function App() {
 
         // 3. Load workspace data strictly scoped to this user
         await loadWorkspaces();
+        // 3.1 Restore the persisted active document through the canonical
+        // workspace-content path: it hydrates the active workspace's records
+        // first, validates the stored page/canvas ids against them, and
+        // never records a new user-open event.
+        const { activeWorkspaceId: restoredWorkspaceId, loadWorkspaceContents } = useWorkspaceStore.getState();
+        if (restoredWorkspaceId) {
+          await loadWorkspaceContents(restoredWorkspaceId);
+        }
         await loadRecentFiles();
         await loadTrash();
-        
+
         // 3.5 Load global settings
         const { useNotebookSettingsStore } = await import('@/stores/notebookSettingsStore');
         await useNotebookSettingsStore.getState().loadSettings();
 
         // 4. Start sync scheduler
-        syncScheduler.start();
+        if (CLOUD_SYNC_ENABLED) syncScheduler.start();
 
+        // The default-landing decision may fall back to the Library only
+        // after the restore pass above has settled.
+        useWorkspaceStore.getState().markInitialDocumentRestoreComplete();
         setIsReady(true);
+        // Background local-model preparation (dormant while the neural
+        // fallback is disabled): never blocks startup, only runs when no
+        // native handwriting provider exists, and only at idle.
+        scheduleDeferredLocalModelPreparation();
       } catch (err) {
         console.error('Failed to initialize Panvas:', err);
+        // Local-first: still show the app; the landing decision treats the
+        // restore pass as settled and falls through to the Library.
+        useWorkspaceStore.getState().markInitialDocumentRestoreComplete();
         setIsReady(true); // Show app anyway, it's local-first
       }
     }
@@ -98,7 +136,18 @@ export function App() {
   }, [loadWorkspaces, loadRecentFiles, loadTrash, initAuth]);
 
   useEffect(() => {
-    if (!isReady || !user?.id) {
+    const updateConnectivity = () => useSyncStore.getState().setOnline(navigator.onLine);
+    updateConnectivity();
+    window.addEventListener('online', updateConnectivity);
+    window.addEventListener('offline', updateConnectivity);
+    return () => {
+      window.removeEventListener('online', updateConnectivity);
+      window.removeEventListener('offline', updateConnectivity);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!CLOUD_SYNC_ENABLED || !isReady || !user?.id) {
       if (!user?.id) bootstrappedUserId.current = null;
       return;
     }
@@ -157,130 +206,81 @@ export function App() {
     setLastSyncedAt,
   ]);
 
-  // Loading screen
+  // Loading screen — Panvas brand mark, compact wordmark, one restrained
+  // progress hairline. It renders only while bootstrap awaits and vanishes
+  // as soon as `isReady` flips; no artificial delay is added.
   if (!isReady) {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-panvas-bg-primary">
-        <div className="flex flex-col items-center gap-4 animate-fade-in">
-          <img src="./panvas-logo-1.1.png" alt="Panvas" className="w-16 h-16 rounded-2xl shadow-glass-sm animate-pulse-subtle" />
-          <div className="text-center mt-2">
-            <p className="text-sm text-panvas-text-tertiary">Loading workspace...</p>
+        <div className="flex flex-col items-center gap-3 animate-fade-in">
+          <img src="./panvas-logo-1.1.png" alt="" className="w-14 h-14 rounded-2xl shadow-glass-sm" aria-hidden="true" />
+          <p className="text-sm font-semibold tracking-tight text-panvas-text-primary">Panvas</p>
+          <div className="w-24 h-0.5 rounded-full bg-panvas-bg-tertiary overflow-hidden" aria-hidden="true">
+            <div className="h-full w-2/5 rounded-full bg-panvas-text-secondary/70 animate-[slideInRight_1.4s_ease-in-out_infinite]" />
           </div>
-          <div className="w-32 h-0.5 rounded-full bg-panvas-bg-tertiary overflow-hidden mt-4">
-            <div className="h-full bg-panvas-text-secondary animate-[slideInRight_1.5s_ease-in-out_infinite]"
-                 style={{ width: '40%' }}
-            />
-          </div>
+          <p className="text-xs text-panvas-text-tertiary" role="status">Starting…</p>
         </div>
       </div>
     );
   }
 
   return (
-    <Router hook={useHashLocation}>
+    <Router hook={usePanvasLocation}>
+      <AppRouteMemory />
       <Switch>
-        <Route path="/" component={LandingPage} />
+        {/* Normal Panvas builds open the workspace at the bare origin. The
+            marketing shell remains available at /landing and is still the
+            root only for explicitly marketing-only builds. */}
+        <Route path="/">
+          {import.meta.env.VITE_MARKETING_ONLY === 'true' ? <LandingPage /> : <Redirect to="/app/library" />}
+        </Route>
+        <Route path="/landing" component={LandingPage} />
+        <Route path="/app/landing" component={LandingPage} />
         <Route path="/privacy" component={PrivacyPolicyPage} />
         <Route path="/terms" component={TermsOfServicePage} />
         <Route path="/security" component={SecurityPage} />
         <Route path="/roadmap" component={RoadmapPage} />
-        {/* Temporary visual-review entry point. Remove after PDF workspace approval. */}
-        <Route path="/pdf-preview">
-          <AppShell>
-            <PdfWorkspace />
-          </AppShell>
+        {/* Auth routes */}
+        <Route path="/auth/login" component={LoginPage} />
+        <Route path="/auth/signup" component={SignUpPage} />
+        <Route path="/auth/verify-email" component={VerifyEmailPage} />
+        <Route path="/auth/forgot-password" component={ForgotPasswordPage} />
+        <Route path="/auth/reset-password" component={ResetPasswordPage} />
+        <Route path="/auth/callback" component={AuthCallbackHandler} />
+        <Route path="/private-beta" component={ComingSoonPage} />
+        <Route path="/app/settings/:tab*">
+          <AuthGuard>
+            <SettingsLayout />
+          </AuthGuard>
         </Route>
-        <Route path="/canvas-preview">
-          <AppShell>
-            <CanvasWorkspace />
-          </AppShell>
+        <Route path="/app/knowledge">
+          <AuthGuard>
+            <AppShell>
+              <KnowledgeWorkspace />
+            </AppShell>
+          </AuthGuard>
         </Route>
-        {/* Temporary visual-review entry points for the Canvas workspace. */}
-        <Route path="/canvas-workspace-preview">
-          <AppShell>
-            <CanvasWorkspace />
-          </AppShell>
+        <Route path="/app/dev/handwriting-benchmark">
+          <AuthGuard>
+            <React.Suspense fallback={null}>
+              <HandwritingBenchmarkLab />
+            </React.Suspense>
+          </AuthGuard>
         </Route>
-        <Route path="/app/canvas-workspace-preview">
-          <AppShell>
-            <CanvasWorkspace />
-          </AppShell>
+        <Route path="/app/library">
+          <AuthGuard>
+            <AppShell>
+              <LibraryWorkspace />
+            </AppShell>
+          </AuthGuard>
         </Route>
-        <Route path="/library-preview">
-          <AppShell>
-            <LibraryWorkspace />
-          </AppShell>
+        <Route path="/app">
+          <AuthGuard>
+            <AppShell>
+              <WorkspaceContent />
+            </AppShell>
+          </AuthGuard>
         </Route>
-        <Route path="/workspace-explorer-preview">
-          <AppShell>
-            <WorkspaceExplorerPreview />
-          </AppShell>
-        </Route>
-        <Route path="/app/workspace-explorer-preview">
-          <AppShell>
-            <WorkspaceExplorerPreview />
-          </AppShell>
-        </Route>
-        <Route path="//workspace-explorer-preview">
-          <AppShell>
-            <WorkspaceExplorerPreview />
-          </AppShell>
-        </Route>
-        <Route path="/pen-toolbar-preview">
-          <AppShell>
-            <PenToolbarPreview />
-          </AppShell>
-        </Route>
-        <Route path="/app/pen-toolbar-preview">
-          <AppShell>
-            <PenToolbarPreview />
-          </AppShell>
-        </Route>
-        <Route path="//pen-toolbar-preview">
-          <AppShell>
-            <PenToolbarPreview />
-          </AppShell>
-        </Route>
-        <Route path="/theme-preview">
-          <AppShell>
-            <AppearanceStudio />
-          </AppShell>
-        </Route>
-        <Route path="/system-preview">
-          <AppShell>
-            <SystemPreview />
-          </AppShell>
-        </Route>
-        
-        {/* Conditionally render auth/app routes based on marketing mode */}
-        {import.meta.env.VITE_MARKETING_ONLY === 'true' ? (
-          <>
-            <Route path="/auth/:rest*" component={ComingSoonPage} />
-            <Route path="/app" component={ComingSoonPage} />
-            <Route path="/private-beta" component={ComingSoonPage} />
-          </>
-        ) : (
-          <>
-            <Route path="/auth/login" component={LoginPage} />
-            <Route path="/auth/signup" component={SignUpPage} />
-            <Route path="/auth/verify-email" component={VerifyEmailPage} />
-            <Route path="/auth/forgot-password" component={ForgotPasswordPage} />
-            <Route path="/auth/reset-password" component={ResetPasswordPage} />
-            <Route path="/auth/callback" component={AuthCallbackHandler} />
-            <Route path="/app/settings/:tab*">
-              <AuthGuard>
-                <SettingsLayout />
-              </AuthGuard>
-            </Route>
-            <Route path="/app">
-              <AuthGuard>
-                <AppShell>
-                  <WorkspaceContent />
-                </AppShell>
-              </AuthGuard>
-            </Route>
-          </>
-        )}
         <Route>
           <LandingPage />
         </Route>
