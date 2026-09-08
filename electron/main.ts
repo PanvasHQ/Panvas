@@ -25,7 +25,7 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
   : RENDERER_DIST;
 
 // Use the existing png logo for the app icon
-const appIconPath = path.join(process.env.VITE_PUBLIC, 'panvas-logo-1.1.png');
+const appIconPath = path.join(process.env.VITE_PUBLIC, 'panvas_logo.png');
 
 let win: BrowserWindow | null;
 

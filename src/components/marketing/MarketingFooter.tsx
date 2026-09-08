@@ -26,7 +26,7 @@ export const MarketingFooter: React.FC = () => {
           <div className="space-y-4 max-w-lg">
             <div className="flex items-center gap-3">
               <img
-                src="/panvas-logo-1.1.png"
+                src="/panvas_logo.png"
                 alt="Panvas Brandmark"
                 className="h-8 w-auto object-contain opacity-90"
               />

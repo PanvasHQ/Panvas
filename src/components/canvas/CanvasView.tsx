@@ -510,7 +510,7 @@ export function CanvasView() {
     return (
       <div className="w-full h-full flex items-center justify-center bg-panvas-bg-primary">
         <div className="flex flex-col items-center gap-3">
-          <img src="./panvas-logo-1.1.png" alt="Panvas" className="w-12 h-12 rounded-xl shadow-glass-sm animate-pulse-subtle" />
+          <img src="./panvas_logo.png" alt="Panvas" className="w-12 h-12 rounded-xl shadow-glass-sm animate-pulse-subtle" />
           <span className="text-sm text-panvas-text-tertiary mt-2">Loading canvas...</span>
         </div>
       </div>
@@ -590,7 +590,7 @@ export function CanvasView() {
                 <div className="flex flex-col items-center gap-4 w-full max-w-sm px-6 pb-24">
                   <div className="w-20 h-20 mb-2 relative flex items-center justify-center">
                     <div className="absolute inset-0 bg-gradient-to-tr from-panvas-accent-purple/20 to-panvas-accent-blue/20 rounded-2xl blur-xl"></div>
-                    <img src="./panvas-logo-1.1.png" alt="Panvas" className="w-full h-full rounded-2xl shadow-glass-lg relative z-10 select-none pointer-events-none" />
+                    <img src="./panvas_logo.png" alt="Panvas" className="w-full h-full rounded-2xl shadow-glass-lg relative z-10 select-none pointer-events-none" />
                   </div>
                   <div className="text-2xl font-semibold tracking-tight text-panvas-text-primary text-center mb-6 select-none">
                     Welcome to Panvas

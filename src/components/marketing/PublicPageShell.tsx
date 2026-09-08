@@ -10,7 +10,7 @@ export function PublicPageShell({ label, title, intro, children, aside }: { labe
   const [location]=useLocation();
   return <div className="pp-shell">
     <header className="pp-header">
-      <Link href="/" className="pp-brand"><img src="/panvas-logo-1.1.png" alt=""/><b>Panvas</b></Link>
+      <Link href="/" className="pp-brand"><img src="/panvas_logo.png" alt=""/><b>Panvas</b></Link>
       <nav aria-label="Public pages">{pages.map(([href,text])=><Link key={href} href={href} aria-current={location===href?'page':undefined}>{text}</Link>)}</nav>
       <Link href="/" className="pp-home">Back to Panvas <ArrowUpRight size={14}/></Link>
     </header>
@@ -23,7 +23,7 @@ export function PublicPageShell({ label, title, intro, children, aside }: { labe
       {children}
     </main>
     <footer className="pp-footer">
-      <div className="pp-footer-brand"><img src="/panvas-logo-1.1.png" alt=""/><p>Structured when you need it.<br/>Local by default.</p></div>
+      <div className="pp-footer-brand"><img src="/panvas_logo.png" alt=""/><p>Structured when you need it.<br/>Local by default.</p></div>
       <nav aria-label="Footer navigation">
         <div><span>Product</span><Link href="/">Home</Link><Link href="/roadmap">Roadmap</Link></div>
         <div><span>Trust</span><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link><Link href="/security">Security</Link></div>

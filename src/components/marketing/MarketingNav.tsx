@@ -57,7 +57,7 @@ export const MarketingNav: React.FC<MarketingNavProps> = ({ onOpenWorkspace }) =
             aria-label="Panvas Home"
           >
             <img
-              src="/panvas-logo-1.1.png"
+              src="/panvas_logo.png"
               alt="Panvas Brandmark"
               className="h-7 w-auto object-contain transition-transform duration-200 group-hover:scale-105"
             />

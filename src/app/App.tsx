@@ -213,7 +213,7 @@ export function App() {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-panvas-bg-primary">
         <div className="flex flex-col items-center gap-3 animate-fade-in">
-          <img src="./panvas-logo-1.1.png" alt="" className="w-14 h-14 rounded-2xl shadow-glass-sm" aria-hidden="true" />
+          <img src="./panvas_logo.png" alt="" className="w-14 h-14 rounded-2xl shadow-glass-sm" aria-hidden="true" />
           <p className="text-sm font-semibold tracking-tight text-panvas-text-primary">Panvas</p>
           <div className="w-24 h-0.5 rounded-full bg-panvas-bg-tertiary overflow-hidden" aria-hidden="true">
             <div className="h-full w-2/5 rounded-full bg-panvas-text-secondary/70 animate-[slideInRight_1.4s_ease-in-out_infinite]" />

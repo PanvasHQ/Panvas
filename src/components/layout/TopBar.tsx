@@ -136,7 +136,7 @@ export function TopBar() {
           className="flex items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-panvas-bg-hover focus-ring flex-shrink-0"
           aria-label="Open Panvas library"
         >
-          <img src="./panvas-logo-1.1.png" alt="" className="h-6 w-6 rounded-md" />
+          <img src="./panvas_logo.png" alt="" className="h-6 w-6 rounded-md" />
           <span className="hidden text-sm font-semibold tracking-tight sm:inline">Panvas</span>
         </button>
 

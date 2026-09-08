@@ -11,7 +11,6 @@
     "dev": "vite",
     "dev:landing": "vite --mode landing",
     "dev:web": "vite --mode web",
-    "test": "node --test tests/layers.test.ts tests/panvas-interactions.test.ts tests/page-properties.test.ts tests/release-readiness.test.ts tests/search-pdf.test.ts tests/pdf-annotation.test.ts tests/notebook-export.test.ts tests/notebook-export-ui.test.ts tests/toolbar-layout.test.ts tests/canvas-capabilities.test.ts tests/audio-notes.test.ts tests/handwriting-recognition.test.ts tests/library.test.ts tests/library-data.test.ts tests/library-lifecycle.test.ts tests/browser-bootstrap.test.ts tests/default-landing.test.ts tests/mobile-presentation.test.ts tests/rich-text.test.ts tests/neural-handwriting.test.ts tests/model-lifecycle.test.ts tests/canvas-persistence.test.ts tests/cloud-sync-core.test.ts tests/cloud-sync-stability.test.ts tests/cloud-workspace-unification.test.ts tests/cloud-sync-v2.test.ts tests/trash-purge.test.ts tests/sticky-notes.test.ts tests/sticky-notes-runtime.test.ts tests/layers-runtime.test.ts tests/local-elements-runtime.test.ts",
     "test": "node --test tests/layers.test.ts tests/panvas-interactions.test.ts tests/page-properties.test.ts tests/release-readiness.test.ts tests/search-pdf.test.ts tests/pdf-annotation.test.ts tests/notebook-export.test.ts tests/notebook-export-ui.test.ts tests/toolbar-layout.test.ts tests/canvas-capabilities.test.ts tests/audio-notes.test.ts tests/handwriting-recognition.test.ts tests/library.test.ts tests/library-data.test.ts tests/library-lifecycle.test.ts tests/browser-bootstrap.test.ts tests/default-landing.test.ts tests/mobile-presentation.test.ts tests/rich-text.test.ts tests/neural-handwriting.test.ts tests/model-lifecycle.test.ts tests/canvas-persistence.test.ts tests/cloud-sync-core.test.ts tests/cloud-sync-stability.test.ts tests/cloud-workspace-unification.test.ts tests/cloud-sync-v2.test.ts tests/trash-purge.test.ts tests/sticky-notes.test.ts tests/sticky-notes-runtime.test.ts tests/layers-runtime.test.ts tests/local-elements-runtime.test.ts tests/discord-rpc.test.ts",
     "test:resize": "node --test tests/toolbar-resize.test.ts",
     "test:electron": "node --test tests/electron-pipeline.test.ts",
@@ -114,7 +113,7 @@
       "**/*.node"
     ],
     "win": {
-      "icon": "public/panvas-logo-1.1.png",
+      "icon": "public/panvas_logo.png",
       "target": [
         {
           "target": "nsis",

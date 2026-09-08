@@ -138,7 +138,7 @@ test('a destroyed editor refuses to format', () => {
 
 test('loading surfaces use the canonical Panvas mark with restrained, theme-aware chrome', async () => {
   const html = await read('../index.html');
-  assert.match(html, /src="\/panvas-logo-1\.1\.png"/);
+  assert.match(html, /src="\/panvas_logo\.png"/);
   assert.match(html, /panvas-bootstrap-logo/);
   assert.match(html, /panvas-bootstrap-wordmark">Panvas</);
   assert.match(html, /panvas-bootstrap-bar/);
@@ -149,7 +149,7 @@ test('loading surfaces use the canonical Panvas mark with restrained, theme-awar
   assert.ok(!/<h1>/i.test(html.split('<div id="root">')[1] ?? ''));
 
   const app = await read('../src/app/App.tsx');
-  assert.match(app, /\.\/panvas-logo-1\.1\.png/);
+  assert.match(app, /\.\/panvas_logo\.png/);
   assert.match(app, /Starting…/);
   assert.match(app, /animate-\[slideInRight_1\.4s_ease-in-out_infinite\]/);
   assert.ok(!/animate-pulse-subtle/.test(app));

@@ -186,7 +186,7 @@ function Nav({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
   return (
     <header className={'pl-nav' + (scrolled ? ' is-scrolled' : '')}>
       <a className="pl-brand" href="#top" aria-label="Panvas home">
-        <img src="/panvas-logo-1.1.png" alt="" />
+        <img src="/panvas_logo.png" alt="" />
         <span>Panvas</span>
       </a>
       <nav className="pl-nav-links" aria-label="Primary navigation">
@@ -555,7 +555,7 @@ function Footer() {
         transition={{ duration: 0.3, ease: easeOut }}
       >
         <div className="pl-footer-statement">
-          <img src="/panvas-logo-1.1.png" alt="" />
+          <img src="/panvas_logo.png" alt="" />
           <p>Structured when you need it. Spatial when you do not. Local by default.</p>
         </div>
         <nav className="pl-footer-nav" aria-label="Footer navigation">
