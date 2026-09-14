@@ -243,20 +243,15 @@ function Hero({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
           </motion.h1>
           <p className="pl-hero-support">A local-first visual workspace for technical thinking. Notebooks, ink, PDFs, and an infinite Canvas, with room for your own way of working.</p>
           <div className="pl-actions">
-            <a className="pl-button pl-button-primary" href="#download"><Download aria-hidden="true" /> Windows</a>
             <a className="pl-button pl-button-primary" href={PANVAS_RELEASE.windows.downloadUrl}><Download aria-hidden="true" /> Windows</a>
             <button type="button" className="pl-button pl-button-secondary" onClick={onOpenWorkspace}>Explore Panvas <ArrowRight aria-hidden="true" /></button>
           </div>
-          <span className="pl-hero-availability">Windows pre-release · Browser build in development</span>
           <span className="pl-hero-availability">Panvas v0.1.0 · Windows 64-bit &amp; Browser Build</span>
         </div>
         <div className="pl-hero-art">
           <SketchNote className="pl-hero-note">a place for the way you think <span aria-hidden="true">✧</span></SketchNote>
           <SketchArrow className="pl-hero-arrow" />
           <div className="pl-hero-depth">
-            <HeroInkPlayground onOpenWorkspace={onOpenWorkspace}>
-              <ProductImage src="HeroPanvasClean.png" alt="The real Panvas workspace, with handwritten welcome notes, drawing tools, notebook navigation, and page properties" eager sizes="(max-width: 760px) 94vw, 68vw" />
-            </HeroInkPlayground>
             <div className="pl-hero-video-frame">
               {reduceMotion ? (
                 <img
