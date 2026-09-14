@@ -2,7 +2,7 @@
 
 Panvas is a local-first visual workspace for notes, handwriting, PDFs, and spatial thinking.
 
-![Panvas workspace](public/marketing-assets/hero-workspace-clean.webp)
+![Panvas workspace](public/marketing-assets/handwriting-ocr-clean.webp)
 
 Panvas combines a structured notebook with a free-form canvas. The Windows desktop build keeps the workspace on disk; the web build uses browser-local storage. Panvas is MIT licensed.
 
