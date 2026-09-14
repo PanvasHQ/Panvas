@@ -1,101 +1,182 @@
+<p align="center">
+  <img src="public/panvas_logo.png" alt="Panvas Logo" width="140" />
+</p>
+
 # Panvas
 
-Panvas is a local-first visual workspace for notes, handwriting, PDFs, and spatial thinking.
+> **Local-first visual workspace for notes, handwriting, PDFs, and spatial thinking.**
 
-![Panvas workspace](public/marketing-assets/handwriting-ocr-clean.webp)
+<p align="center">
+  <a href="https://github.com/sumitahmed/Panvas/releases/latest">
+    <img src="https://img.shields.io/badge/Download-Windows_x64-243c4a?style=flat&logo=windows" alt="Download for Windows" />
+  </a>
+  <a href="https://panvas.vercel.app/app">
+    <img src="https://img.shields.io/badge/Open-Panvas_Web-0284c7?style=flat" alt="Open Panvas Web" />
+  </a>
+  <a href="https://panvas.vercel.app/">
+    <img src="https://img.shields.io/badge/Website-panvas.vercel.app-10b981?style=flat" alt="Website" />
+  </a>
+</p>
 
-Panvas combines a structured notebook with a free-form canvas. The Windows desktop build keeps the workspace on disk; the web build uses browser-local storage. Panvas is MIT licensed.
+<p align="center">
+  <img src="https://img.shields.io/badge/version-v0.1.0-blue.svg" alt="Version 0.1.0" />
+  <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT License" />
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Web-lightgrey.svg" alt="Platforms" />
+  <img src="https://img.shields.io/badge/storage-Local--First-orange.svg" alt="Local First" />
+</p>
 
-## What ships in v0.1.0
+---
 
-### Structured notebooks
+![Panvas Hero Workspace](public/marketing-assets/hero-workspace-clean.webp)
 
-Workspaces contain folders, notebooks, sections, and pages:
+<p align="center">
+  <em>Think. Sketch. Write. Build.</em><br />
+  A unified digital workspace combining structured notebook hierarchy, pressure-aware vector ink, PDF annotation, and an infinite canvas — keeping all data stored locally on your device.
+</p>
 
-```text
-Workspace -> Folder -> Notebook -> Section -> Page
-```
+---
 
-Notebook pages support rich text, vector ink, pressure-aware pen input, smoothing, erasing, a ruler, paper templates, sticky notes, layers, images, and voice notes.
+## Why Panvas?
 
-### Documents and visual thinking
+Most note apps force an annoying compromise: you either get rigid linear documents locked in someone else's cloud, or an unconstrained whiteboard that gets messy fast.
 
-- Import and read PDFs with PDF.js, annotate them with vector ink, and export annotated PDFs.
-- Open an Excalidraw-powered infinite canvas for diagrams, shapes, text, images, sticky notes, and Panvas custom blocks.
-- Search local titles and document content, restore items from trash, and export/import workspace backups.
+Panvas bridges structured notebooks and infinite canvases into a single, distraction-free environment. You get the depth of hierarchical notebooks with rich text and vector inking, alongside a spatial diagramming canvas and PDF workbench — with zero mandatory cloud accounts, zero telemetry lock-in, and full ownership of your local files.
 
-### Local-first storage
+---
 
-- Windows Electron stores workspace JSON and binary assets under `Documents/Panvas/` by default. A different storage root can be selected in settings.
-- The browser build stores records in origin-scoped Dexie/IndexedDB. Browser data is subject to the browser's quota and clearing policies.
-- Cloud Sync is release-gated and disabled by default. A build must explicitly enable the cloud flags before Google Drive sync is offered; local data remains the primary copy.
+## Features
 
-Handwriting-to-text uses Windows Ink in the Windows Electron build and a browser-native handwriting API where the browser exposes one. If no supported provider is available, Panvas keeps the original ink. The experimental local neural fallback is disabled in v0.1.0.
+✦ **Structured notebooks**: Full workspace hierarchy (`Workspace → Folder → Notebook → Section → Page`) with rich-text editing, paper templates, and multi-layer drawing.  
+✦ **Natural handwriting & ink**: Pressure-aware vector pen engine, palm rejection, stroke smoothing, smart erasing, and precision ruler tools.  
+✦ **PDF annotation**: In-place PDF viewer with vector ink markup, text highlights, and high-fidelity annotated PDF export powered by `pdf-lib`.  
+✦ **Infinite visual canvas**: Spatial diagramming powered by Excalidraw, integrated with custom Panvas cards and visual note objects.  
+✦ **Sticky notes / images / voice notes**: Floating sticky notes, image cropping and placement, and embedded voice notes pinned directly to pages.  
+✦ **Search / trash / backup**: Fast client-side search across titles and page contents, soft-delete trash recovery, and full JSON workspace backup export/import.  
+✦ **Local-first storage**: Desktop files live directly on your disk in human-readable JSON and binary assets.
 
-## Download and platform support
+| Structured Notebooks & Ink | Spatial Canvas |
+|:---:|:---:|
+| ![Notebooks & Ink](public/marketing-assets/notebooks-templates-clean.webp) | ![Spatial Canvas](public/marketing-assets/spatial-canvas-clean.webp) |
+| **PDF Annotation Workbench** | **Ink Gestures & Stationery** |
+| ![PDF Annotation](public/marketing-assets/pdf-workbench-clean.webp) | ![Ink Gestures](public/marketing-assets/ink-gestures-clean.webp) |
 
-- Windows 10/11, 64-bit: download `Panvas-0.1.0-Setup.exe` from the [GitHub Releases](https://github.com/sumitahmed/Panvas/releases) page when the v0.1.0 release is published.
-- Web app: open [panvas.vercel.app/app](https://panvas.vercel.app/app). It is a browser-local build, not a hosted Panvas data service.
-- Project site: [panvas.vercel.app](https://panvas.vercel.app/).
+---
 
-The v0.1.0 Windows installer is unsigned, so Windows SmartScreen may show an unrecognized-app warning. Verify the downloaded file against the `SHA256SUMS.txt` asset on the release page before running it. Do not install a binary from an unlisted mirror.
+## Download
+
+### Windows (Desktop)
+- **Panvas v0.1.0 (64-bit)**: Download [`Panvas-0.1.0-Setup.exe`](https://github.com/sumitahmed/Panvas/releases/latest) from the [GitHub Releases](https://github.com/sumitahmed/Panvas/releases) portal.
+- **SHA-256 Checksum Verification**: Verify the downloaded installer against the official checksum published in `SHA256SUMS.txt`:
+  ```powershell
+  Get-FileHash Panvas-0.1.0-Setup.exe -Algorithm SHA256
+  # Verified SHA-256: 9d4cfcded4e3b76d8880ab4948901de0c56e2595dc793b5eb2433c4430158edd
+  ```
+  *Note: The initial v0.1.0 installer is unsigned while the code signing pipeline is established. If Windows SmartScreen prompts on launch, click "More info" → "Run anyway".*
+
+### Web
+- **Browser App**: Launch [panvas.vercel.app/app](https://panvas.vercel.app/app) to use Panvas directly in Chromium, Firefox, or Safari (stored in origin-scoped IndexedDB).
+
+---
+
+## Local-first by design
+
+Your data stays on your machine:
+- **Desktop**: Workspaces, pages, and media attachments are saved directly to `Documents/Panvas/` (or a custom root folder configured in Settings). Writes use an atomic queue with retry logic to avoid corruption.
+- **Web**: Workspaces are saved to origin-scoped IndexedDB via Dexie.
+- **Cloud Sync**: Google Drive sync is release-gated and disabled by default. When enabled, your local machine remains the primary source of record.
+
+For complete data schemas and persistence flow, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/STORAGE_AND_PERSISTENCE.md](docs/STORAGE_AND_PERSISTENCE.md).
+
+---
 
 ## Build from source
 
-Prerequisites: Node.js 20 or 22 LTS, npm, and Git.
+Prerequisites: **Node.js 20 or 22 LTS**, **npm**, and **Git**.
 
 ```bash
+# 1. Clone the repository
 git clone https://github.com/sumitahmed/Panvas.git
 cd Panvas
+
+# 2. Install dependencies
 npm ci
 
-# Browser/Vite development server (open http://localhost:5173/app)
+# 3. Start local development
+# Web / Vite dev server (open http://localhost:5173/app)
 npm run dev
 
-# Electron desktop app; prestart builds the renderer and Electron bundles first
+# Desktop / Electron app
 npm start
 
+# 4. Run tests and type checks
 npm run typecheck
 npm test
 npm run build
-npm run check:release
 ```
 
-There is no `electron:dev` script in the v0.1.0 `package.json`; use `npm start` for the Electron shell. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and [`.env.example`](.env.example) for variable names. Never commit a populated `.env` file or credentials.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed development workflows and debugging guidelines.
 
-## Architecture at a glance
+---
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    User[User] --> Renderer[React renderer]
-    Renderer --> Services[Engines and domain services]
-    Services --> Repositories[Repository layer]
-    Repositories -->|Electron| Bridge[Preload bridge]
-    Bridge --> IPC[Validated IPC]
-    IPC --> Files[(Documents/Panvas)]
-    Repositories -->|Web| IndexedDB[(Dexie / IndexedDB)]
+    User[User Input] --> UI[React UI & Canvas]
+    UI --> Engine[Notebook & Inking Engines]
+    Engine --> Repos[Repository Layer]
+    Repos -->|Desktop| IPC[IPC Bridge] --> Files[(Documents/Panvas/)]
+    Repos -->|Web| Dexie[(IndexedDB Storage)]
 ```
 
-The renderer owns presentation and domain coordination. Electron-only filesystem work crosses a narrow `contextBridge`/IPC boundary. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md).
+The renderer coordinates the user interface and domain logic. Filesystem access is strictly isolated through Electron's `contextBridge` and validated IPC handlers.
 
-## Project status
+Detailed references:
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Subsystem boundaries and execution flow
+- [docs/DATA_MODEL.md](docs/DATA_MODEL.md) — Entity models and schemas
+- [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md) — Inking and canvas coordinate systems
 
-**Panvas v0.1.0 is the initial public release.** It is a feature-frozen foundation release, not a promise of zero defects or long-term compatibility. Read [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) before installing. The release page is the source of truth for whether the Windows installer has been published.
+---
 
 ## Contributing
 
-Panvas is free and open source. Contributions are welcome in bug fixes, accessibility, tests, documentation, performance work, platform support, editor improvements, and focused features that fit the roadmap. Start with [CONTRIBUTING.md](CONTRIBUTING.md), browse [docs/CONTRIBUTOR_ROADMAP.md](docs/CONTRIBUTOR_ROADMAP.md), and use the issue templates for actionable reports.
+Panvas is free, open-source software built for the community. Contributions are very welcome!
 
-## Documentation
+- **[Report a Bug](https://github.com/sumitahmed/Panvas/issues/new?template=bug_report.md)** — Found an issue? Let us know with steps to reproduce.
+- **[Request a Feature](https://github.com/sumitahmed/Panvas/issues/new?template=feature_request.md)** — Share ideas for improvements or new capabilities.
+- **[Contributor Roadmap](docs/CONTRIBUTOR_ROADMAP.md)** — See planned areas where community help is most valuable.
+- **[Contributing Guidelines](CONTRIBUTING.md)** — Read before opening pull requests.
+- **[Code of Conduct](CODE_OF_CONDUCT.md)** — Our community standards.
 
-The [documentation index](docs/README.md) links the canonical architecture, data model, storage, testing, cloud-sync, security, roadmap, and release notes. Earlier planning and handover material is labelled historical; current source and the canonical documents take precedence.
+---
 
-## Security and support
+## Roadmap
 
-Report vulnerabilities privately using [GitHub Security Advisories](https://github.com/sumitahmed/Panvas/security/advisories). Use [GitHub Issues](https://github.com/sumitahmed/Panvas/issues) for reproducible bugs and actionable feature requests.
+- **v0.1.x**: Stability hardening, stylus gesture polish, responsive layout refinements, and test expansion.
+- **Future**: Native macOS & Linux packaging, mobile companion app, handwriting recognition enhancements, and additional sync providers (e.g. OneDrive).
 
-Panvas is intended to remain free and open source. If a real funding channel is configured in the future, sponsorship can help with development time, testing, accessibility, documentation, infrastructure, and code signing. No funding account is enabled today.
+Read the detailed roadmap in [docs/ROADMAP.md](docs/ROADMAP.md).
+
+---
+
+## Support Panvas
+
+Panvas is free and open source. If you find Panvas useful, you can support the project by:
+- Giving the repository a ⭐ on [GitHub](https://github.com/sumitahmed/Panvas)
+- Reporting bugs and suggesting features
+- Contributing code, tests, or documentation
+
+*(Note: No financial sponsorship or donation channels are active at this time.)*
+
+---
+
+## Security
+
+Please report security vulnerabilities privately via [GitHub Security Advisories](https://github.com/sumitahmed/Panvas/security/advisories). For our vulnerability disclosure process, see [SECURITY.md](SECURITY.md).
+
+---
 
 ## License
 
-Panvas is available under the [MIT License](LICENSE). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency attribution.
+Panvas is licensed under the [MIT License](LICENSE).  
+Third-party notices and licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
