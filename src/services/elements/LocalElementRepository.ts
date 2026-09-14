@@ -1,5 +1,6 @@
 import { generateId } from '../../lib/utils/id.ts';
 import type { ImageObject, Shape, Stroke, TextObject } from '@/components/notebook/engine/drawingTypes';
+import { createStickyPreset, STICKY_PRESETS } from '../../components/notebook/stickyNotes.ts';
 
 export interface ElementSnapshot {
   type: 'panvas/elements';
@@ -21,32 +22,33 @@ export interface LocalElement {
   builtin?: boolean;
 }
 
-function starterText(id: string, text: string, background: string, name: string, shape: string = 'rounded-rect'): LocalElement {
+export function getStarterElements(): LocalElement[] {
   const now = 0;
-  return {
-    id, workspaceId: 'builtin', name, category: 'Starter', favorite: false, builtin: true, createdAt: now, updatedAt: now,
-    snapshot: {
-      type: 'panvas/elements', strokes: [], shapes: [], images: [], texts: [{
-        id: `${id}-text`, type: 'text', x: 80, y: 80, width: 190, height: 90, createdAt: now,
-        content: { type: 'doc', content: [{ type: 'paragraph', content: text ? [{ type: 'text', text }] : [] }] },
-        metadata: {
-          isStickyNote: true,
-          color: background,
-          shape,
-          pastePresentation: 'sticky-note',
-          elementBackground: background,
-        },
-      }],
-    },
-  };
+  const make = (id: string, name: string, snapshot: ElementSnapshot): LocalElement => ({
+    id, workspaceId: 'builtin', name, category: 'Starter', favorite: false, builtin: true, createdAt: now, updatedAt: now, snapshot,
+  });
+  const stickyStarters = STICKY_PRESETS.map(preset => make(
+    `builtin-sticky-${preset.id}`,
+    preset.label,
+    { type: 'panvas/elements', strokes: [], shapes: [], images: [], texts: [createStickyPreset(preset.id, `builtin-sticky-${preset.id}-text`, 0, 0)] },
+  ));
+  const shapeDefinitions = [
+    ['rectangle', 'Rectangle', 140, 90], ['ellipse', 'Ellipse', 140, 90],
+    ['triangle', 'Triangle', 130, 110], ['diamond', 'Diamond', 120, 120],
+    ['line', 'Line', 150, 0], ['arrow', 'Arrow', 150, 0],
+  ] as const;
+  return [...stickyStarters, ...shapeDefinitions.map(([shapeType, name, width, height]) => make(
+    `builtin-shape-${shapeType}`,
+    name,
+    { type: 'panvas/elements', strokes: [], texts: [], images: [], shapes: [{ id: `builtin-shape-${shapeType}-object`, type: 'shape', shapeType, x: 0, y: 0, width, height, color: '#374151', strokeWidth: 2, fill: null, rotation: 0, opacity: 1, createdAt: 0 }] },
+  ))];
 }
 
-export function getStarterElements(): LocalElement[] {
-  return [
-    starterText('builtin-sticky-yellow', '', '#fff1a8', 'Yellow sticky note'),
-    starterText('builtin-sticky-mint', 'Key idea', '#c9f4df', 'Mint sticky note'),
-    starterText('builtin-emoji-star', '⭐ Important', '#f8e7b0', 'Important stamp'),
-  ];
+export type LocalElementFilter = 'All' | 'Starter' | 'My Elements';
+export function filterLocalElements(elements: readonly LocalElement[], filter: LocalElementFilter): LocalElement[] {
+  if (filter === 'Starter') return elements.filter(element => element.builtin === true);
+  if (filter === 'My Elements') return elements.filter(element => element.builtin !== true);
+  return [...elements];
 }
 
 const STORAGE_KEY = 'elements.v1';

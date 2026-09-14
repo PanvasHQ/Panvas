@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { useIsMobileViewport } from '@/hooks/useIsMobileViewport';
 
 interface OverlayManagerProps {
   children: React.ReactNode;
@@ -18,6 +19,7 @@ export function OverlayManager({
   placement = 'bottom-start',
   offset = { x: 0, y: 4 }
 }: OverlayManagerProps) {
+  const isPhone = useIsMobileViewport();
   const overlayRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ top: -9999, left: -9999 });
 
@@ -32,7 +34,7 @@ export function OverlayManager({
       const anchorRect = anchor.getBoundingClientRect();
       const overlayRect = overlay.getBoundingClientRect();
       const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
       const viewportPadding = 12;
 
       let top = 0;
@@ -114,10 +116,10 @@ export function OverlayManager({
   if (!isOpen) return null;
 
   return createPortal(
-    <div 
+    <div
       ref={overlayRef}
-      className="panvas-overlay fixed overflow-auto"
-      style={{
+      className={`panvas-overlay fixed overflow-auto ${isPhone ? 'panvas-mobile-sheet' : ''}`}
+      style={isPhone ? { bottom: 'var(--panvas-keyboard-inset, 0px)' } : {
         top: position.top,
         left: position.left,
         maxWidth: 'calc(100vw - 24px)',
@@ -125,6 +127,7 @@ export function OverlayManager({
         visibility: position.top === -9999 ? 'hidden' : 'visible'
       }}
     >
+      {isPhone && <button type="button" onClick={onClose} className="panvas-sheet-close" aria-label="Close panel">Done</button>}
       {children}
     </div>,
     document.body

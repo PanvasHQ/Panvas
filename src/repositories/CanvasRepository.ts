@@ -262,7 +262,10 @@ export class CanvasRepository {
     if (typeof window !== 'undefined' && window.panvas) {
       const workspace = await this.resolveElectronWorkspaceId(data.canvasFileId, workspaceId);
       if (!workspace) throw new Error(`Cannot persist canvas ${data.canvasFileId}: workspace not found.`);
-      const [rawPrevious] = await window.panvas.canvas.load(workspace, data.canvasFileId).catch(() => [null]);
+      // The IPC contract returns a scene object or null, never a tuple.
+      // A read error must propagate: treating it as absence could discard
+      // previous fields during a partial save.
+      const rawPrevious = await window.panvas.canvas.load(workspace, data.canvasFileId);
       const previous = isValidCanvasScenePayload(rawPrevious) ? rawPrevious : null;
       const customBlocks = await canvasDB.getBlocksByCanvas(userId, data.canvasFileId);
       const payload = buildCanonicalCanvasPayload(data, previous, customBlocks, userId, Date.now());

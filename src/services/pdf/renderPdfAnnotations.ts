@@ -1,7 +1,13 @@
-import { PDFDocument, StandardFonts, degrees, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
-import type { DrawingData, NotebookObject, Shape, Stroke, TextObject } from '../../components/notebook/engine/drawingTypes';
+import { drawPdfShape } from './drawPdfShape.ts';
+import { drawPdfImage } from './drawPdfImage.ts';
+import { visibleObjects, drawTextObject, type NotebookPdfExportResult, type NotebookExportImage } from './notebookPdfExport.ts';
+import { drawPdfStroke } from './drawPdfStroke.ts';
+import { PDFDocument, StandardFonts, degrees, pushGraphicsState, popGraphicsState, rectangle, clip, endPath, concatTransformationMatrix, type PDFPage } from 'pdf-lib';
+import type { DrawingData, NotebookObject, Stroke } from '../../components/notebook/engine/drawingTypes';
 import type { PdfPageState } from '@/types/notebook';
 import { normalizePdfPageState } from './pdfPageOperations.ts';
+import { pdfSurroundingGeometry } from '../../components/notebook/engine/pdfCoordinates.ts';
+import { resolvePageNoteSpace } from '../../lib/pageProperties.ts';
 
 export interface PdfAnnotationRenderResult {
   bytes: Uint8Array;
@@ -10,77 +16,14 @@ export interface PdfAnnotationRenderResult {
   warnings: string[];
 }
 
-function color(value: string | undefined) {
-  const normalized = /^#[0-9a-f]{6}$/i.test(value ?? '') ? value!.slice(1) : '20242a';
-  return rgb(Number.parseInt(normalized.slice(0, 2), 16) / 255, Number.parseInt(normalized.slice(2, 4), 16) / 255, Number.parseInt(normalized.slice(4, 6), 16) / 255);
-}
+function drawStroke(page: PDFPage, stroke: Stroke): number { drawPdfStroke(page, stroke); return stroke.points.length > 1 ? 1 : 0; }
 
-function textContent(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value)) return value.map(textContent).join('');
-  if (!value || typeof value !== 'object') return '';
-  const record = value as Record<string, unknown>;
-  return `${typeof record.text === 'string' ? record.text : ''}${textContent(record.content)}`;
-}
-
-function drawStroke(page: PDFPage, stroke: Stroke): number {
-  if (stroke.points.length < 2) return 0;
-  const height = page.getHeight();
-  for (let index = 1; index < stroke.points.length; index += 1) {
-    const start = stroke.points[index - 1];
-    const end = stroke.points[index];
-    page.drawLine({
-      start: { x: start.x, y: height - start.y },
-      end: { x: end.x, y: height - end.y },
-      thickness: Math.max(0.5, stroke.thickness),
-      color: color(stroke.color),
-      opacity: Math.max(0, Math.min(1, stroke.opacity)),
-    });
-  }
-  return 1;
-}
-
-function drawShape(page: PDFPage, shape: Shape): boolean {
-  const pageHeight = page.getHeight();
-  const common = { borderColor: color(shape.color), borderWidth: Math.max(0.5, shape.strokeWidth), opacity: 1 };
-  if (shape.shapeType === 'rectangle' || shape.shapeType === 'rounded-rectangle') {
-    page.drawRectangle({ x: shape.x, y: pageHeight - shape.y - shape.height, width: Math.abs(shape.width), height: Math.abs(shape.height), ...common, opacity: shape.opacity ?? 1, ...(shape.fill ? { color: color(shape.fill) } : {}) });
-    return true;
-  }
-  if (shape.shapeType === 'ellipse') {
-    page.drawEllipse({ x: shape.x + shape.width / 2, y: pageHeight - shape.y - shape.height / 2, xScale: Math.abs(shape.width / 2), yScale: Math.abs(shape.height / 2), ...common, opacity: shape.opacity ?? 1, ...(shape.fill ? { color: color(shape.fill) } : {}) });
-    return true;
-  }
-  if (shape.shapeType === 'line' || shape.shapeType === 'arrow') {
-    const start = { x: shape.x, y: pageHeight - shape.y };
-    const end = { x: shape.x + shape.width, y: pageHeight - shape.y - shape.height };
-    page.drawLine({ start, end, thickness: Math.max(0.5, shape.strokeWidth), color: color(shape.color) });
-    if (shape.shapeType === 'arrow') {
-      const angle = Math.atan2(end.y - start.y, end.x - start.x);
-      const size = Math.max(8, shape.strokeWidth * 4);
-      for (const offset of [-Math.PI / 6, Math.PI / 6]) {
-        page.drawLine({ start: end, end: { x: end.x - Math.cos(angle + offset) * size, y: end.y - Math.sin(angle + offset) * size }, thickness: Math.max(0.5, shape.strokeWidth), color: color(shape.color) });
-      }
-    }
-    return true;
-  }
-  return false;
-}
-
-function drawText(page: PDFPage, object: TextObject, font: PDFFont): boolean {
-  const text = textContent(object.content).replace(/\s+/g, ' ').trim();
-  if (!text) return false;
-  const fontSize = 12;
-  const maxCharacters = Math.max(8, Math.floor((object.width || 240) / (fontSize * 0.55)));
-  const lines = text.match(new RegExp(`.{1,${maxCharacters}}(?:\\s|$)`, 'g'))?.map(line => line.trim()).filter(Boolean) ?? [text];
-  page.drawText(lines.slice(0, 40).join('\n'), { x: object.x, y: page.getHeight() - object.y - fontSize, size: fontSize, font, color: color('#20242a'), lineHeight: 15, maxWidth: object.width || 240 });
-  return true;
-}
 
 export async function renderPdfAnnotations(
   originalBytes: ArrayBuffer | Uint8Array,
   drawingsByPage: ReadonlyArray<DrawingData | null>,
   pageState?: PdfPageState,
+  loadImage?: (fileId: string) => Promise<NotebookExportImage | undefined>,
 ): Promise<PdfAnnotationRenderResult> {
   const document = await PDFDocument.load(originalBytes, { ignoreEncryption: false });
   const normalizedState = normalizePdfPageState(pageState, document.getPageCount());
@@ -89,25 +32,73 @@ export async function renderPdfAnnotations(
   document.removePage(0);
   while (document.getPageCount() > 0) document.removePage(0);
   orderedPages.forEach(page => document.addPage(page));
-  const font = await document.embedFont(StandardFonts.Helvetica);
+  const fonts = { regular: await document.embedFont(StandardFonts.Helvetica), bold: await document.embedFont(StandardFonts.HelveticaBold), italic: await document.embedFont(StandardFonts.HelveticaOblique), boldItalic: await document.embedFont(StandardFonts.HelveticaBoldOblique) };
+  const report: NotebookPdfExportResult = { success: true, bytes: null, pageCount: 0, exportedObjects: 0, approximatedObjects: 0, unsupportedObjects: 0, warnings: [], sectionDividers: [], notebookCover: null };
+  const imageCache = new Map<string, Awaited<ReturnType<typeof document.embedPng>>>();
   let exportedObjects = 0;
   let unsupportedObjects = 0;
 
   for (let pageIndex = 0; pageIndex < document.getPageCount(); pageIndex += 1) {
     const sourcePageNumber = normalizedState.pageOrder[pageIndex];
     const drawing = drawingsByPage[sourcePageNumber - 1];
-    const visibility = new Map((drawing?.layers ?? []).map(layer => [layer.id, layer.visible !== false]));
-    const objects = (drawing?.objects ?? []).filter(object => visibility.get(object.layerId ?? 'layer-default') !== false);
+    const objects = drawing ? visibleObjects(drawing) : [];
     const pdfPage = document.getPage(pageIndex);
+    // Enlarge only the exported sheet. Translate existing PDF streams upward
+    // without scaling/rasterizing them; top-left annotation coordinates stay fixed.
+    const sourceWidth = pdfPage.getWidth();
+    const sourceHeight = pdfPage.getHeight();
+    const geometry = pdfSurroundingGeometry({ width: sourceWidth, height: sourceHeight }, 0, resolvePageNoteSpace(drawing?.properties ?? {}));
+    const hasNoteSpace = Object.values(geometry.noteSpace).some(value => value > 0);
+    if (hasNoteSpace) {
+      const width = geometry.sheet.width;
+      const height = geometry.sheet.height;
+      // Preserve the old crop: hidden source marks must not leak into new paper.
+      pdfPage.pushOperators();
+      const crop = pdfPage.getCropBox();
+      const start = document.context.register(document.context.contentStream([pushGraphicsState(), rectangle(crop.x, crop.y, crop.width, crop.height), clip(), endPath()]));
+      const end = document.context.register(document.context.contentStream([popGraphicsState()]));
+      pdfPage.node.wrapContentStreams(start, end);
+      pdfPage.setSize(width, height);
+      pdfPage.setCropBox(0, 0, width, height);
+      pdfPage.translateContent(geometry.noteSpace.left, geometry.noteSpace.bottom);
+      // Start annotation commands outside the translated original content streams.
+      pdfPage.resetPosition();
+      if (pdfPage.node.Annots()?.size()) report.warnings.push({ code: 'pdf-interactive-annotations', message: 'Expanded PDF: original interactive links/form annotations retain their original PDF coordinates; verify those overlays in the exported file.' });
+    }
     const intrinsicRotation = sourcePages[sourcePageNumber - 1]?.getRotation().angle ?? 0;
     const requestedRotation = normalizedState.rotations[sourcePageNumber] ?? 0;
     if (requestedRotation) pdfPage.setRotation(degrees((intrinsicRotation + requestedRotation) % 360));
+    if (hasNoteSpace) pdfPage.pushOperators(pushGraphicsState(), concatTransformationMatrix(1, 0, 0, 1, geometry.noteSpace.left, -geometry.noteSpace.top));
     for (const object of objects as NotebookObject[]) {
       if (object.type === 'stroke') exportedObjects += drawStroke(pdfPage, object);
-      else if (object.type === 'shape' && drawShape(pdfPage, object)) exportedObjects += 1;
-      else if (object.type === 'text' && drawText(pdfPage, object, font)) exportedObjects += 1;
+      else if (object.type === 'shape') { drawPdfShape(pdfPage, object); exportedObjects += 1; }
+      else if (object.type === 'text') {
+        drawTextObject(pdfPage, object, {
+          logicalWidth: geometry.sheet.width,
+          logicalHeight: geometry.sheet.height,
+          pdfWidth: geometry.sheet.width,
+          pdfHeight: geometry.sheet.height,
+          scaleX: 1,
+          scaleY: 1,
+          sourceX: geometry.offset.x,
+          sourceY: geometry.offset.y,
+          sourceWidth,
+          sourceHeight,
+        }, fonts, report, String(sourcePageNumber)); exportedObjects += 1;
+      } else if (object.type === 'image') {
+        try {
+          let image = imageCache.get(object.fileId);
+          if (!image) {
+            const asset = await loadImage?.(object.fileId); if (!asset) throw new Error('asset unavailable');
+            image = /png/i.test(asset.mimeType) ? await document.embedPng(asset.data) : /jpe?g/i.test(asset.mimeType) ? await document.embedJpg(asset.data) : undefined;
+            if (!image) throw new Error('unsupported image format'); imageCache.set(object.fileId, image);
+          }
+          drawPdfImage(pdfPage, image, object); exportedObjects += 1;
+        } catch (error) { unsupportedObjects += 1; report.warnings.push({ code: 'image-skipped', message: `Image ${object.id}: ${error instanceof Error ? error.message : 'could not export'}` }); }
+      }
       else unsupportedObjects += 1;
     }
+    if (hasNoteSpace) pdfPage.pushOperators(popGraphicsState());
     unsupportedObjects += drawing?.audioNotes?.length ?? 0;
   }
 
@@ -115,8 +106,6 @@ export async function renderPdfAnnotations(
     bytes: await document.save(),
     exportedObjects,
     unsupportedObjects,
-    warnings: unsupportedObjects > 0
-      ? [`${unsupportedObjects} unsupported annotation or attachment object(s) were not included. Image/table/code/callout/sticky/audio/attachment and triangle/diamond overlays are not yet exported.`]
-      : [],
+    warnings: [...report.warnings.map(w => w.message), ...(unsupportedObjects > 0 ? [`${unsupportedObjects} unsupported attachment or unavailable image(s) were not included.`] : [])],
   };
 }

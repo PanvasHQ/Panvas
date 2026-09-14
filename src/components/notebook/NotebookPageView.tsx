@@ -1,3 +1,4 @@
+import { stickyPaperStyle } from './stickyNotes';
 // ============================================
 // Panvas — Unified Notebook Page View Component
 // ============================================
@@ -5,7 +6,7 @@
 // Replaces the legacy PageRenderer vs InactivePagePreview dual-component swap.
 // Preserves DOM element identity, canvas state, and vector templates during scroll.
 
-import React, { useEffect, useRef, useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useMemo, useState } from 'react';
 import { PageRenderer } from './PageRenderer';
 import { FloatingTextEditor } from './FloatingTextEditor';
 import { createEmptyDrawingData, type DrawingData, type TextObject, type ToolState, DEFAULT_PAGE_LAYER_ID } from './engine/drawingTypes';
@@ -26,13 +27,14 @@ import { DrawingEngine } from './engine/DrawingEngine';
 import type { Editor } from '@tiptap/react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import { notebookTipTapExtensions } from './tiptapExtensions';
-import { FileText } from 'lucide-react';
 import { canvasRepository } from '@/repositories/CanvasRepository';
 import { useAuthStore } from '@/stores/authStore';
 import { LayerManager } from './engine/LayerManager';
-import { NotebookVoiceNote } from './NotebookVoiceNote';
+import { NotebookVoiceNote, StaticVoiceNote } from './NotebookVoiceNote';
+import { textObjectStyle } from './textTypography';
 import { isVoiceNoteObject } from '@/services/audio/voiceNoteObjects';
 import type { AudioNote } from './engine/drawingTypes';
+import { resolvePageSurfaceGeometry } from '@/lib/pageProperties';
 
 export interface NotebookPageViewProps {
   page: NotebookPage;
@@ -46,6 +48,8 @@ export interface NotebookPageViewProps {
   isFocused: boolean;
   toolState: ToolState;
   notebookEngine: NotebookEngine;
+  /** Page currently represented by the shared live NotebookEngine scene. */
+  sceneOwnerPageId?: string;
   activeEditor: Editor | null;
   setActiveEditor: (editor: Editor | null) => void;
   onActivatePage: () => void;
@@ -96,7 +100,20 @@ function LayerCanvas({ drawing, id, width, height, scale, order }: { drawing: Dr
   return <canvas ref={ref} aria-hidden="true" className="absolute inset-0 pointer-events-none" style={{ zIndex: 20 + order * 2 }} />;
 }
 
-const StaticTextPreview: React.FC<{ object: TextObject; scale: number; zIndex?: number }> = ({ object, scale, zIndex }) => {
+/**
+ * Clear a canvas before it can be painted in a different page shell. A
+ * clearRect alone is not enough because transforms and clipping state can
+ * survive. Reset the bitmap and complete 2D state before another owner paints.
+ */
+function clearCanvasSurface(canvas: HTMLCanvasElement | null): void {
+  if (!canvas) return;
+  const context = canvas.getContext('2d');
+  if (!context) return;
+  if (typeof context.reset === 'function') context.reset();
+  else canvas.width = canvas.width;
+}
+
+const StaticTextPreview: React.FC<{ object: TextObject; scale: number; zIndex?: number; offset?: { x: number; y: number } }> = ({ object, scale, zIndex, offset }) => {
   const editor = useEditor({
     editable: false,
     extensions: notebookTipTapExtensions,
@@ -119,8 +136,9 @@ const StaticTextPreview: React.FC<{ object: TextObject; scale: number; zIndex?: 
       className={`absolute pointer-events-none z-0 ${!isSticky && object.metadata?.pastePresentation === 'sticky-note' ? 'panvas-pasted-note' : object.metadata?.pastePresentation === 'mixed-paste' ? 'panvas-mixed-paste' : ''}`}
       style={{
         zIndex,
-        left: `${object.x * scale}px`,
-        top: `${object.y * scale}px`,
+        ...textObjectStyle(object),
+        left: `${(object.x + (offset?.x ?? 0)) * scale}px`,
+        top: `${(object.y + (offset?.y ?? 0)) * scale}px`,
         width: `${object.width}px`,
         minHeight: object.height ? `${object.height}px` : undefined,
         height: isSticky && object.height ? `${object.height}px` : undefined,
@@ -143,6 +161,7 @@ const StaticTextPreview: React.FC<{ object: TextObject; scale: number; zIndex?: 
               className="w-full h-full shadow-md"
               style={{
                 backgroundColor: bgRgba,
+                ...stickyPaperStyle(object),
                 borderRadius: getShapeBorderRadius(stickyShape),
               }}
             />
@@ -169,6 +188,7 @@ export const NotebookPageView: React.FC<NotebookPageViewProps> = ({
   isFocused,
   toolState,
   notebookEngine,
+  sceneOwnerPageId = '',
   activeEditor,
   setActiveEditor,
   onActivatePage,
@@ -190,17 +210,26 @@ export const NotebookPageView: React.FC<NotebookPageViewProps> = ({
   }
 
   const pageCursor = isFocused ? resolvePageCursor(toolState) : undefined;
+  const pageGeometry = useMemo(() => resolvePageSurfaceGeometry(properties), [properties]);
+  const sceneReady = !isFocused || sceneOwnerPageId === page.id;
+  const liveSceneReady = isFocused && sceneReady;
 
   // Mount active canvas to notebookEngine when focused
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!isFocused || page.type === 'pdf' || !canvasRef.current) return;
 
+    // The canvas can have been painted by the previous focused page during
+    // the React commit. Hide and clear it before binding the next scene so a
+    // compositor frame can never expose Scene A inside Page B.
+    clearCanvasSurface(canvasRef.current);
     notebookEngine.drawing.setScaleMultiplier(renderScale);
+    notebookEngine.viewport.setPageCoordinateTransform(0, width, height, pageGeometry.source.left, pageGeometry.source.top);
     notebookEngine.mount(canvasRef.current, width, height);
     activeCanvasConfigurationRef.current = `${width}:${height}:${renderScale}`;
 
     return () => {
       activeCanvasConfigurationRef.current = null;
+      clearCanvasSurface(canvasRef.current);
       notebookEngine.unmount();
     };
   }, [isFocused, notebookEngine, page.type, page.id]);
@@ -211,15 +240,28 @@ export const NotebookPageView: React.FC<NotebookPageViewProps> = ({
   useEffect(() => {
     if (!isFocused || page.type === 'pdf' || !activeCanvasConfigurationRef.current) return;
     const nextConfiguration = `${width}:${height}:${renderScale}`;
-    if (activeCanvasConfigurationRef.current === nextConfiguration) return;
+    notebookEngine.viewport.setPageCoordinateTransform(0, width, height, pageGeometry.source.left, pageGeometry.source.top);
+    if (activeCanvasConfigurationRef.current === nextConfiguration) {
+      notebookEngine.drawing.redraw();
+      return;
+    }
     notebookEngine.drawing.setScaleMultiplier(renderScale);
     notebookEngine.resize(width, height);
     activeCanvasConfigurationRef.current = nextConfiguration;
-  }, [isFocused, notebookEngine, page.type, renderScale, width, height]);
+  }, [isFocused, notebookEngine, page.type, renderScale, width, height, pageGeometry.source.left, pageGeometry.source.top]);
 
   // Non-focused page static rendering (rendered in base document coordinates)
-  useEffect(() => {
-    if (isFocused || page.type === 'pdf' || !canvasRef.current || !data) return;
+  useLayoutEffect(() => {
+    if (!canvasRef.current) return;
+    // The active handoff effect above owns clearing and mounting the shared
+    // canvas. Do not clear it again in this later effect: React runs layout
+    // effects in declaration order, and a second clear here would erase the
+    // freshly loaded focused scene before its first paint.
+    if (isFocused || page.type === 'pdf') return;
+    if (!data) {
+      clearCanvasSurface(canvasRef.current);
+      return;
+    }
 
     let engine = staticEngineRef.current;
     if (!engine) {
@@ -240,6 +282,8 @@ export const NotebookPageView: React.FC<NotebookPageViewProps> = ({
       engine.drawing.setCanvas(canvasRef.current, width, height);
     }
 
+    engine.viewport.setPageCoordinateTransform(0, width, height, pageGeometry.source.left, pageGeometry.source.top);
+
     engine.layers.setData(data.layers, data.activeLayerId);
     const fallbackLayerId = engine.layers.getLayers()[0].id;
     const withLayer = (object: any) => ({ ...object, layerId: object.layerId ?? fallbackLayerId });
@@ -257,7 +301,7 @@ export const NotebookPageView: React.FC<NotebookPageViewProps> = ({
     }
 
     engine.drawing.redraw();
-  }, [isFocused, data, width, height, page.type, renderScale]);
+  }, [isFocused, data, width, height, page.type, renderScale, pageGeometry.source.left, pageGeometry.source.top]);
 
   const [layerRevision, setLayerRevision] = useState(0);
   useEffect(() => {
@@ -384,6 +428,9 @@ export const NotebookPageView: React.FC<NotebookPageViewProps> = ({
   return (
     <div 
       data-page-id={page.id}
+      data-rendered-page-id={page.id}
+      data-scene-owner-page-id={sceneOwnerPageId}
+      data-render-ready={sceneReady ? 'true' : 'false'}
       className="relative shadow-2xl transition-shadow"
       onPointerDown={handlePointerDown}
       onClick={handlePointerDown}
@@ -398,15 +445,16 @@ export const NotebookPageView: React.FC<NotebookPageViewProps> = ({
         onUpdateProperties={onUpdateProperties}
       >
         {/* Focused live TipTap text editors */}
-        {layeredDrawing && orderedLayers.map((layer, order) => <LayerCanvas key={layer.id} drawing={layeredDrawing} id={layer.id} width={width} height={height} scale={isFocused ? renderScale : Math.min(renderScale, MAX_INACTIVE_PAGE_RENDER_ZOOM)} order={order} />)}
-        {isFocused && liveTextObjects.map(obj => isVoiceNoteObject(obj) ? (
-          <NotebookVoiceNote key={obj.id} object={obj} note={notebookEngine.audio.getAll().find(note => note.id === obj.metadata.audioNoteId)} engine={notebookEngine} scale={1} editable={editable} onChange={onVoiceNoteChange} onDelete={onVoiceNoteDelete} onRename={onVoiceNoteRename}/>
+        {liveSceneReady && layeredDrawing && orderedLayers.map((layer, order) => <LayerCanvas key={layer.id} drawing={layeredDrawing} id={layer.id} width={width} height={height} scale={renderScale} order={order} />)}
+        {liveSceneReady && liveTextObjects.map(obj => isVoiceNoteObject(obj) ? (
+          <NotebookVoiceNote key={obj.id} object={obj} note={notebookEngine.audio.getAll().find(note => note.id === obj.metadata.audioNoteId)} engine={notebookEngine} scale={1} offset={{ x: pageGeometry.source.left, y: pageGeometry.source.top }} bounds={{ x: -pageGeometry.source.left, y: -pageGeometry.source.top, width, height }} editable={editable && notebookEngine.texts.isEditable(obj)} onChange={onVoiceNoteChange} onDelete={onVoiceNoteDelete} onRename={onVoiceNoteRename}/>
         ) : (
           <FloatingTextEditor
             key={obj.id}
             object={obj}
             engine={notebookEngine}
             scale={1}
+            pageOffset={{ x: pageGeometry.source.left, y: pageGeometry.source.top }}
             zIndex={textZIndex(obj.layerId)}
             toolMode={notebookEngine.layers.isEditable(obj.layerId) ? toolState.mode : 'hand'}
             onFocus={setActiveEditor}
@@ -415,13 +463,16 @@ export const NotebookPageView: React.FC<NotebookPageViewProps> = ({
         ))}
 
         {/* Non-focused static text previews */}
-        {!isFocused && staticTextObjects.map(obj => isVoiceNoteObject(obj) ? null : (
-          <StaticTextPreview key={obj.id} object={obj} scale={1} zIndex={textZIndex(obj.layerId)} />
+        {!isFocused && staticTextObjects.map(obj => isVoiceNoteObject(obj) ? <StaticVoiceNote key={obj.id} object={obj} note={data?.audioNotes?.find(note => note.id === obj.metadata.audioNoteId)} offset={{ x: pageGeometry.source.left, y: pageGeometry.source.top }}/> : (
+          <StaticTextPreview key={obj.id} object={obj} scale={1} zIndex={textZIndex(obj.layerId)} offset={{ x: pageGeometry.source.left, y: pageGeometry.source.top }} />
         ))}
 
         {/* Canvas Layer */}
         <canvas
           ref={canvasRef}
+          data-rendered-page-id={page.id}
+          data-scene-owner-page-id={sceneOwnerPageId}
+          data-render-ready={sceneReady ? 'true' : 'false'}
           onDrop={handleDrop}
           onDragOver={handleDragOver}
           onDragEnter={handleDragOver}
@@ -433,30 +484,14 @@ export const NotebookPageView: React.FC<NotebookPageViewProps> = ({
               'touch-none'
             ) : 'pointer-events-none'
           }`}
-          style={pageCursor ? { cursor: pageCursor } : undefined}
+          style={{
+            ...(pageCursor ? { cursor: pageCursor } : {}),
+            // Do not expose the shared live surface until its ownership
+            // marker has caught up with this physical page.
+            visibility: sceneReady ? 'visible' : 'hidden',
+          }}
         />
 
-        {page.type === 'pdf' && (
-          <div
-            role="button"
-            tabIndex={0}
-            onClick={(e) => {
-              e.stopPropagation();
-              onActivatePage();
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.stopPropagation();
-                onActivatePage();
-              }
-            }}
-            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 flex flex-col items-center justify-center bg-black/50 hover:bg-black/70 transition-colors backdrop-blur-sm rounded-xl p-4 text-white shadow-xl cursor-pointer pointer-events-auto select-none"
-          >
-            <FileText className="w-12 h-12 mb-2 opacity-90" />
-            <span className="font-medium text-sm truncate max-w-[200px]">{page.title || 'PDF Document'}</span>
-            <span className="text-xs opacity-80 mt-1">Click to open</span>
-          </div>
-        )}
       </PageRenderer>
     </div>
   );

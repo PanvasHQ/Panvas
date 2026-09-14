@@ -1,4 +1,5 @@
 import type { PdfPageRotation } from '@/types/notebook';
+import type { PageNoteSpace } from '@/lib/pageProperties';
 
 export interface PdfPageDimensions {
   width: number;
@@ -16,6 +17,32 @@ export interface PdfSourceRect extends PdfPoint {
 }
 
 export interface PdfVisualRect extends PdfSourceRect {}
+
+const clamped = (value: number | undefined) => Number.isFinite(value) ? Math.max(0, Math.min(6000, value ?? 0)) : 0;
+
+/** Source coordinates keep (0,0) at the PDF; surrounding regions may use negative coordinates. */
+export function pdfSurroundingGeometry(source: PdfPageDimensions, rotation: PdfPageRotation, noteSpace: Partial<PageNoteSpace> = {}) {
+  const resolved = {
+    top: clamped(noteSpace.top), right: clamped(noteSpace.right),
+    bottom: clamped(noteSpace.bottom), left: clamped(noteSpace.left),
+  };
+  const sheet = { width: resolved.left + source.width + resolved.right, height: resolved.top + source.height + resolved.bottom };
+  const offset = { x: resolved.left, y: resolved.top };
+  return {
+    extraHeight: resolved.bottom,
+    noteSpace: resolved,
+    source,
+    sheet,
+    offset,
+    visual: visualPageDimensions(sheet, rotation),
+    pdf: sourceRectToVisual({ x: offset.x, y: offset.y, ...source }, sheet, rotation),
+  };
+}
+
+/** Compatibility wrapper for bottom-only callers and persisted legacy documents. */
+export function pdfExpandedGeometry(source: PdfPageDimensions, rotation: PdfPageRotation, extraHeight = 0) {
+  return pdfSurroundingGeometry(source, rotation, { bottom: extraHeight });
+}
 
 /**
  * Return the dimensions of a page after applying its clockwise visual rotation.

@@ -9,6 +9,7 @@ import { Loader2, Cloud, ShieldAlert, X } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 import { useCloudSyncStore } from '@/stores/cloudSyncStore';
 import { CLOUD_SYNC_ENABLED } from '@/config/features';
+import { navigateToLibraryView } from '@/services/library/libraryRouteState';
 
 interface AuthGuardProps {
   children: React.ReactNode;
@@ -18,20 +19,34 @@ export function AuthGuard({ children }: AuthGuardProps) {
   const { isAuthenticated, isLoading } = useAuthStore();
   const googleDriveConnection = useCloudSyncStore(state => state.connectionByProvider.googledrive);
   const [, navigate] = useLocation();
+  const [promptDismissed, setPromptDismissed] = useState(() => {
+    try { return window.sessionStorage.getItem('panvas.cloudSyncPromptDismissed') === 'true'; } catch { return false; }
+  });
   const [showSoftPrompt, setShowSoftPrompt] = useState(false);
 
   // For Panvas, since it's local-first, we don't *hard block* the /app route.
   // Instead, we just show a soft prompt if they aren't authenticated, letting them know
   // cloud sync is disabled, but allowing them to continue offline.
   useEffect(() => {
-    if (!isLoading && !isAuthenticated && !googleDriveConnection) {
+    if (!promptDismissed && !isLoading && !isAuthenticated && !googleDriveConnection) {
       // Small delay before showing prompt to not be too aggressive
       const timer = setTimeout(() => setShowSoftPrompt(true), 1500);
       return () => clearTimeout(timer);
     } else {
       setShowSoftPrompt(false);
     }
-  }, [isLoading, isAuthenticated, googleDriveConnection]);
+  }, [isLoading, isAuthenticated, googleDriveConnection, promptDismissed]);
+
+  const dismissPrompt = () => {
+    setShowSoftPrompt(false);
+    setPromptDismissed(true);
+    try { window.sessionStorage.setItem('panvas.cloudSyncPromptDismissed', 'true'); } catch {}
+  };
+  const openCloudSync = () => {
+    dismissPrompt();
+    navigateToLibraryView('cloud');
+    navigate('/app/library');
+  };
 
   if (isLoading) {
     return (
@@ -58,7 +73,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
             className="panvas-local-mode-prompt panvas-layer-system fixed bottom-16 right-5 w-[300px] rounded-xl glass-panel p-4 shadow-2xl"
           >
             <button 
-              onClick={() => setShowSoftPrompt(false)} 
+              onClick={dismissPrompt}
               className="absolute top-3 right-3 text-[#737373] hover:text-[#E8E8E8] transition-colors"
               aria-label="Dismiss"
             >
@@ -72,21 +87,21 @@ export function AuthGuard({ children }: AuthGuardProps) {
               <div>
                 <h3 className="text-sm font-semibold text-[#E8E8E8]">Local Mode Active</h3>
                 <p className="text-xs text-[#737373] mt-1 leading-relaxed">
-                  Your data is stored on this device. Cloud sync is {CLOUD_SYNC_ENABLED ? 'available after you sign in' : 'disabled in this build'}.
+                  Your data is stored on this device. Cloud sync is {CLOUD_SYNC_ENABLED ? 'available when you connect Google Drive' : 'disabled in this build'}.
                 </p>
                 {CLOUD_SYNC_ENABLED && <div className="mt-3 flex gap-2">
-                  <button 
-                    onClick={() => navigate('/auth/login')}
+                  <button
+                    onClick={openCloudSync}
                     className="px-3 py-1.5 rounded-md bg-[#E8E8E8] text-[#0D0D0D] text-xs font-semibold hover:bg-white transition-colors flex items-center gap-1.5"
                   >
                     <Cloud size={12} />
-                    Enable Sync
+                    Connect Google Drive
                   </button>
-                  <button 
-                    onClick={() => navigate('/auth/signup')}
+                  <button
+                    onClick={dismissPrompt}
                     className="px-3 py-1.5 rounded-md bg-white/5 border border-white/10 text-[#E8E8E8] text-xs font-medium hover:bg-white/10 transition-colors"
                   >
-                    Create Account
+                    Continue locally
                   </button>
                 </div>}
               </div>

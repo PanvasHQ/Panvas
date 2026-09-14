@@ -4,7 +4,7 @@ import { Link, useLocation } from 'wouter';
 import { PANVAS_RELEASE } from './releaseMetadata';
 import './public-pages.css';
 
-const pages = [['/roadmap','Roadmap'],['/privacy','Privacy'],['/terms','Terms'],['/security','Security']] as const;
+const pages = [['/download','Download'],['/roadmap','Roadmap'],['/privacy','Privacy'],['/terms','Terms'],['/security','Security']] as const;
 
 export function PublicPageShell({ label, title, intro, children, aside }: { label:string; title:string; intro:string; children:ReactNode; aside?:ReactNode }) {
   const [location]=useLocation();
@@ -26,6 +26,7 @@ export function PublicPageShell({ label, title, intro, children, aside }: { labe
       <div className="pp-footer-brand"><img src="/panvas_logo.png" alt=""/><p>Structured when you need it.<br/>Local by default.</p></div>
       <nav aria-label="Footer navigation">
         <div><span>Product</span><Link href="/">Home</Link><Link href="/roadmap">Roadmap</Link></div>
+        <div><span>Product</span><Link href="/">Home</Link><Link href="/download">Download</Link><Link href="/roadmap">Roadmap</Link></div>
         <div><span>Trust</span><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link><Link href="/security">Security</Link></div>
         <div><span>Open source</span><a href={PANVAS_RELEASE.project.githubRepoUrl} target="_blank" rel="noreferrer"><Github size={14}/>Repository</a><a href={PANVAS_RELEASE.project.githubIssuesUrl} target="_blank" rel="noreferrer">Issues</a></div>
         <div><span>Creator</span><a href={PANVAS_RELEASE.project.creatorGithubUrl} target="_blank" rel="noreferrer"><Github size={14}/>Sumit Ahmed</a><a href={PANVAS_RELEASE.project.creatorWebsiteUrl} target="_blank" rel="noreferrer"><Globe size={14}/>Portfolio</a><a href={PANVAS_RELEASE.project.creatorEmailUrl}><Mail size={14}/>Email</a></div>

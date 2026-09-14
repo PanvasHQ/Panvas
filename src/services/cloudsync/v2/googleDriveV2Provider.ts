@@ -1,8 +1,11 @@
-import { GoogleDriveSyncProvider } from '../googleDriveProvider.ts';
+import { GoogleDriveSyncProvider, type GoogleDriveProviderOptions } from '../googleDriveProvider.ts';
 import type { SyncV2Catalog, SyncV2Manifest, SyncV2Profile, SyncV2Provider } from './types.ts';
 
 export class GoogleDriveSyncV2Provider implements SyncV2Provider {
-  private readonly drive = new GoogleDriveSyncProvider({ remoteNamespace: 'sync-v2' });
+  private readonly drive: GoogleDriveSyncProvider;
+  constructor(options: GoogleDriveProviderOptions = {}) {
+    this.drive = new GoogleDriveSyncProvider({ ...options, remoteNamespace: 'sync-v2' });
+  }
 
   readProfile() { return this.drive.readRootJson<SyncV2Profile>('profile.json'); }
   writeProfile(value: SyncV2Profile, ifMatch: string | null) { return this.drive.writeRootJson('profile.json', value, ifMatch); }

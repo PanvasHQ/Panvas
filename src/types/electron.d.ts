@@ -6,16 +6,26 @@ import type { RecognitionOptions, RecognitionResult } from '@/services/recogniti
 import type { Stroke } from '@/components/notebook/engine/drawingTypes';
 import type { CanvasLibraryRecord } from '@/services/canvas/canvasLibraryModel';
 import type { NativePdfPrintResult } from '@/services/pdf/nativePrintLifecycle';
+import type { PanvasBootstrapSnapshot } from '@/types/bootstrap';
 
 type CloudDriveResult<T> =
   | { success: true; value: T }
   | { success: false; errorCode: import('@/services/cloudsync/errors').CloudErrorCode; diagnostic: import('@/services/cloudsync/types').SafeCloudDiagnostic };
 
 export interface PanvasDomainAPI {
+  bootstrap: {
+    getSnapshot: () => Promise<PanvasBootstrapSnapshot>;
+  };
+  storage: {
+    getRoot: () => Promise<{ path: string; configuredPath: string | null; isDefault: boolean; available: boolean }>;
+    setRoot: (folderPath: string) => Promise<{ path: string; configuredPath: string; isDefault: boolean; available: boolean }>;
+    chooseRoot: () => Promise<{ path: string; configuredPath: string; isDefault: boolean; available: boolean } | null>;
+  };
   workspace: {
     create: (name: string) => Promise<Workspace>;
     openDialog: () => Promise<Workspace | null>;
     getAll: () => Promise<Workspace[]>;
+    getRecoveryWorkspaceRoot: (id: string) => Promise<Workspace | null>;
     update: (id: string, updates: Partial<Workspace>) => Promise<Workspace>;
     reorder: (wsId: string, type: 'folder' | 'notebook' | 'canvas' | 'section' | 'page', itemIds: string[]) => Promise<boolean>;
   };
@@ -59,7 +69,7 @@ export interface PanvasDomainAPI {
     getAll: (wsId: string) => Promise<NotebookSection[]>;
   };
   notebookPage: {
-    create: (wsId: string, notebookId: string, sectionId: string, title: string) => Promise<NotebookPage>;
+    create: (wsId: string, notebookId: string, sectionId: string, title: string, type?: 'default' | 'pdf', pdfDataId?: string) => Promise<NotebookPage>;
     update: (wsId: string, pageId: string, updates: Partial<NotebookPage>) => Promise<NotebookPage>;
     delete: (wsId: string, pageId: string) => Promise<boolean>;
     getAll: (wsId: string) => Promise<NotebookPage[]>;
@@ -70,7 +80,7 @@ export interface PanvasDomainAPI {
     setTheme: (theme: string) => Promise<void>;
   };
   migration: {
-    importWorkspace: (workspaceObj: any, canvasDataList: any[]) => Promise<boolean>;
+    importWorkspace: (bundle: import('@/lib/migration-core').WorkspaceMigrationBundle) => Promise<boolean>;
   };
   binary: {
     /** Durably store imported PDF bytes under the workspace asset store. */
@@ -115,6 +125,7 @@ export interface PanvasDomainAPI {
     connect: (provider: string) => Promise<{ success: boolean; connection?: import('@/services/cloudsync/types').ProviderConnectionInfo; errorCode?: 'configuration' | 'connection'; diagnostic?: import('@/services/cloudsync/types').SafeCloudDiagnostic }>;
     disconnect: (provider: string) => Promise<{ success: boolean }>;
     getConnection: (provider: string) => Promise<import('@/services/cloudsync/types').ProviderConnectionInfo | null>;
+    resetLocalData: () => Promise<{ workspaceIds: string[]; recoveryPath: string | null }>;
     drive: {
       ensureAppRoot: () => Promise<CloudDriveResult<string>>;
       listRemoteWorkspaces: () => Promise<CloudDriveResult<import('@/services/cloudsync/types').RemoteWorkspaceSummary[]>>;
@@ -135,7 +146,10 @@ export interface PanvasDomainAPI {
       putObjectIfAbsent: (workspaceId: string, upload: import('@/services/cloudsync/types').ObjectUpload) => Promise<CloudDriveResult<import('@/services/cloudsync/types').ObjectPutResult>>;
       getMetadata: (workspaceId: string, hash: string) => Promise<CloudDriveResult<{ size: number } | null>>;
     };
-    applyRemoteRecord: (workspaceId: string, record: { kind: import('@/services/cloudsync/types').SyncEntityKind; id: string; payload: unknown; tombstone: boolean }) => Promise<boolean>;
+    applyRemoteRecord: (workspaceId: string, record: { kind: import('@/services/cloudsync/types').SyncEntityKind; id: string; parentId?: string | null; payload: unknown; tombstone: boolean }) => Promise<boolean>;
+    applyRemoteRecords: (workspaceId: string, records: Array<{ kind: import('@/services/cloudsync/types').SyncEntityKind; id: string; parentId?: string | null; payload: unknown; tombstone: boolean }>) => Promise<
+      { success: true } | { success: false; errorCode: import('@/services/cloudsync/errors').CloudErrorCode; diagnostic: import('@/services/cloudsync/types').SafeCloudDiagnostic }
+    >;
     listPageDrawingRecords: (workspaceId: string) => Promise<Array<{ id: string; notebookId: string; ownerPageId: string }>>;
     logDiagnostic: (diagnostic: import('@/services/cloudsync/types').SafeCloudDiagnostic) => void;
   };

@@ -8,7 +8,7 @@ import {
 import type { HandwritingRecognitionProvider, RecognitionResult } from './types.ts';
 import { UNSUPPORTED_RECOGNITION_MESSAGE } from './providers/UnsupportedRecognitionProvider.ts';
 
-export const HANDWRITING_IDLE_DELAY_MS = 1_300;
+export const HANDWRITING_IDLE_DELAY_MS = 650;
 
 export interface HandwritingSessionFeedback {
   kind: 'unavailable' | 'error';
@@ -300,6 +300,14 @@ export class RealTimeHandwritingSession {
     this.destroyed = true;
     this.invalidateScope();
     this.feedbackListeners.clear();
+  }
+
+  /** Re-arm this owned session when its engine is remounted after an effect replay. */
+  revive(): void {
+    if (!this.destroyed) return;
+    this.destroyed = false;
+    this.active = false;
+    this.pointerDown = false;
   }
 
   private schedule(): void {

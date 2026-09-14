@@ -505,7 +505,9 @@ test('bootstrap uses one reserved system identity and never treats duplicate nam
   assert.match(schema, /SYSTEM_WELCOME_CANVAS_ID = 'canvas-system-welcome-v1'/);
   assert.match(schema, /isSystem: true[\s\S]*systemType: 'default'/);
   assert.match(schema, /isSystem: true[\s\S]*systemType: 'welcome'/);
-  assert.doesNotMatch(schema, /generateId\('ws'\)|generateId\('canvas'\)/);
+  assert.match(schema, /generateId\('ws'\)|generateId\('canvas'\)/, 'a foreign owner receives a fresh identity instead of taking over the reserved row');
+  assert.doesNotMatch(schema, /db\.workspaces\.update\(defaultWorkspaceId/);
+  assert.doesNotMatch(schema, /db\.canvasFiles\.update\(defaultCanvasId/);
   assert.match(workspaceStore, /workspaceRepository\.create\(userId, name\)/, 'user-created duplicate names remain ordinary random-ID records');
 });
 

@@ -1,3 +1,10 @@
+/**
+ * HISTORICAL legacy-sync audit.
+ *
+ * This intentionally audits the quarantined pre-V2 Supabase engine. Current
+ * Cloud Sync v0.1.0 is documented and tested by the V2 suites; do not use this
+ * report as a release verdict for that implementation.
+ */
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
@@ -37,7 +44,8 @@ assert.match(spec, /legacy\/quarantined/i, 'spec labels the current engine as qu
 assert.match(schema, /notebookPageDrawings/, 'audit includes the current final local schema');
 
 console.log(JSON.stringify({
-  status: 'NOT_PRODUCTION_READY',
+  status: 'HISTORICAL_LEGACY_AUDIT',
+  currentImplementation: 'Cloud Sync v0.1.0 (V2)',
   cloudEnabledByDefault: false,
   legacyEntityTypes: uniqueLegacyEntityTypes,
   requiredLocalFamilies,

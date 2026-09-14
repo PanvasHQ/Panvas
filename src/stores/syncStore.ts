@@ -2,6 +2,7 @@
 // Panvas — Sync Store (Zustand)
 // Tracks UI state for sync indicator
 // ============================================
+// OSS NOTE: Legacy implementation retained for backward compatibility; review after v0.1.
 
 import { create } from 'zustand';
 import type { SyncState } from '@/types/sync';

@@ -1,6 +1,8 @@
 // ============================================
 // Panvas — Workspace Repository
 // Bridges local DB ↔ Sync Queue ↔ Supabase
+// OSS NOTE: Do not bypass WorkspaceRepository / writeQueue; desktop writes rely on
+// serialized persistence and atomic renames to prevent file corruption.
 // ============================================
 
 import * as workspaceDB from '@/database/workspaceDB';

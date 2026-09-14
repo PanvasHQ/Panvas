@@ -4,7 +4,7 @@ import type { NotebookEngine } from './engine/NotebookEngine';
 import { NotebookLayersControl } from './NotebookLayersControl';
 import { NotebookElementsControl } from './NotebookElementsControl';
 import { NotebookAudioControl } from './NotebookAudioControl';
-import type { DrawingData } from './engine/drawingTypes';
+import type { AudioNote, DrawingData } from './engine/drawingTypes';
 import type { PageAudioOwner } from '@/services/audio/audioLifecycle';
 
 interface NotebookPageUtilitiesProps {
@@ -13,6 +13,8 @@ interface NotebookPageUtilitiesProps {
   notebookId?: string;
   ownerId?: string;
   onChange: () => void;
+  onVoiceDelete?: (note: AudioNote) => void;
+  onVoiceRename?: (note: AudioNote, title: string) => void;
   editable?: boolean;
   onPageDataPersisted?: (pageId: string, data: DrawingData) => void;
   compact?: boolean;
@@ -24,7 +26,7 @@ interface NotebookPageUtilitiesProps {
   embedded?: boolean;
 }
 
-export function NotebookPageUtilities({ engine, workspaceId, notebookId, ownerId, onChange, editable = true, onPageDataPersisted, compact = false, onExportPage, onExportNotebook, onPrintPage, onPrintNotebook, isExporting = false, embedded = false }: NotebookPageUtilitiesProps) {
+export function NotebookPageUtilities({ engine, workspaceId, notebookId, ownerId, onChange, onVoiceDelete, onVoiceRename, editable = true, onPageDataPersisted, compact = false, onExportPage, onExportNotebook, onPrintPage, onPrintNotebook, isExporting = false, embedded = false }: NotebookPageUtilitiesProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isPdfMenuOpen, setIsPdfMenuOpen] = useState(false);
   const compactMenuRef = useRef<HTMLDivElement>(null);
@@ -35,7 +37,7 @@ export function NotebookPageUtilities({ engine, workspaceId, notebookId, ownerId
   const controls = <>
     {editable && <NotebookLayersControl engine={engine} onChange={onChange} />}
     {editable && <NotebookElementsControl engine={engine} workspaceId={workspaceId} onInsert={onChange} />}
-    <NotebookAudioControl engine={engine} owner={audioOwner} canRecord={editable} onPageDataPersisted={onPageDataPersisted} />
+    <NotebookAudioControl engine={engine} owner={audioOwner} canRecord={editable} onPageDataPersisted={onPageDataPersisted} onDelete={onVoiceDelete} onRename={onVoiceRename} />
     {onExportPage && onExportNotebook && (
       <div ref={pdfMenuRef} className="relative">
         <button type="button" onClick={() => setIsPdfMenuOpen(value => !value)} disabled={isExporting} className="panvas-icon-control h-9 w-9 focus-ring disabled:opacity-50" aria-label="Export and print" title="Export and print" aria-haspopup="menu" aria-expanded={isPdfMenuOpen}><Download size={16} /></button>

@@ -1,27 +1,25 @@
 import { useEffect, useState } from 'react';
 
-/**
- * Mobile viewport threshold shared by the responsive shell work. Phones
- * only — desktop and tablet layouts must never see this become true, so
- * keep the value aligned with the max-[599px] Tailwind variants.
- */
+/** Default phone query shared by the responsive shell; callers may opt into
+ * the tablet breakpoint for compact composition decisions. */
 export const MOBILE_VIEWPORT_QUERY = '(max-width: 599px)';
 
-export function useIsMobileViewport(): boolean {
+export function useIsMobileViewport(maxWidth = 599): boolean {
+  const mediaQuery = maxWidth === 599 ? MOBILE_VIEWPORT_QUERY : `(max-width: ${maxWidth}px)`;
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia(MOBILE_VIEWPORT_QUERY).matches
+      ? window.matchMedia(mediaQuery).matches
       : false,
   );
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
-    const query = window.matchMedia(MOBILE_VIEWPORT_QUERY);
+    const query = window.matchMedia(mediaQuery);
     const update = (event: MediaQueryListEvent) => setIsMobile(event.matches);
     setIsMobile(query.matches);
     query.addEventListener('change', update);
     return () => query.removeEventListener('change', update);
-  }, []);
+  }, [mediaQuery]);
 
   return isMobile;
 }

@@ -55,6 +55,7 @@ export const NotebookWorkspaceControls: React.FC<{ focusOnly?: boolean; embedded
             : 'text-panvas-text-secondary hover:text-panvas-text-primary hover:bg-panvas-bg-hover'
         }`}
         title={notebookModeLevel === 2 ? "Exit Full Page View" : "Enter Full Page View"}
+        aria-label={notebookModeLevel === 2 ? "Exit Full Page View" : "Enter Full Page View"}
       >
         {notebookModeLevel === 2 ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
       </button>
@@ -74,6 +75,7 @@ export const NotebookWorkspaceControls: React.FC<{ focusOnly?: boolean; embedded
             : 'text-panvas-text-secondary hover:text-panvas-text-primary hover:bg-panvas-bg-hover'
         }`}
         title={notebookModeLevel === 0 ? (isSidebarOpen ? "Hide Library" : "Show Library") : (isNotebookPaneVisible ? "Hide Notebook Navigator" : "Show Notebook Navigator")}
+        aria-label={notebookModeLevel === 0 ? (isSidebarOpen ? "Hide Library" : "Show Library") : (isNotebookPaneVisible ? "Hide Notebook Navigator" : "Show Notebook Navigator")}
       >
         <PanelLeft size={16} />
       </button>

@@ -15,6 +15,7 @@ const MAX_ATTEMPTS = 5;
 // The pre-Sync-0 engine does not cover the final local entity set or the
 // required optimistic-conflict/token boundary. Keep it impossible to enable
 // accidentally while its data is migrated to the provider-neutral contract.
+// OSS NOTE: Legacy implementation retained for backward compatibility; review after v0.1.
 export const LEGACY_SYNC_QUARANTINED = true;
 
 const ENTITY_SYNC_PRIORITY: Record<SyncQueueItem['entityType'], number> = {

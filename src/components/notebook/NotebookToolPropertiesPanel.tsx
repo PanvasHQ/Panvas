@@ -2,7 +2,7 @@
 // Panvas — Notebook Tool Properties Panel
 // ============================================
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type { ViewportManager } from './engine/ViewportManager';
 import { 
   type PageOrientationOption, 
@@ -11,13 +11,15 @@ import {
   useNotebookSettingsStore
 } from '@/stores/notebookSettingsStore';
 import type { PageProperties, PageTemplate } from './engine/drawingTypes';
-import { Palette, CheckCheck, LayoutGrid, AlertCircle, X, UnfoldVertical } from 'lucide-react';
+import { Palette, CheckCheck, LayoutGrid, AlertCircle, X, ChevronDown } from 'lucide-react';
 import { TEMPLATE_CATEGORIES, TEMPLATE_REGISTRY } from './templates/TemplateRegistry.tsx';
 import { TemplateGalleryModal } from './templates/TemplateGalleryModal';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { useUIStore } from '@/stores/uiStore';
 import type { NotebookPropertyBatchSnapshot } from '@/types/notebook';
 import { WorkspaceViewInspector } from '@/components/workspace/WorkspaceViewControls';
+import { NoteSpaceControl } from './NoteSpaceControl';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 
 interface NotebookToolPropertiesPanelProps {
   viewportEngine: ViewportManager;
@@ -44,7 +46,18 @@ const colorSwatches: { label: string; color: string }[] = [
   { label: 'Charcoal', color: '#232323' },
 ];
 
-const pageSizes: PageSizeOption[] = ['A4', 'A5', 'Letter'];
+const lineColorSwatches: { label: string; color: string }[] = [
+  { label: 'Soft gray', color: '#cbd5e1' },
+  { label: 'Slate', color: '#64748b' },
+  { label: 'Blue', color: '#93c5fd' },
+  { label: 'Cyan', color: '#67e8f9' },
+  { label: 'Green', color: '#86efac' },
+  { label: 'Amber', color: '#fcd34d' },
+  { label: 'Rose', color: '#fda4af' },
+  { label: 'Violet', color: '#c4b5fd' },
+];
+
+const pageSizes: PageSizeOption[] = ['A3', 'A4', 'A5', 'Letter'];
 const marginsOptions: PageMarginOption[] = ['No Margin', 'Narrow', 'Normal', 'Wide'];
 
 export const NotebookToolPropertiesPanel: React.FC<NotebookToolPropertiesPanelProps> = ({ 
@@ -62,11 +75,23 @@ export const NotebookToolPropertiesPanel: React.FC<NotebookToolPropertiesPanelPr
 
   const [recentColors, setRecentColors] = useState<string[]>([]);
   const [isGalleryOpen, setIsGalleryOpen] = useState(false);
+  const [isLineColorOpen, setIsLineColorOpen] = useState(false);
+  const lineColorPanelRef = useRef<HTMLDivElement>(null);
 
   // User-controlled scope toggle: unchecked by default
   const [applyToAllPages, setApplyToAllPages] = useState<boolean>(false);
   const [lastBatch, setLastBatch] = useState<NotebookPropertyBatchSnapshot | null>(null);
   const [isApplying, setIsApplying] = useState(false);
+  const [isScopeConfirmationOpen, setIsScopeConfirmationOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isLineColorOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!lineColorPanelRef.current?.contains(event.target as Node)) setIsLineColorOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer);
+  }, [isLineColorOpen]);
 
   const handleUpdate = (updates: Partial<PageProperties>) => {
     if (applyToAllPages) {
@@ -213,11 +238,10 @@ export const NotebookToolPropertiesPanel: React.FC<NotebookToolPropertiesPanelPr
               onClick={() => {
                 if (applyToAllPages) {
                   setApplyToAllPages(false);
+                  showToast('Page properties will now apply to this page only', 'info');
                   return;
                 }
-                if (window.confirm('Apply subsequent page-property changes to every non-PDF page in this notebook? Each change can be undone from this panel.')) {
-                  setApplyToAllPages(true);
-                }
+                setIsScopeConfirmationOpen(true);
               }}
               disabled={isApplying}
               className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ease-in-out focus-ring ${
@@ -347,24 +371,73 @@ export const NotebookToolPropertiesPanel: React.FC<NotebookToolPropertiesPanelPr
               </button>
             </div>
 
-            {TEMPLATE_REGISTRY[properties.template]?.supportsLineColor && (
-              <div className="flex items-center justify-between pt-1">
-                <span className="text-[11px] text-panvas-text-secondary">Line Color</span>
-                <label className="relative flex h-5 w-5 cursor-pointer items-center justify-center rounded border border-panvas-border-default shadow-sm transition-transform hover:scale-110 focus-ring" style={{ backgroundColor: properties.ruleLineColor || (isDark ? '#444444' : '#e0e0e0') }}>
-                  <input 
-                    type="color" 
-                    value={properties.ruleLineColor || '#e0e0e0'}
-                    onChange={(e) => handleUpdate({ ruleLineColor: e.target.value })}
-                    className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
-                  />
-                </label>
-              </div>
-            )}
+            {TEMPLATE_REGISTRY[properties.template]?.supportsLineColor && (() => {
+              const selectedLineColor = /^#[0-9a-f]{6}$/i.test(properties.ruleLineColor || '')
+                ? properties.ruleLineColor!
+                : '#e0e0e0';
+              return <div ref={lineColorPanelRef} className="relative pt-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-panvas-text-secondary">Line color</span>
+                  <div className="flex items-center gap-1.5">
+                    {applyToAllPages && (
+                      <span className="text-[10px] font-medium text-panvas-accent-blue bg-panvas-accent-blue/10 px-1.5 py-0.5 rounded">Global</span>
+                    )}
+                    <button
+                      type="button"
+                      aria-label="Choose line color"
+                      aria-expanded={isLineColorOpen}
+                      aria-haspopup="dialog"
+                      onClick={() => setIsLineColorOpen(open => !open)}
+                      className="flex h-7 items-center gap-1.5 rounded-md border border-panvas-border-default bg-panvas-bg-secondary px-1.5 text-panvas-text-secondary transition-colors hover:bg-panvas-bg-hover hover:text-panvas-text-primary focus-ring"
+                      title="Choose line color"
+                    >
+                      <span className="h-4 w-4 rounded-full border border-panvas-border-strong shadow-sm" style={{ backgroundColor: selectedLineColor }} />
+                      <ChevronDown size={12} className={`transition-transform ${isLineColorOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+                {isLineColorOpen && <div role="dialog" aria-label="Line color choices" className="panvas-overlay absolute right-0 top-full z-30 mt-2 w-52 rounded-xl border border-panvas-border-strong bg-panvas-bg-elevated p-2.5 shadow-2xl">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-[11px] font-medium text-panvas-text-primary">Line color</span>
+                    <span className="text-[10px] text-panvas-text-tertiary">Applies instantly</span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-2" role="radiogroup" aria-label="Preset line colors">
+                    {lineColorSwatches.map(swatch => <button
+                      key={swatch.color}
+                      type="button"
+                      role="radio"
+                      aria-label={swatch.label}
+                      aria-checked={selectedLineColor.toLowerCase() === swatch.color.toLowerCase()}
+                      onClick={() => { handleUpdate({ ruleLineColor: swatch.color }); setIsLineColorOpen(false); }}
+                      className={`grid h-8 w-8 place-items-center rounded-full border transition-transform hover:scale-105 focus-ring ${selectedLineColor.toLowerCase() === swatch.color.toLowerCase() ? 'border-panvas-text-primary ring-2 ring-panvas-accent-blue ring-offset-1 ring-offset-panvas-bg-elevated' : 'border-panvas-border-default'}`}
+                      style={{ backgroundColor: swatch.color }}
+                    >
+                      {selectedLineColor.toLowerCase() === swatch.color.toLowerCase() && <span className="h-1.5 w-1.5 rounded-full bg-white shadow" />}
+                    </button>)}
+                  </div>
+                  <label className="mt-2.5 flex items-center justify-between gap-2 rounded-lg border border-panvas-border-subtle bg-panvas-bg-secondary/60 px-2 py-1.5 text-[10px] text-panvas-text-secondary">
+                    <span className="flex items-center gap-1.5"><Palette size={12} aria-hidden="true" /> Custom</span>
+                    <input
+                      type="color"
+                      aria-label="Custom line color"
+                      value={selectedLineColor}
+                      onChange={event => handleUpdate({ ruleLineColor: event.target.value })}
+                      className="h-6 w-8 cursor-pointer rounded border-0 bg-transparent p-0"
+                    />
+                  </label>
+                </div>}
+              </div>;
+            })()}
           </div>
 
           {/* Orientation */}
           <div>
-            <div className="mb-2 font-medium text-panvas-text-primary">Orientation</div>
+            <div className="mb-2 flex items-center justify-between">
+              <span className="font-medium text-panvas-text-primary">Orientation</span>
+              {applyToAllPages && (
+                <span className="text-[10px] font-medium text-panvas-accent-blue bg-panvas-accent-blue/10 px-1.5 py-0.5 rounded">Global</span>
+              )}
+            </div>
             <div className="flex gap-2">
               <button 
                 onClick={() => handleUpdate({ orientation: 'portrait' })}
@@ -391,7 +464,12 @@ export const NotebookToolPropertiesPanel: React.FC<NotebookToolPropertiesPanelPr
 
           {/* Page Size */}
           <div>
-            <div className="mb-2 font-medium text-panvas-text-primary">Page Size</div>
+            <div className="mb-2 flex items-center justify-between">
+              <span className="font-medium text-panvas-text-primary">Page Size</span>
+              {applyToAllPages && (
+                <span className="text-[10px] font-medium text-panvas-accent-blue bg-panvas-accent-blue/10 px-1.5 py-0.5 rounded">Global</span>
+              )}
+            </div>
             <select 
               value={properties.pageSize} 
               onChange={(e) => handleUpdate({ pageSize: e.target.value as PageSizeOption })}
@@ -403,7 +481,12 @@ export const NotebookToolPropertiesPanel: React.FC<NotebookToolPropertiesPanelPr
 
           {/* Margins */}
           <div>
-            <div className="mb-2 font-medium text-panvas-text-primary">Margins</div>
+            <div className="mb-2 flex items-center justify-between">
+              <span className="font-medium text-panvas-text-primary">Margins</span>
+              {applyToAllPages && (
+                <span className="text-[10px] font-medium text-panvas-accent-blue bg-panvas-accent-blue/10 px-1.5 py-0.5 rounded">Global</span>
+              )}
+            </div>
             <select 
               value={properties.margins} 
               onChange={(e) => handleUpdate({ margins: e.target.value as PageMarginOption })}
@@ -412,16 +495,7 @@ export const NotebookToolPropertiesPanel: React.FC<NotebookToolPropertiesPanelPr
               {marginsOptions.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
           </div>
-
-          <div className="rounded-lg border border-panvas-border-subtle bg-panvas-bg-secondary/55 p-3">
-            <div className="flex items-center gap-2 font-medium text-panvas-text-primary"><UnfoldVertical size={15} />Expand Page</div>
-            <p className="mt-1 text-2xs leading-4 text-panvas-text-tertiary">Add permanent writable space below this page.</p>
-            <div className="mt-2 flex items-center gap-2">
-              <button type="button" onClick={() => handleUpdate({ extraHeight: Math.min(6000, (properties.extraHeight ?? 0) + 280) })} className="flex-1 rounded-md border border-panvas-border-default bg-panvas-bg-primary px-2 py-1.5 text-xs font-medium text-panvas-text-primary hover:bg-panvas-bg-hover focus-ring">Add space below</button>
-              {(properties.extraHeight ?? 0) > 0 && <button type="button" onClick={() => handleUpdate({ extraHeight: 0 })} className="rounded-md px-2 py-1.5 text-xs text-panvas-text-secondary hover:bg-panvas-bg-hover focus-ring">Reset</button>}
-            </div>
-            {(properties.extraHeight ?? 0) > 0 && <div className="mt-2 font-mono text-2xs text-panvas-text-tertiary">+{Math.round(properties.extraHeight ?? 0)} px writable</div>}
-          </div>
+          <NoteSpaceControl properties={properties} onChange={onUpdateProperties} />
         </div>
       </aside>
 
@@ -435,7 +509,26 @@ export const NotebookToolPropertiesPanel: React.FC<NotebookToolPropertiesPanelPr
         onApplyToAllPages={(t) => executeBatchApply({ template: t })}
       />
 
-      {/* Confirmation Modal removed */}
+      <ConfirmDialog
+        open={isScopeConfirmationOpen}
+        title="Apply changes to every page?"
+        description="This will apply the current page's paper color, background format, line color, orientation, page size, and margins to all pages in this notebook and to newly created pages. Research space is not affected."
+        confirmLabel="Apply to all pages"
+        onCancel={() => setIsScopeConfirmationOpen(false)}
+        onConfirm={async () => {
+          setIsScopeConfirmationOpen(false);
+          setApplyToAllPages(true);
+          const applicableUpdates: Partial<PageProperties> = {
+            paperColor: properties.paperColor,
+            template: properties.template,
+            ruleLineColor: properties.ruleLineColor || '#e0e0e0',
+            orientation: properties.orientation,
+            pageSize: properties.pageSize,
+            margins: properties.margins,
+          };
+          await executeBatchApply(applicableUpdates);
+        }}
+      />
     </>
   );
 };

@@ -1,3 +1,4 @@
+import { getInkFamilyRenderHalfWidth } from './inkFamilyGeometry.ts';
 import type { Stroke, StrokePoint } from './drawingTypes.ts';
 
 const EPSILON = 1e-7;
@@ -148,6 +149,7 @@ export function splitStrokePointsOutsideCircle(
 
 /** The rendered half-width used by visual hit-testing and eraser clipping. */
 export function getStrokeRenderHalfWidth(stroke: Stroke): number {
+  if (stroke.inkFamily) return getInkFamilyRenderHalfWidth(stroke);
   const thickness = Math.max(0, stroke.thickness || 0);
   const maxPressure = Math.max(0.5, ...stroke.points.map(point => point.pressure || 0.5));
 

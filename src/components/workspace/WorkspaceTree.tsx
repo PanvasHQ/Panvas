@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronRight, FileText, Folder, FolderOpen, MoreHorizontal, Plus, Star } from 'lucide-react';
+import { ChevronRight, FileText, Folder, FolderOpen, LayoutGrid, MoreHorizontal, Plus, Star } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useLocation } from 'wouter';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
@@ -8,6 +8,7 @@ import type { Notebook, NotebookPage, NotebookSection } from '@/types/notebook';
 import type { CanvasFile, Folder as WorkspaceFolder } from '@/types/workspace';
 import { createNotebookExportTarget, createPageExportTarget, createSectionExportTarget } from '@/services/pdf/notebookExportTargets';
 import { NotebookCoverThumbnail } from '@/components/library/NotebookCoverThumbnail';
+import { validateEntityName } from '@/lib/entityName';
 
 export type DropPosition = 'before' | 'inside' | 'after';
 
@@ -24,6 +25,7 @@ export function getReorderedIds(items: any[], draggedId: string, targetId: strin
 export function WorkspaceTree({ workspaceId }: { workspaceId: string }) {
   const { folders, notebooks, canvasFiles, moveCanvas, moveNotebook, moveFolder, reorderItems } = useWorkspaceStore();
   const [isDragOverRoot, setIsDragOverRoot] = React.useState(false);
+  const inlineCreate = useUIStore(state => state.inlineCreate);
 
   const rootFolders = folders.filter(folder => folder.workspaceId === workspaceId && folder.parentId === null);
   const rootNotebooks = notebooks.filter(notebook => notebook.workspaceId === workspaceId && notebook.folderId === null);
@@ -61,7 +63,8 @@ export function WorkspaceTree({ workspaceId }: { workspaceId: string }) {
       {rootFolders.map(folder => <FolderNode key={folder.id} folder={folder} depth={0} />)}
       {rootNotebooks.map(notebook => <NotebookNode key={notebook.id} notebook={notebook} depth={0} />)}
       {rootCanvases.map(canvas => <CanvasNode key={canvas.id} canvas={canvas} depth={0} />)}
-      {rootFolders.length === 0 && rootNotebooks.length === 0 && rootCanvases.length === 0 && (
+      {inlineCreate?.type === 'canvas' && !inlineCreate.parentId && <InlineCreateRow type="canvas" depth={0} />}
+      {rootFolders.length === 0 && rootNotebooks.length === 0 && rootCanvases.length === 0 && !inlineCreate && (
         <div className="px-2 py-3 text-center text-xs text-panvas-text-tertiary">Empty workspace</div>
       )}
     </div>
@@ -79,6 +82,7 @@ function FolderNode({ folder, depth }: { folder: WorkspaceFolder; depth: number 
   const childNotebooks = notebooks.filter(item => item.folderId === folder.id);
   const childCanvases = canvasFiles.filter(item => item.folderId === folder.id && !item.notebookId && !item.sectionId);
   const isExpanded = folder.isExpanded !== false;
+  const inlineCreate = useUIStore(state => state.inlineCreate);
 
   const handleDropItem = async (data: any, position: DropPosition) => {
     if (position === 'inside') {
@@ -114,10 +118,11 @@ function FolderNode({ folder, depth }: { folder: WorkspaceFolder; depth: number 
         icon={isExpanded ? <FolderOpen size={15} className="text-panvas-text-secondary" /> : <Folder size={15} className="text-panvas-text-tertiary" />}
         label={isRenaming ? <input autoFocus value={value} onChange={event => setValue(event.target.value)} onBlur={save} onKeyDown={event => { if (event.key === 'Enter') save(); if (event.key === 'Escape') setRenamingId(null); }} onClick={event => event.stopPropagation()} className="w-full bg-transparent outline-none" /> : folder.name}
       />
-      <Collapsible open={isExpanded}>
+      <Collapsible open={isExpanded || (inlineCreate?.parentType === 'folder' && inlineCreate.parentId === folder.id)}>
         {childFolders.map(item => <FolderNode key={item.id} folder={item} depth={depth + 1} />)}
         {childNotebooks.map(item => <NotebookNode key={item.id} notebook={item} depth={depth + 1} />)}
         {childCanvases.map(item => <CanvasNode key={item.id} canvas={item} depth={depth + 1} />)}
+        {inlineCreate?.type === 'canvas' && inlineCreate.parentType === 'folder' && inlineCreate.parentId === folder.id && <InlineCreateRow type="canvas" depth={depth + 1} />}
       </Collapsible>
     </div>
   );
@@ -130,6 +135,7 @@ function NotebookNode({ notebook, depth }: { notebook: Notebook; depth: number }
   const [value, setValue] = React.useState(notebook.name);
   const isRenaming = renamingId === notebook.id;
   const isActive = activeNotebookId === notebook.id;
+  const inlineCreate = useUIStore(state => state.inlineCreate);
   const save = async () => { if (value.trim() && value !== notebook.name) await renameNotebook(notebook.id, value.trim()); setRenamingId(null); };
   
   const sections = notebookSections.filter(section => section.notebookId === notebook.id);
@@ -184,10 +190,11 @@ function NotebookNode({ notebook, depth }: { notebook: Notebook; depth: number }
         label={isRenaming ? <input autoFocus value={value} onChange={event => setValue(event.target.value)} onBlur={save} onKeyDown={event => { if (event.key === 'Enter') save(); if (event.key === 'Escape') setRenamingId(null); }} onClick={event => event.stopPropagation()} className="w-full bg-transparent outline-none" /> : notebook.name}
         trailing={notebook.isPinned ? <Star size={12} className="text-panvas-accent-amber fill-panvas-accent-amber" /> : undefined}
       />
-      <Collapsible open={notebook.isExpanded}>
+      <Collapsible open={notebook.isExpanded || (inlineCreate?.parentType === 'notebook' && inlineCreate.parentId === notebook.id)}>
         {sections.map(section => <SectionNode key={section.id} section={section} pages={notebookPages.filter(page => page.sectionId === section.id)} depth={depth + 1} />)}
         {childCanvases.map(canvas => <CanvasNode key={canvas.id} canvas={canvas} depth={depth + 1} />)}
-        {sections.length === 0 && childCanvases.length === 0 && <TreeEmptyState depth={depth + 1} label="No items" />}
+        {inlineCreate?.type === 'canvas' && inlineCreate.parentType === 'notebook' && inlineCreate.parentId === notebook.id && <InlineCreateRow type="canvas" depth={depth + 1} />}
+        {sections.length === 0 && childCanvases.length === 0 && !(inlineCreate?.parentType === 'notebook' && inlineCreate.parentId === notebook.id) && <TreeEmptyState depth={depth + 1} label="No items" />}
       </Collapsible>
     </div>
   );
@@ -200,6 +207,7 @@ function SectionNode({ section, pages, depth }: { section: NotebookSection; page
   const [value, setValue] = React.useState(section.name);
   const isRenaming = renamingId === section.id;
   const isActive = activeNotebookSectionId === section.id;
+  const inlineCreate = useUIStore(state => state.inlineCreate);
   const save = async () => { if (value.trim() && value !== section.name) await renameNotebookSection(section.id, value.trim()); setRenamingId(null); };
 
   const workspaceId = notebooks.find(n => n.id === section.notebookId)?.workspaceId || '';
@@ -259,10 +267,11 @@ function SectionNode({ section, pages, depth }: { section: NotebookSection; page
         icon={<ChevronRight size={13} className="text-panvas-text-tertiary" />}
         label={isRenaming ? <input autoFocus value={value} onChange={event => setValue(event.target.value)} onBlur={save} onKeyDown={event => { if (event.key === 'Enter') save(); if (event.key === 'Escape') setRenamingId(null); }} onClick={event => event.stopPropagation()} className="w-full bg-transparent outline-none" /> : section.name}
       />
-      <Collapsible open={section.isExpanded}>
+      <Collapsible open={section.isExpanded || inlineCreate?.parentId === section.id}>
         {pages.map(page => <PageNode key={page.id} page={page} depth={depth + 1} />)}
         {childCanvases.map(canvas => <CanvasNode key={canvas.id} canvas={canvas} depth={depth + 1} />)}
-        {pages.length === 0 && childCanvases.length === 0 && <TreeEmptyState depth={depth + 1} label="No items" />}
+        {inlineCreate?.parentId === section.id && inlineCreate.parentType !== 'folder' && inlineCreate.parentType !== 'notebook' && <InlineCreateRow type={inlineCreate.type} depth={depth + 1} sectionId={section.id} />}
+        {pages.length === 0 && childCanvases.length === 0 && inlineCreate?.parentId !== section.id && <TreeEmptyState depth={depth + 1} label="No items" />}
       </Collapsible>
     </div>
   );
@@ -357,6 +366,51 @@ function CanvasNode({ canvas, depth }: { canvas: CanvasFile; depth: number }) {
   );
 }
 
+function InlineCreateRow({ type, depth, sectionId }: { type: 'page' | 'canvas'; depth: number; sectionId?: string }) {
+  const [, navigate] = useLocation();
+  const { createNotebookPage, createCanvas, setActivePage, setActiveCanvas } = useWorkspaceStore();
+  const { inlineCreate, closeInlineCreate, showToast } = useUIStore();
+  const [value, setValue] = React.useState(type === 'page' ? 'New page' : 'New canvas');
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  const committingRef = React.useRef(false);
+
+  React.useEffect(() => { inputRef.current?.focus(); inputRef.current?.select(); }, []);
+  const commit = async () => {
+    if (committingRef.current) return;
+    try {
+      const name = validateEntityName(value.trim(), type);
+      committingRef.current = true;
+      if (type === 'page') {
+        const targetSection = sectionId ?? inlineCreate?.parentId;
+        if (!targetSection) throw new Error('Select a section first.');
+        const created = await createNotebookPage(targetSection, name);
+        setActivePage(created.id);
+      } else {
+        const parentId = inlineCreate?.parentId ?? null;
+        const parentType = inlineCreate?.parentType ?? null;
+        const created = await createCanvas(parentType === 'folder' ? parentId : null, parentType === 'notebook' ? parentId : null, parentType === 'section' ? parentId : sectionId ?? null, name);
+        setActiveCanvas(created.id);
+      }
+      closeInlineCreate();
+      navigate('/app');
+    } catch (error) {
+      committingRef.current = false;
+      showToast(error instanceof Error ? error.message : `Couldn't create ${type}.`, 'error');
+      inputRef.current?.focus();
+    }
+  };
+
+  return <div className="flex h-7 items-center gap-1.5 rounded-md border-l-2 border-panvas-accent-blue bg-panvas-bg-hover px-2" style={{ paddingLeft: `${depth * 16 + 26}px` }}>
+    {type === 'page'
+      ? <FileText size={15} className="shrink-0 text-panvas-text-tertiary" aria-hidden="true" />
+      : <LayoutGrid size={15} className="shrink-0 text-panvas-text-tertiary" aria-hidden="true" />}
+    <input ref={inputRef} value={value} onChange={event => setValue(event.target.value)} aria-label={`${type === 'page' ? 'Page' : 'Canvas'} name`} className="min-w-0 flex-1 bg-transparent text-xs text-panvas-text-primary outline-none" onBlur={() => { if (!committingRef.current) closeInlineCreate(); }} onKeyDown={event => {
+      if (event.key === 'Enter') { event.preventDefault(); void commit(); }
+      if (event.key === 'Escape') { event.preventDefault(); closeInlineCreate(); }
+    }} />
+  </div>;
+}
+
 function TreeRow({ itemId, depth, label, icon, expanded, active = false, onClick, onToggle, onContextMenu, trailing, badge, draggable, onDragStart, onDropItem, acceptsDropInside = false }: { itemId: string; depth: number; label: React.ReactNode; icon: React.ReactNode; expanded?: boolean; active?: boolean; onClick?: () => void; onToggle?: () => void; onContextMenu?: (event: React.MouseEvent) => void; trailing?: React.ReactNode; badge?: number; draggable?: boolean; onDragStart?: (event: React.DragEvent) => void; onDropItem?: (data: any | null, position: DropPosition, files?: FileList) => void; acceptsDropInside?: boolean }) {
   const activate = () => onClick?.();
   const [dragPosition, setDragPosition] = React.useState<DropPosition | null>(null);
@@ -433,6 +487,8 @@ function TreeRow({ itemId, depth, label, icon, expanded, active = false, onClick
         type="button"
         onClick={event => { event.stopPropagation(); onContextMenu?.(event); }}
         className="btn-icon hidden p-1 group-hover:flex"
+        aria-label={`More actions for ${label}`}
+        title={`More actions for ${label}`}
       >
         <MoreHorizontal size={13} />
       </button>

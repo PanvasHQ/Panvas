@@ -9,7 +9,7 @@
 import type { ViewportState } from './drawingTypes.ts';
 import { DEFAULT_VIEWPORT_STATE } from './drawingTypes.ts';
 import type { PdfPageRotation } from '@/types/notebook';
-import { applyPdfRotationTransform, visualToSource, type PdfPageDimensions } from './pdfCoordinates.ts';
+import { applyPdfRotationTransform, sourceToVisual, visualToSource, type PdfPageDimensions } from './pdfCoordinates.ts';
 
 export type ViewportChangeListener = (state: Readonly<ViewportState>) => void;
 
@@ -54,6 +54,8 @@ export class ViewportManager {
   private pageRotation: PdfPageRotation = 0;
   private pageWidth = 0;
   private pageHeight = 0;
+  private contentOffsetX = 0;
+  private contentOffsetY = 0;
 
   constructor() {
     this.state = { ...DEFAULT_VIEWPORT_STATE };
@@ -120,9 +122,16 @@ export class ViewportManager {
 
   /** Apply a non-destructive PDF page rotation around the source-page origin. */
   setPdfPageRotation(rotation: PdfPageRotation, pageWidth: number, pageHeight: number): void {
+    this.setPageCoordinateTransform(rotation, pageWidth, pageHeight, 0, 0);
+  }
+
+  /** Place canonical source coordinates inside a larger writable surface. */
+  setPageCoordinateTransform(rotation: PdfPageRotation, pageWidth: number, pageHeight: number, offsetX = 0, offsetY = 0): void {
     this.pageRotation = rotation;
     this.pageWidth = pageWidth;
     this.pageHeight = pageHeight;
+    this.contentOffsetX = offsetX;
+    this.contentOffsetY = offsetY;
   }
 
   /**
@@ -173,12 +182,20 @@ export class ViewportManager {
    * PDF canvases are sized in zoomed CSS pixels and also apply the viewport scale while
    * rendering; notebook canvases are rendered at base size and zoomed by their DOM parent.
    */
+  pageToCanvas(x: number, y: number): { x: number; y: number } {
+    const point = sourceToVisual({ x: x + this.contentOffsetX, y: y + this.contentOffsetY }, { width: this.pageWidth, height: this.pageHeight }, this.pageRotation);
+    const scale = this.renderScale ? this.state.scale : 1;
+    return { x: point.x * scale + (this.renderPan ? this.state.offsetX : 0),
+      y: point.y * scale + (this.renderPan ? this.state.offsetY : 0) };
+  }
+
   canvasToPage(canvasX: number, canvasY: number): { x: number; y: number } {
     const scale = this.renderScale ? this.state.scale : 1;
     const x = (canvasX - (this.renderPan ? this.state.offsetX : 0)) / scale;
     const y = (canvasY - (this.renderPan ? this.state.offsetY : 0)) / scale;
     const dimensions: PdfPageDimensions = { width: this.pageWidth, height: this.pageHeight };
-    return visualToSource({ x, y }, dimensions, this.pageRotation);
+    const point = visualToSource({ x, y }, dimensions, this.pageRotation);
+    return { x: point.x - this.contentOffsetX, y: point.y - this.contentOffsetY };
   }
 
   /**
@@ -229,6 +246,7 @@ export class ViewportManager {
       ctx.scale(this.state.scale, this.state.scale);
     }
     applyPdfRotationTransform(ctx, this.pageRotation, { width: this.pageWidth, height: this.pageHeight });
+    if (this.contentOffsetX !== 0 || this.contentOffsetY !== 0) ctx.translate(this.contentOffsetX, this.contentOffsetY);
   }
 
   /** Get the CSS dimensions that the canvas should occupy, accounting for zoom. */

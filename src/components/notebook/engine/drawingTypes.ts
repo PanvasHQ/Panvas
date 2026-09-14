@@ -1,3 +1,4 @@
+import type { LineStyle } from './lineStyleGeometry.ts';
 // ============================================
 // Panvas — Notebook Drawing Engine Types
 // ============================================
@@ -60,6 +61,8 @@ export function createDefaultPageLayer(): PageLayer {
 }
 
 /** A freehand stroke drawn by pen, pencil, highlighter, or marker. */
+export type InkFamily = 'ballpoint' | 'fountain' | 'brush' | 'felt';
+
 export interface Stroke extends BasePageObject {
   type: 'stroke';
   tool: DrawingToolId;
@@ -69,6 +72,7 @@ export interface Stroke extends BasePageObject {
   opacity: number;
   /** Vector path pattern. Missing legacy values render as solid. */
   pattern?: StrokePattern;
+  inkFamily?: InkFamily;
   /** Retained vector area after erasing, relative to points[0]. Polygon rings may contain holes.
    * Keeps the original pressure path/caps intact; travels with the ink on move/copy. */
   inkClip?: [number, number][][][];
@@ -79,6 +83,7 @@ export type ShapeType = 'rectangle' | 'rounded-rectangle' | 'ellipse' | 'triangl
 
 /** A vector shape placed on the drawing layer. */
 export interface Shape extends BasePageObject {
+  lineStyle?: LineStyle;
   type: 'shape';
   shapeType: ShapeType;
   /** Top-left corner in page coordinates. */
@@ -96,6 +101,7 @@ export interface Shape extends BasePageObject {
 /** A floating text box. */
 export interface TextObject extends BasePageObject {
   type: 'text';
+  fontFamily?: string;
   x: number;
   y: number;
   width: number;
@@ -105,6 +111,8 @@ export interface TextObject extends BasePageObject {
 
 /** An image rendered on the canvas. */
 export interface ImageObject extends BasePageObject {
+  /** Visible rectangle normalized against the unchanged original asset. */
+  crop?: { x: number; y: number; width: number; height: number };
   type: 'image';
   x: number;
   y: number;
@@ -112,6 +120,8 @@ export interface ImageObject extends BasePageObject {
   height: number;
   fileId: string;
   rotation: number;
+  /** Independent visual opacity; omitted legacy images render fully opaque. */
+  opacity?: number;
 }
 
 /** A union of all valid notebook objects. */
@@ -169,6 +179,10 @@ export function createDefaultDrawingData(settings?: Partial<PageProperties>): Dr
     if (settings.orientation) data.properties.orientation = settings.orientation.toLowerCase() as any;
     if (settings.pageSize) data.properties.pageSize = settings.pageSize;
     if (settings.margins) data.properties.margins = settings.margins;
+    data.properties = { ...data.properties, ...settings };
+    if (settings.orientation) {
+      data.properties.orientation = settings.orientation.toLowerCase() as any;
+    }
   }
   return data;
 }
@@ -207,6 +221,7 @@ export interface ToolState {
   opacity: number;
   pressureSensitivity: boolean;
   strokePattern: StrokePattern;
+  inkFamily?: InkFamily;
   scribbleToErase: boolean;
   circleToSelect: boolean;
   straightLineRecognition: boolean;
@@ -216,6 +231,7 @@ export interface ToolState {
   rulerEnabled: boolean;
   stabilization: number; // 0-100
   shapeFillEnabled: boolean;
+  lineStyle?: LineStyle;
 }
 
 /** Default tool state. */

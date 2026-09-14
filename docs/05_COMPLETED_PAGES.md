@@ -1,5 +1,8 @@
 # Completed pages
 
+> [!NOTE]
+> **Historical Document**: This document reflects early planning/development phases (August-September 2026). For the canonical v0.1.0 architecture and documentation, see [README.md](../README.md) and [docs/ARCHITECTURE.md](ARCHITECTURE.md).
+
 | Page | Purpose/components | Status and future notes |
 |---|---|---|
 | Landing | `marketing/LandingPage` | ✅ Marketing site; do not redesign during application work. |

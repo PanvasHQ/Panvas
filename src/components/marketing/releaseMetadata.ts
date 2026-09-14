@@ -14,6 +14,9 @@ export interface WindowsReleaseMetadata {
   signingStatus: string;
   downloadUrl: string;
   releaseNotesUrl: string;
+  checksumUrl: string;
+  checksumSha256: string;
+  installerSize: string;
   checksumVerificationNote: string;
 }
 
@@ -64,8 +67,11 @@ export const PANVAS_RELEASE = {
     osRequirement: 'Windows 10 (1809+) / Windows 11 (64-bit)',
     installerType: 'NSIS Setup Wizard',
     signingStatus: 'Unsigned (v0.1.0); verify SHA-256 checksum',
-    downloadUrl: 'https://github.com/sumitahmed/Panvas/releases',
-    releaseNotesUrl: 'https://github.com/sumitahmed/Panvas/releases',
+    downloadUrl: 'https://github.com/sumitahmed/Panvas/releases/download/v0.1.0/Panvas-0.1.0-Setup.exe',
+    releaseNotesUrl: 'https://github.com/sumitahmed/Panvas/releases/tag/v0.1.0',
+    checksumUrl: 'https://github.com/sumitahmed/Panvas/releases/download/v0.1.0/SHA256SUMS.txt',
+    checksumSha256: '9d4cfcded4e3b76d8880ab4948901de0c56e2595dc793b5eb2433c4430158edd',
+    installerSize: '261,279,635 bytes',
     checksumVerificationNote: 'Verify the installer against the official SHA-256 checksum published on the GitHub Releases page.',
   },
   web: {

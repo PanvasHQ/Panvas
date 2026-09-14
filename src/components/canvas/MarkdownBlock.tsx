@@ -89,16 +89,20 @@ export function MarkdownBlock({ block }: MarkdownBlockProps) {
         </div>
         <div className="ml-auto flex items-center gap-0.5">
           <button
+            type="button"
             onClick={() => setIsEditing(!isEditing)}
             className="btn-icon p-1"
             title={isEditing ? 'Preview' : 'Edit'}
+            aria-label={isEditing ? 'Preview Markdown block' : 'Edit Markdown block'}
           >
             {isEditing ? <Eye size={12} /> : <Pencil size={12} />}
           </button>
           <button
+            type="button"
             onClick={() => deleteBlock(block.id)}
             className="btn-icon p-1 hover:text-panvas-accent-rose"
-            title="Delete"
+            title="Delete Markdown block"
+            aria-label="Delete Markdown block"
           >
             <Trash2 size={12} />
           </button>

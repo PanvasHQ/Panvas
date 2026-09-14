@@ -36,7 +36,7 @@ import { LaserManager } from '../src/components/notebook/engine/LaserManager.ts'
 import { ToolManager } from '../src/components/notebook/engine/ToolManager.ts';
 import { HistoryManager } from '../src/components/notebook/engine/HistoryManager.ts';
 import { DEFAULT_TOOL_STATE, createEmptyDrawingData } from '../src/components/notebook/engine/drawingTypes.ts';
-import type { Shape, Stroke, StrokePoint } from '../src/components/notebook/engine/drawingTypes.ts';
+import type { ImageObject, Shape, Stroke, StrokePoint } from '../src/components/notebook/engine/drawingTypes.ts';
 
 function createEditor(text = 'hello world'): Editor {
   const editor = new Editor({
@@ -865,7 +865,7 @@ function selectionShape(id: string, x: number, y: number, width = 32, height = 2
   };
 }
 
-function createLassoHarness(shapes: Shape[], strokes: Stroke[] = []) {
+function createLassoHarness(shapes: Shape[], strokes: Stroke[] = [], images: ImageObject[] = []) {
   const lassoFrames: StrokePoint[][] = [];
   let redraws = 0;
   const drawing = {
@@ -896,7 +896,7 @@ function createLassoHarness(shapes: Shape[], strokes: Stroke[] = []) {
     applyTransform: () => {},
   };
   const textManager = { getTexts: () => [] };
-  const imageManager = { getImages: () => [] };
+  const imageManager = { getImages: () => images };
   const layers = new LayerManager();
   const selection = new SelectionEngine(
     drawing as any,
@@ -1007,6 +1007,32 @@ test('common transform rotation handle rotates a shape with undo and redo', () =
   assert.equal(shape.rotation, 0);
   harness.history.redo();
   assert.ok(Math.abs(shape.rotation - 90) < 0.001);
+});
+
+test('images use the common rotation handle and persist undoable opacity', () => {
+  const image: ImageObject = {
+    id: 'rotate-image', type: 'image', x: 80, y: 80, width: 100, height: 60,
+    fileId: 'fixture-image', rotation: 0, opacity: 1, createdAt: 0, layerId: 'layer-default',
+  };
+  const harness = createLassoHarness([], [], [image]);
+  harness.selection.selectElement(image.id, 'image');
+  const center = { x: image.x + image.width / 2, y: image.y + image.height / 2 };
+  harness.selection.startDrag(center.x, image.y - 32);
+  harness.selection.dragTo(center.x + 32, center.y);
+  assert.ok(Math.abs(image.rotation - 90) < 0.001);
+  assert.equal(harness.selection.finishDrag(center.x + 32, center.y), true);
+
+  assert.equal(harness.selection.changeOpacity(0.35), true);
+  assert.equal(image.opacity, 0.35);
+  harness.history.undo();
+  assert.equal(image.opacity, 1);
+  harness.history.undo();
+  assert.equal(image.rotation, 0);
+  harness.history.redo();
+  assert.ok(Math.abs(image.rotation - 90) < 0.001);
+  harness.history.redo();
+  assert.equal(image.opacity, 0.35);
+  assert.equal(JSON.parse(JSON.stringify(image)).opacity, 0.35);
 });
 
 test('rotated resize converts pointer movement into object-local axes', () => {
@@ -1447,4 +1473,55 @@ test('switching away from laser clears trail and cancels transient animation', (
   assert.equal(harness.getChanges(), 0);
   assert.ok(harness.getRedraws() > 0);
   harness.input.detach();
+});
+
+test('crop preserves rotated placement and restores original asset with undo', () => {
+  const image: ImageObject = { id: 'crop-image', type: 'image', x: 80, y: 80, width: 100, height: 60,
+    fileId: 'original', rotation: 90, opacity: 0.4, createdAt: 0, layerId: 'layer-default' };
+  const harness = createLassoHarness([], [], [image]);
+  harness.selection.selectElement(image.id, 'image');
+  const before = { ...image };
+  assert.equal(harness.selection.cropImage(image.id, { x: 0.2, y: 0, width: 0.8, height: 1 }), true);
+  assert.equal(image.fileId, 'original');
+  assert.equal(image.width, 80);
+  assert.ok(Math.abs(image.x - 90) < 1e-9);
+  assert.ok(Math.abs(image.y - 90) < 1e-9);
+  assert.equal(image.opacity, 0.4);
+  const after = { ...image };
+  harness.history.undo();
+  assert.deepEqual(image, before);
+  harness.history.redo();
+  assert.deepEqual(image, after);
+  assert.equal(harness.selection.cropImage(image.id, { x: 0, y: 0, width: 0, height: 1 }), false);
+  assert.deepEqual(image, after);
+});
+
+test('image overlay coordinates round-trip across PDF rotation, pan, and zoom', () => {
+  const viewport = new ViewportManager();
+  for (const rotation of [0, 90, 180, 270] as const) {
+    viewport.setPdfPageRotation(rotation, 800, 1000);
+    for (const scale of [0.5, 1, 2]) {
+      viewport.setZoom(scale);
+      viewport.setPan(35, -20);
+      for (const renderScale of [false, true]) {
+        viewport.setRenderTransform({ pan: true, scale: renderScale });
+        const screen = viewport.pageToCanvas(123, 456);
+        const page = viewport.canvasToPage(screen.x, screen.y);
+        assert.ok(Math.abs(page.x - 123) < 1e-9);
+        assert.ok(Math.abs(page.y - 456) < 1e-9);
+      }
+    }
+  }
+});
+
+
+test('line-style changes preserve geometry and undo through the existing shape history', () => {
+  const line: Shape = { id: 'styled-line', type: 'shape', createdAt: 1, shapeType: 'line', x: 20, y: 40, width: 200, height: 80, rotation: 37, color: '#000000', fill: null, strokeWidth: 3 };
+  const harness = createLassoHarness([line]);
+  harness.selection.selectElement(line.id, 'shape');
+  harness.selection.changeLineStyle('wavy');
+  assert.equal(line.lineStyle, 'wavy');
+  assert.equal(line.rotation, 37); assert.equal(line.x, 20);
+  harness.history.undo(); assert.equal(line.lineStyle, undefined);
+  harness.history.redo(); assert.equal(line.lineStyle, 'wavy');
 });

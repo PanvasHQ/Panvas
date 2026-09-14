@@ -5,8 +5,24 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { NotebookExportCommandTarget, PageExportCommandTarget, SectionExportCommandTarget } from '@/services/pdf/notebookExportTargets';
+import {
+  applyThemeClasses,
+  readAndMigrateTheme,
+  resolveTheme,
+  THEME_STORAGE_KEY,
+  type PanvasTheme,
+  type ResolvedTheme,
+} from '@/lib/theme';
 
 type ContextMenuExportTarget = NotebookExportCommandTarget | PageExportCommandTarget | SectionExportCommandTarget;
+
+/** Stored theme + its resolved value, read once at store creation. */
+function readStoredTheme(): { theme: PanvasTheme; resolved: ResolvedTheme } {
+  const theme = readAndMigrateTheme();
+  return { theme, resolved: theme };
+}
+
+const initialTheme = readStoredTheme();
 
 interface UIState {
   // Sidebar
@@ -28,6 +44,8 @@ interface UIState {
   createDialogParentType: 'folder' | 'notebook' | 'section' | null;
   openCreateDialog: (type: 'workspace' | 'folder' | 'notebook' | 'section' | 'page' | 'canvas', parentId?: string | null, parentType?: 'folder' | 'notebook' | 'section' | null) => void;
   closeCreateDialog: () => void;
+  inlineCreate: { type: 'page' | 'canvas'; parentId: string | null; parentType: 'folder' | 'notebook' | 'section' | null } | null;
+  closeInlineCreate: () => void;
 
   // Context menu
   contextMenu: {
@@ -50,9 +68,17 @@ interface UIState {
   showToast: (message: string, type?: 'info' | 'success' | 'error') => void;
   clearToast: () => void;
 
+  // Cloud Sync review deep-link. This is transient UI intent, not persisted
+  // user data; it lets the top-bar action focus the review section after the
+  // library route mounts.
+  cloudSyncReviewRequested: boolean;
+  requestCloudSyncReview: () => void;
+  clearCloudSyncReviewRequest: () => void;
+
   // Theme
-  theme: 'dark' | 'light' | 'ink';
-  setTheme: (theme: 'dark' | 'light' | 'ink') => void;
+  theme: PanvasTheme;
+  resolvedTheme: ResolvedTheme;
+  setTheme: (theme: PanvasTheme) => void;
 
   // New UI states
   // Deprecated: use layoutStore instead
@@ -89,8 +115,12 @@ export const useUIStore = create<UIState>()(
   createDialogType: null,
   createDialogParentId: null,
   createDialogParentType: null,
-  openCreateDialog: (type, parentId = null, parentType = null) => set({ isCreateDialogOpen: true, createDialogType: type, createDialogParentId: parentId, createDialogParentType: parentType }),
+  inlineCreate: null,
+  openCreateDialog: (type, parentId = null, parentType = null) => type === 'page' || type === 'canvas'
+    ? set({ isSidebarOpen: true, isCreateDialogOpen: false, createDialogType: null, createDialogParentId: null, createDialogParentType: null, inlineCreate: { type, parentId, parentType } })
+    : set({ isCreateDialogOpen: true, createDialogType: type, createDialogParentId: parentId, createDialogParentType: parentType, inlineCreate: null }),
   closeCreateDialog: () => set({ isCreateDialogOpen: false, createDialogType: null, createDialogParentId: null, createDialogParentType: null }),
+  closeInlineCreate: () => set({ inlineCreate: null }),
 
   // Context menu
 
@@ -126,20 +156,25 @@ export const useUIStore = create<UIState>()(
   },
   clearToast: () => set({ toast: null }),
 
+  cloudSyncReviewRequested: false,
+  requestCloudSyncReview: () => set({ cloudSyncReviewRequested: true }),
+  clearCloudSyncReviewRequest: () => set({ cloudSyncReviewRequested: false }),
+
   // Theme
-  theme: (localStorage.getItem('panvas-theme') as 'dark' | 'light' | 'ink') || 'dark',
+  theme: initialTheme.theme,
+  resolvedTheme: initialTheme.resolved,
   setTheme: (theme) => {
-    localStorage.setItem('panvas-theme', theme);
-    set({ theme });
-    
-    // Apply theme to document
-    const html = document.documentElement;
-    html.classList.remove('dark', 'theme-ink');
-    if (theme === 'dark') html.classList.add('dark');
-    if (theme === 'ink') html.classList.add('theme-ink');
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Persisting is best-effort; the session theme still applies.
+    }
+    const resolvedTheme = resolveTheme(theme);
+    set({ theme, resolvedTheme });
+    applyThemeClasses(resolvedTheme);
 
     if (typeof window !== 'undefined' && window.panvas?.settings?.setTheme) {
-      window.panvas.settings.setTheme(theme);
+      window.panvas.settings.setTheme(resolvedTheme);
     }
   },
 

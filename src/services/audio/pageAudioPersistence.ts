@@ -15,6 +15,7 @@ export interface PageAudioSearchContext {
 interface PageQueue {
   tail: Promise<unknown>;
   audioNotes?: AudioNote[];
+  voiceObjects?: TextObject[];
 }
 
 export function appendAudioNote(data: DrawingData, note: AudioNote): DrawingData {
@@ -49,9 +50,15 @@ export class PageAudioPersistenceCoordinator {
   saveDrawing(owner: PageAudioOwner, data: DrawingData, searchContext?: PageAudioSearchContext): Promise<DrawingData> {
     return this.enqueue(owner, async queue => {
       const audioNotes = queue.audioNotes ?? data.audioNotes ?? [];
-      const next = { ...data, audioNotes: audioNotes.map(note => ({ ...note })) };
+      const noteIds = new Set(audioNotes.map(note => note.id));
+      const objects = (data.objects ?? []).filter(object => !isVoiceNoteObject(object) || noteIds.has(object.metadata.audioNoteId));
+      for (const object of queue.voiceObjects ?? []) {
+        if (!objects.some(item => item.id === object.id) && noteIds.has(String(object.metadata?.audioNoteId))) objects.push(structuredClone(object));
+      }
+      const next = { ...data, objects, audioNotes: audioNotes.map(note => ({ ...note })) };
       await this.repository.saveDrawingData(owner.workspaceId, owner.notebookId, owner.pageId, next, searchContext);
       queue.audioNotes = next.audioNotes;
+      queue.voiceObjects = next.objects.filter(isVoiceNoteObject).map(object => structuredClone(object));
       return next;
     });
   }
@@ -82,6 +89,14 @@ export class PageAudioPersistenceCoordinator {
     }));
   }
 
+  /** Explicit document command, including undo: replace only this page's voice entities. */
+  replaceVoiceState(owner: PageAudioOwner, notes: AudioNote[], objects: TextObject[]): Promise<DrawingData> {
+    const snapshot = structuredClone({ notes, objects });
+    return this.mutate(owner, data => ({ ...data, audioNotes: snapshot.notes,
+      objects: [...(data.objects ?? []).filter(item => !isVoiceNoteObject(item)), ...snapshot.objects],
+    }));
+  }
+
   private mutate(owner: PageAudioOwner, update: (data: DrawingData) => DrawingData): Promise<DrawingData> {
     return this.enqueue(owner, async queue => {
       const loaded = await this.repository.loadDrawingData(owner.workspaceId, owner.notebookId, owner.pageId);
@@ -92,6 +107,7 @@ export class PageAudioPersistenceCoordinator {
       const next = update(current);
       await this.repository.saveDrawingData(owner.workspaceId, owner.notebookId, owner.pageId, next);
       queue.audioNotes = (next.audioNotes ?? []).map(note => ({ ...note }));
+      queue.voiceObjects = (next.objects ?? []).filter(isVoiceNoteObject).map(object => structuredClone(object));
       return next;
     });
   }

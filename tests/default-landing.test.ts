@@ -50,3 +50,15 @@ test('normal builds route the bare launch origin into the app while retaining an
   assert.match(app, /VITE_MARKETING_ONLY === 'true' \? <LandingPage \/> : <Redirect to="\/app\/library" \/>/);
   assert.match(app, /<Route path="\/landing" component=\{LandingPage\} \/>/);
 });
+
+test('Cloud Sync navigation is not owned by document tabs', async () => {
+  const [shell, topBar, workspaceStore] = await Promise.all([
+    readFile(new URL('../src/components/layout/AppShell.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/layout/TopBar.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/stores/workspaceStore.ts', import.meta.url), 'utf8'),
+  ]);
+  assert.doesNotMatch(shell, /DocumentTabBar|openTabs\.length/);
+  assert.match(topBar, /navigateToLibraryView\('cloud'\)/);
+  assert.match(topBar, /navigate\('\/app\/library'\)/);
+  assert.doesNotMatch(workspaceStore, /useLayoutStore|getState\(\)\.openTab|setActiveTab/);
+});

@@ -150,7 +150,7 @@ test('PDF import validation accepts readable documents and rejects corrupt bytes
   await assert.rejects(validatePdfImport(new Uint8Array([1, 2, 3, 4]).buffer), /corrupt, encrypted, or unsupported/);
 });
 
-test('annotated PDF export preserves pages and reports unsupported objects', async () => {
+test('annotated PDF export includes triangles while still reporting unsupported audio', async () => {
   const source = await PDFDocument.create();
   source.addPage([300, 400]);
   const original = await source.save();
@@ -174,9 +174,17 @@ test('annotated PDF export preserves pages and reports unsupported objects', asy
     audioNotes: [{ id: 'audio-1', fileId: 'asset-1', fileName: 'voice.webm', mimeType: 'audio/webm', createdAt: 1 }],
   }]);
 
-  assert.equal(rendered.exportedObjects, 1);
-  assert.equal(rendered.unsupportedObjects, 2);
-  assert.match(rendered.warnings[0], /triangle\/diamond/);
+  // Triangle support is intentional: verify the exported vector path, not just counts.
+  const { decodePDFRawStream } = await import('pdf-lib');
+  const output = await PDFDocument.load(rendered.bytes);
+  const outputPage = output.getPage(0);
+  const content = outputPage.node.Contents()!.asArray().map(ref => Buffer.from(decodePDFRawStream(output.context.lookup(ref) as any).decode()).toString()).join('\n');
+  assert.match(content, /120 100 m\s+140 140 l\s+100 140 l\s+h/);
+  assert.equal(outputPage.getWidth(), 300);
+  assert.equal(outputPage.getHeight(), 400);
+  assert.equal(rendered.exportedObjects, 2);
+  assert.equal(rendered.unsupportedObjects, 1);
+  assert.match(rendered.warnings[0], /unsupported attachment/);
   assert.equal((await PDFDocument.load(rendered.bytes)).getPageCount(), 1);
   assert.ok(rendered.bytes.byteLength > original.byteLength);
 });

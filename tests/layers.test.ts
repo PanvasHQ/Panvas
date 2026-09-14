@@ -53,7 +53,9 @@ test('local Elements validate portable object groups and bundle offline starters
   assert.equal(valid?.shapes.length, 1);
   assert.equal(validateElementSnapshot({ type: 'panvas/elements', strokes: [], shapes: [], texts: [], images: [] }), null);
   assert.equal(validateElementSnapshot({ type: 'panvas/elements', strokes: [], shapes: [{ id: 'bad', type: 'shape', x: 'oops', y: 1 }], texts: [], images: [] }), null);
-  assert.deepEqual(getStarterElements().map(element => element.category), ['Starter', 'Starter', 'Starter']);
+  const starters = getStarterElements();
+  assert.equal(starters.length, 13);
+  assert.equal(starters.every(element => element.category === 'Starter' && element.builtin === true), true);
 });
 
 test('audio note metadata round-trips and deletes independently of binary playback', () => {

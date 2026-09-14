@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
+import { resolveTwoFingerViewport } from '../src/components/notebook/engine/touchViewportGesture.ts';
 
 function read(relativePath: string): Promise<string> {
   return readFile(new URL(relativePath, import.meta.url), 'utf8');
@@ -25,6 +26,9 @@ test('mobile shell sidebar overlays content and closes on navigation and Escape'
   assert.match(shell, /aria-label="Close library sidebar"/);
   assert.match(shell, /event\.key !== 'Escape'/);
   assert.match(shell, /lastDismissSignalRef/);
+  assert.match(shell, /enteredMobileViewportRef/);
+  assert.match(shell, /if \(open\) toggleSidebar\(\)/);
+  assert.match(shell, /max-\[1023px\]:max-w-\[14rem\]/);
   assert.match(shell, /flex-1 flex overflow-hidden relative/);
 });
 
@@ -106,4 +110,34 @@ test('Document mode is a compact segmented control with selected pill and focus 
   for (const mode of ['Edit', 'Read', 'Present']) {
     assert.match(source, new RegExp(`label="${mode}"`));
   }
+});
+
+test('two-finger gestures keep their document anchor while pinching and panning', () => {
+  const anchor = { distance: 100, scale: 1, documentX: 210, documentY: 420 };
+  const pinched = resolveTwoFingerViewport({
+    anchor,
+    currentDistance: 200,
+    currentCenter: { x: 160, y: 220 },
+    bounds: { left: 10, top: 20 },
+  });
+  assert.deepEqual(pinched, { scale: 2, scrollLeft: 270, scrollTop: 640 });
+
+  const panned = resolveTwoFingerViewport({
+    anchor,
+    currentDistance: 100,
+    currentCenter: { x: 130, y: 230 },
+    bounds: { left: 10, top: 20 },
+  });
+  assert.deepEqual(panned, { scale: 1, scrollLeft: 90, scrollTop: 210 });
+});
+
+test('notebook and PDF surfaces promote a second finger to the shared viewport gesture', async () => {
+  const notebook = await read('../src/components/notebook/NotebookRenderer.tsx');
+  const pdf = await read('../src/components/pdf/PdfWorkspace.tsx');
+  const input = await read('../src/components/notebook/engine/InputManager.ts');
+  for (const source of [notebook, pdf]) {
+    assert.match(source, /attachTwoFingerViewportGesture/);
+    assert.match(source, /cancelActivePointerInteraction/);
+  }
+  assert.match(input, /cancelActivePointerInteraction\(\): void/);
 });

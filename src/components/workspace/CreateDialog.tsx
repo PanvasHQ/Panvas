@@ -1,3 +1,7 @@
+import { TEMPLATE_REGISTRY } from '@/components/notebook/templates/TemplateRegistry';
+import { TemplatePreview } from '@/components/notebook/templates/TemplatePreview';
+import { createEmptyDrawingData, type PageTemplate } from '@/components/notebook/engine/drawingTypes';
+import { useNotebookSettingsStore } from '@/stores/notebookSettingsStore';
 // ============================================
 // Panvas — Create Dialog
 // ============================================
@@ -25,11 +29,13 @@ export function CreateDialog() {
   const { createWorkspace, createFolder, createNotebook, createNotebookSection, createNotebookPage, createCanvas, setActiveCanvas, setActivePage } = useWorkspaceStore();
   const [name, setName] = useState('');
   const [cover, setCover] = useState<NotebookCover>(DEFAULT_NOTEBOOK_COVER);
+  const [template, setTemplate] = useState<PageTemplate>('Blank');
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isCreateDialogOpen) {
       setName('');
+      setTemplate(useNotebookSettingsStore.getState().template);
       setCover({ ...DEFAULT_NOTEBOOK_COVER });
       setTimeout(() => inputRef.current?.focus(), 50);
     }
@@ -66,7 +72,7 @@ export function CreateDialog() {
       } else if (createDialogType === 'folder') {
         await createFolder(createDialogParentId, validated);
       } else if (createDialogType === 'notebook') {
-        await createNotebook(createDialogParentId, validated, cover);
+        await createNotebook(createDialogParentId, validated, cover, template);
       } else if (createDialogType === 'section' && createDialogParentId) {
         await createNotebookSection(createDialogParentId, validated);
       } else if (createDialogType === 'page' && createDialogParentId) {
@@ -82,7 +88,10 @@ export function CreateDialog() {
       closeCreateDialog();
     } catch (err) {
       console.error('Failed to create:', err);
-      showToast(err instanceof Error ? `Couldn't create ${current.title.toLowerCase()}: ${err.message}` : `Couldn't create ${current.title.toLowerCase()}.`, 'error');
+      const cleanDetail = err instanceof Error && typeof err.message === 'string' && !err.message.includes('\\') && !err.message.includes('/') && err.message.length < 80
+        ? `: ${err.message}`
+        : '.';
+      showToast(`Couldn't create ${current.title.toLowerCase()}${cleanDetail}`, 'error');
     }
   };
 
@@ -137,7 +146,7 @@ export function CreateDialog() {
 
   return (
     <AnimatePresence>
-      <div className="panvas-layer-modal fixed inset-0 flex items-center justify-center p-4">
+      <div className="panvas-layer-modal fixed inset-0 flex items-center justify-center p-4 max-[599px]:p-2">
         {/* Backdrop */}
         <motion.div
           initial={{ opacity: 0 }}
@@ -157,7 +166,7 @@ export function CreateDialog() {
           role="dialog"
           aria-modal="true"
           aria-labelledby="create-dialog-title"
-          className={`panvas-dialog relative w-full p-5 ${createDialogType === 'notebook' ? 'max-w-lg' : 'max-w-sm'}`}
+          className={`panvas-dialog relative max-h-[calc(100dvh-1rem)] w-full overflow-y-auto p-5 ${createDialogType === 'notebook' ? 'max-w-xl' : 'max-w-sm'}`}
         >
           {/* Close Button */}
           <button
@@ -191,6 +200,18 @@ export function CreateDialog() {
               />
             </div>
             {createDialogType === 'notebook' && <NotebookCoverPicker value={cover} onChange={setCover} title={name || 'Notebook'} />}
+            {createDialogType === 'notebook' && <fieldset className="mt-3 min-w-0"><legend className="mb-2 text-xs font-medium text-panvas-text-secondary">Paper for new pages</legend>
+              <div className="relative min-w-0">
+                <div className="flex max-w-full snap-x snap-proximity gap-2 overflow-x-auto pb-2 pr-8 [scrollbar-color:var(--color-panvas-border-strong)_transparent] [scrollbar-width:thin]">
+                  {Object.values(TEMPLATE_REGISTRY).map(item => <button key={item.id} type="button" aria-pressed={template === item.id} onClick={() => setTemplate(item.id)} title={item.description} className={`group w-[96px] shrink-0 snap-start rounded-xl border p-1.5 text-left transition-all focus-ring ${template === item.id ? 'border-panvas-accent-blue bg-panvas-accent-blue/10 shadow-sm ring-1 ring-panvas-accent-blue/30' : 'border-panvas-border-subtle bg-panvas-bg-secondary/35 hover:border-panvas-border-strong hover:bg-panvas-bg-hover'}`}>
+                    <div className="h-28 overflow-hidden rounded-lg border border-panvas-border-subtle bg-panvas-bg-primary shadow-inner"><TemplatePreview template={item.id} properties={createEmptyDrawingData().properties} /></div>
+                    <span className="mt-1.5 block truncate text-2xs font-medium text-panvas-text-primary">{item.name}</span>
+                  </button>)}
+                </div>
+                <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-panvas-bg-primary to-transparent" />
+              </div>
+            </fieldset>}
+
             <div className="flex gap-2 justify-end pt-1">
               <button
                 type="button"

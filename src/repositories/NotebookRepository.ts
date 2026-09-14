@@ -60,14 +60,7 @@ export class NotebookRepository {
   }
   async createPage(userId: string | null, workspaceId: string, notebookId: string, sectionId: string, title: string, type: 'default' | 'pdf' = 'default', pdfDataId?: string): Promise<NotebookPage> {
     if (typeof window !== 'undefined' && window.panvas) {
-      const page = await window.panvas.notebookPage.create(workspaceId, notebookId, sectionId, title);
-      // Hack for Electron mode without changing IPC definitions right now
-      if (type === 'pdf') {
-        await window.panvas.notebookPage.update(workspaceId, page.id, { type, pdfDataId });
-        page.type = type;
-        page.pdfDataId = pdfDataId;
-      }
-      return page;
+      return window.panvas.notebookPage.create(workspaceId, notebookId, sectionId, title, type, pdfDataId);
     }
     return notebookDB.createPage(userId, notebookId, sectionId, title, type, pdfDataId);
   }

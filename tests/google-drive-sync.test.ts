@@ -3,6 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs/promises';
 import { generateCodeChallenge, generateRandomString } from '../src/services/cloudsync/pkce.ts';
 import { GoogleDriveSyncProvider, AuthExpiredError, GoogleDriveApiError } from '../src/services/cloudsync/googleDriveProvider.ts';
+import { CloudOperationError } from '../src/services/cloudsync/errors.ts';
 import { GoogleAuthDiagnosticError, GoogleAuthService } from '../electron/ipc/google-auth-service.ts';
 import { ProviderConflictError, runSyncCycle, type SyncJournalStore, type SyncPayloadSource, type DeviceManifestState } from '../src/services/cloudsync/engine.ts';
 import type { ObjectUpload, RecordPointer, SyncJournalEntry, SyncManifestV1 } from '../src/services/cloudsync/types.ts';
@@ -54,6 +55,8 @@ function createFakeDriveTransport() {
       });
     }
 
+    if (url.pathname === '/drive/v3/files/generateIds') return Response.json({ ids: [`fake-file-${nextId++}`] });
+
     // GET /files?q=...
     if (url.pathname === '/drive/v3/files' && method === 'GET') {
       const q = url.searchParams.get('q') || '';
@@ -91,7 +94,8 @@ function createFakeDriveTransport() {
     // POST /files (Create folder or metadata)
     if (url.pathname === '/drive/v3/files' && method === 'POST') {
       const body = JSON.parse((init?.body as string) || '{}');
-      const id = `fake-file-${nextId++}`;
+      const id = body.id ?? `fake-file-${nextId++}`;
+      if (files.has(id)) return new Response(null, { status: 409 });
       const newFile: FakeDriveFile = {
         id,
         name: body.name,
@@ -127,7 +131,8 @@ function createFakeDriveTransport() {
       const actualContentStr = contentHeaderEnd >= 0 ? contentPart.substring(contentHeaderEnd + 4).replace(/\r\n$/, '') : contentPart;
       const contentBytes = new TextEncoder().encode(actualContentStr);
 
-      const id = `fake-file-${nextId++}`;
+      const id = metadata.id ?? `fake-file-${nextId++}`;
+      if (files.has(id)) return new Response(null, { status: 409 });
       const newFile: FakeDriveFile = {
         id,
         name: metadata.name,
@@ -149,7 +154,8 @@ function createFakeDriveTransport() {
     // POST /upload/drive/v3/files?uploadType=resumable (Initiate resumable session)
     if (url.pathname === '/upload/drive/v3/files' && url.searchParams.get('uploadType') === 'resumable' && method === 'POST') {
       const body = JSON.parse((init?.body as string) || '{}');
-      const id = `fake-file-${nextId++}`;
+      const id = body.id ?? `fake-file-${nextId++}`;
+      if (files.has(id)) return new Response(null, { status: 409 });
       const sessionUrl = `https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=${id}`;
 
       files.set(id, {
@@ -261,6 +267,52 @@ function createFakeDriveTransport() {
 }
 
 // ---- Unit Tests ----
+
+test('V2 concurrent first discovery creates one namespace tree', async () => {
+  const fake = createFakeDriveTransport();
+  const provider = new GoogleDriveSyncProvider({ tokenProvider: async () => 'test-token', fetchFn: fake.fetchFn, remoteNamespace: 'sync-v2' });
+  await Promise.all([provider.readRootJson('profile.json'), provider.readRootJson('catalog.json')]);
+  for (const name of ['Panvas', 'sync-v2', 'objects', 'workspaces']) {
+    assert.equal([...fake.files.values()].filter(file => file.name === name).length, 1, name);
+  }
+});
+
+test('V2 rereads current JSON metadata after another device writes', async () => {
+  const fake = createFakeDriveTransport();
+  const options = { tokenProvider: async () => 'test-token', fetchFn: fake.fetchFn, remoteNamespace: 'sync-v2' };
+  const first = new GoogleDriveSyncProvider(options);
+  await first.writeRootJson('catalog.json', { revision: 1 }, null);
+  const other = new GoogleDriveSyncProvider(options);
+  const before = await other.readRootJson('catalog.json');
+  await other.writeRootJson('catalog.json', { revision: 2 }, before.etag);
+  const fresh = await first.readRootJson<{ revision: number }>('catalog.json');
+  assert.equal(fresh.value?.revision, 2);
+  await first.writeRootJson('catalog.json', { revision: 3 }, fresh.etag);
+});
+
+test('V2 large upload verifies metadata when resumable response omits size', async () => {
+  const fake = createFakeDriveTransport();
+  const provider = new GoogleDriveSyncProvider({ tokenProvider: async () => 'test-token', fetchFn: async (url, init) => {
+    const response = await fake.fetchFn(url, init);
+    if (init?.method === 'PUT') {
+      const file = await response.json();
+      return Response.json({ id: file.id, name: file.name });
+    }
+    return response;
+  } });
+  const bytes = new Uint8Array(5 * 1024 * 1024);
+  const hash = 'f'.repeat(64);
+  await provider.putObjectIfAbsent('ws-large', { hash, bytes });
+  assert.deepEqual(await provider.getMetadata('ws-large', hash), { size: bytes.length });
+});
+
+test('metadata outage is not treated as a missing remote file', async () => {
+  const fake = createFakeDriveTransport();
+  const provider = new GoogleDriveSyncProvider({ tokenProvider: async () => 'test-token', fetchFn: fake.fetchFn, maxRetries: 0 });
+  const written = await provider.writeRootJson('catalog.json', { revision: 1 }, null);
+  fake.setCustomResponse({ status: 503, body: JSON.stringify({ error: { errors: [{ reason: 'backendError' }] } }) });
+  await assert.rejects(provider.writeRootJson('catalog.json', { revision: 2 }, written.etag), (error: any) => error.status === 503 && error.stage.startsWith('File metadata'));
+});
 
 test('Google OAuth PKCE verifier and challenge generation conforms to S256', () => {
   const verifier1 = generateRandomString(48);
@@ -640,6 +692,21 @@ test('GoogleDriveSyncProvider stores and retrieves content-addressed objects ide
   assert.equal(fake.files.size, fileCountBefore);
 });
 
+test('GoogleDriveSyncProvider reports a missing cached object as a structured error', async () => {
+  const fake = createFakeDriveTransport();
+  const provider = new GoogleDriveSyncProvider({ tokenProvider: async () => 'test-valid-token', fetchFn: fake.fetchFn });
+  const hash = 'missing-object-hash';
+  await provider.putObjectIfAbsent('ws-123', { hash, bytes: new TextEncoder().encode('content') });
+  const file = [...fake.files.values()].find(candidate => candidate.name === hash)!;
+  fake.files.delete(file.id);
+  await assert.rejects(() => provider.getObject('ws-123', hash), (error: unknown) => {
+    assert.ok(error instanceof CloudOperationError);
+    assert.equal(error.diagnostic.stage, 'object-download');
+    assert.equal(error.diagnostic.reason, 'remote-object-missing');
+    return true;
+  });
+});
+
 test('GoogleDriveSyncProvider batches object existence discovery for a 30-object upload', async () => {
   const fake = createFakeDriveTransport();
   const provider = new GoogleDriveSyncProvider({ tokenProvider: async () => 'test-valid-token', fetchFn: fake.fetchFn });
@@ -650,7 +717,7 @@ test('GoogleDriveSyncProvider batches object existence discovery for a 30-object
     bytes: new TextEncoder().encode(`object-${index}`),
   }));
   await Promise.all(uploads.map(upload => provider.putObjectIfAbsent('ws-batch', upload)));
-  assert.equal(provider.getRequestMetrics().requests, 31, 'one shared object index plus one upload request per new object');
+  assert.equal(provider.getRequestMetrics().requests, 61, 'one shared object index plus allocation and idempotent upload per new object');
   const beforeIdle = provider.getRequestMetrics().requests;
   await Promise.all(uploads.map(upload => provider.putObjectIfAbsent('ws-batch', upload)));
   assert.equal(provider.getRequestMetrics().requests, beforeIdle, 'known unchanged objects require no additional Drive calls');

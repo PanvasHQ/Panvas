@@ -1,5 +1,8 @@
 # Panvas: project overview
 
+> [!NOTE]
+> **Historical Document**: This document reflects early planning/development phases (August-September 2026). For the canonical v0.1.0 architecture and documentation, see [README.md](../README.md) and [docs/ARCHITECTURE.md](ARCHITECTURE.md).
+
 Panvas is a local-first visual research workspace for engineers, researchers, technical students, and creators. It brings structured notebooks, infinite canvases, PDFs, code/equation blocks, and reference material into one desktop-oriented product.
 
 ## Vision

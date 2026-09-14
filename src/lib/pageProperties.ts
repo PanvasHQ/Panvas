@@ -24,6 +24,18 @@ export interface PageDimensions {
   height: number;
 }
 
+export interface PageNoteSpace {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+export interface PageSurfaceGeometry extends PageDimensions {
+  source: PageGeometryFrame;
+  noteSpace: PageNoteSpace;
+}
+
 export interface NotebookPageLayoutPosition extends PageDimensions {
   id: string;
   x: number;
@@ -39,6 +51,7 @@ export interface NotebookPageLayout {
 }
 
 const PAGE_DIMENSIONS: Record<PagePropertySet['pageSize'], PageDimensions> = {
+  A3: { width: 1123, height: 1587 },
   A4: { width: 794, height: 1123 },
   A5: { width: 595, height: 842 },
   Letter: { width: 816, height: 1056 },
@@ -47,17 +60,44 @@ const PAGE_DIMENSIONS: Record<PagePropertySet['pageSize'], PageDimensions> = {
   Custom: { width: 794, height: 1123 },
 };
 
-/** Resolve the stable logical dimensions belonging to one page. */
-export function resolvePageDimensions(properties: PagePropertySet): PageDimensions {
-  const dimensions = PAGE_DIMENSIONS[properties.pageSize];
-  const oriented = properties.orientation === 'landscape'
-    ? { width: dimensions.height, height: dimensions.width }
-    : { ...dimensions };
-  return { ...oriented, height: oriented.height + Math.max(0, Math.min(6000, properties.extraHeight ?? 0)) };
+const clampNoteSpace = (value: number | undefined) => Number.isFinite(value)
+  ? Math.max(0, Math.min(6000, value ?? 0))
+  : 0;
+
+/** Legacy `extraHeight` remains bottom space until the page writes `extraBottom`. */
+export function resolvePageNoteSpace(properties: Partial<PagePropertySet>): PageNoteSpace {
+  return {
+    top: clampNoteSpace(properties.extraTop),
+    right: clampNoteSpace(properties.extraRight),
+    bottom: clampNoteSpace(properties.extraBottom ?? properties.extraHeight),
+    left: clampNoteSpace(properties.extraLeft),
+  };
 }
 
+/** Resolve the unchanged physical/source dimensions belonging to one page. */
 export function resolveBasePageDimensions(properties: PagePropertySet): PageDimensions {
-  return resolvePageDimensions({ ...properties, extraHeight: 0 });
+  const dimensions = PAGE_DIMENSIONS[properties.pageSize];
+  return properties.orientation === 'landscape'
+    ? { width: dimensions.height, height: dimensions.width }
+    : { ...dimensions };
+}
+
+/** Overall writable surface plus the fixed source-page frame inside it. */
+export function resolvePageSurfaceGeometry(properties: PagePropertySet): PageSurfaceGeometry {
+  const base = resolveBasePageDimensions(properties);
+  const noteSpace = resolvePageNoteSpace(properties);
+  return {
+    width: noteSpace.left + base.width + noteSpace.right,
+    height: noteSpace.top + base.height + noteSpace.bottom,
+    source: { left: noteSpace.left, top: noteSpace.top, ...base },
+    noteSpace,
+  };
+}
+
+/** Resolve total writable dimensions; source dimensions stay available separately. */
+export function resolvePageDimensions(properties: PagePropertySet): PageDimensions {
+  const { width, height } = resolvePageSurfaceGeometry(properties);
+  return { width, height };
 }
 
 /**
@@ -152,6 +192,48 @@ export function getNotebookPageDefaults(notebook?: Notebook): PagePropertySet {
   return { ...DEFAULT_PAGE_PROPERTY_SET, ...(notebook?.defaultPageProperties ?? {}) };
 }
 
+/**
+ * Resolve a notebook paper color without consulting application chrome.
+ *
+ * Older drawing payloads may omit the value or use the historical `default`
+ * sentinel. Those records use the canonical white paper default forever;
+ * Light/Dark/Ink application themes never rewrite document appearance.
+ */
+export function resolveNotebookPaperColor(value: string | null | undefined): string {
+  return typeof value === 'string' && value.trim() !== '' && value !== 'default'
+    ? value
+    : DEFAULT_PAGE_PROPERTY_SET.paperColor;
+}
+
+/** Resolve a notebook template line color independently of application theme. */
+export function resolveNotebookLineColor(value: string | null | undefined): string {
+  return typeof value === 'string' && value.trim() !== '' && value !== 'default'
+    ? value
+    : DEFAULT_PAGE_PROPERTY_SET.ruleLineColor;
+}
+
+/**
+ * Resolve the complete input consumed by the page template renderer.
+ *
+ * Keeping geometry and document colors together makes the final rendering
+ * boundary explicit: a change to either persisted paper value produces a new
+ * render model, while application theme state remains outside this contract.
+ */
+export interface PageTemplateRenderModel extends PageSurfaceGeometry {
+  template: PagePropertySet['template'];
+  paperColor: string;
+  lineColor: string;
+}
+
+export function resolvePageTemplateRenderModel(properties: PagePropertySet): PageTemplateRenderModel {
+  return {
+    ...resolvePageSurfaceGeometry(properties),
+    template: properties.template,
+    paperColor: resolveNotebookPaperColor(properties.paperColor),
+    lineColor: resolveNotebookLineColor(properties.ruleLineColor),
+  };
+}
+
 export function resolvePageProperties(
   notebook: Notebook | undefined,
   page: NotebookPage | undefined,
@@ -166,13 +248,47 @@ export function resolvePageProperties(
     : { ...defaults, ...(legacyProperties ?? {}) };
 }
 
+/**
+ * Pages created after page-property metadata was introduced always carry an
+ * overrides object, including an empty one. Older pages stored appearance only
+ * inside DrawingData. Those legacy pages must resolve that record before their
+ * shell is painted, otherwise the notebook briefly shows its defaults.
+ */
+export function hasAuthoritativePageAppearance(
+  page: Pick<NotebookPage, 'pagePropertyOverrides'>,
+  cachedProperties?: PagePropertySet,
+): boolean {
+  return page.pagePropertyOverrides !== undefined || cachedProperties !== undefined;
+}
+
+/**
+ * Resolve the properties used by a visible page view.
+ *
+ * A page's in-memory/cache snapshot may be newer than its metadata override.
+ * Merge that snapshot after inheritance for every page state. Restricting the
+ * merge to the focused page makes the same page switch appearance as scrolling
+ * toggles active ownership.
+ */
+export function resolvePageRenderProperties(
+  notebook: Notebook | undefined,
+  page: NotebookPage | undefined,
+  cachedProperties: Partial<PagePropertySet> | undefined,
+): PagePropertySet {
+  const resolved = resolvePageProperties(notebook, page, cachedProperties);
+  return cachedProperties ? { ...resolved, ...cachedProperties } : resolved;
+}
+
 export function derivePagePropertyOverrides(
   properties: PagePropertySet,
   notebook?: Notebook,
 ): Partial<PagePropertySet> {
   const defaults = getNotebookPageDefaults(notebook);
   const overrides: Partial<PagePropertySet> = {};
-  for (const key of Object.keys(defaults) as (keyof PagePropertySet)[]) {
+  const keys = new Set<keyof PagePropertySet>([
+    ...(Object.keys(defaults) as (keyof PagePropertySet)[]),
+    ...(Object.keys(properties) as (keyof PagePropertySet)[]),
+  ]);
+  for (const key of keys) {
     if (properties[key] !== defaults[key]) {
       // TypeScript cannot correlate the indexed key/value pair here, but both
       // come from the same PagePropertySet contract.

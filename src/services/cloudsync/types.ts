@@ -129,6 +129,12 @@ export interface SafeCloudDiagnostic {
   reason: string;
   entityKind?: SyncEntityKind;
   entityId?: string;
+  /** Non-secret record metadata used to diagnose apply failures. */
+  schemaVersion?: string;
+  parentId?: string | null;
+  errorClass?: string;
+  throwingFunction?: string;
+  errorMessage?: string;
   operation?: string;
   retryable: boolean;
 }

@@ -15,6 +15,14 @@ import {
   recognizeCanvasGesture,
 } from '../src/components/canvas/canvasGestureRecognition.ts';
 import { getDeletedWorkspaceItems, setSectionDeletedAt } from '../electron/ipc/workspace-trash.ts';
+import {
+  createCanvasInitialAppState,
+  resolveCanvasDocumentBackground,
+  isSafeCanvasEmbedUrl,
+  isTrustedExcalidrawLibraryUrl,
+  mergeCanvasAppStateForPersistence,
+  resolveCanvasEditorTheme,
+} from '../src/services/canvas/canvasSceneState.ts';
 
 const sampleItem = {
   id: 'library-item-1',
@@ -37,7 +45,7 @@ test('Excalidraw library validation rejects path traversal and malformed payload
   assert.throws(() => parseExcalidrawLibrary(JSON.stringify({ type: 'excalidrawlib' })), /not a valid Excalidraw library/);
 });
 
-test('canvas toolbar exposes native Excalidraw tools, canvas settings, and Stage 2 gesture controls', async () => {
+test('canvas toolbar exposes supported tools and a coherent settings and file surface', async () => {
   const [toolbar, view, audio] = await Promise.all([
     readFile('src/components/canvas/CanvasToolbar.tsx', 'utf8'),
     readFile('src/components/canvas/CanvasView.tsx', 'utf8'),
@@ -45,7 +53,8 @@ test('canvas toolbar exposes native Excalidraw tools, canvas settings, and Stage
   ]);
   for (const tool of ["setTool('diamond')", "setTool('frame')", "setTool('embeddable')", "setTool('laser')"]) assert.match(toolbar, new RegExp(tool.replace(/[()']/g, '\\$&')));
   for (const state of ['gridSize', 'objectsSnapModeEnabled', 'activeTool.locked', 'isBindingEnabled', 'viewModeEnabled', 'zenModeEnabled', 'viewBackgroundColor']) assert.match(toolbar, new RegExp(state.replace('.', '\\.')));
-  for (const control of ['Lasso selection', 'Draw to shape', 'Bucket fill', 'Snap to midpoints', 'Canvas background']) assert.match(toolbar, new RegExp(control));
+  for (const control of ['Draw to shape', 'Grid and grid snap', 'Snap to objects', 'Save now', 'Export PNG', 'Fit content', 'Full screen']) assert.match(toolbar, new RegExp(control));
+  for (const unsupported of ['Lasso selection', 'Bucket fill', 'Snap to midpoints']) assert.doesNotMatch(toolbar, new RegExp(unsupported));
   assert.match(toolbar, /onBackgroundColorChange/);
   assert.match(toolbar, /<CanvasAudioControl \/>/);
   assert.match(toolbar, /Show canvas toolbar/);
@@ -58,9 +67,9 @@ function pointsFromCoordinates(coordinates: Array<[number, number]>, stepMs = 30
   return coordinates.map(([x, y], index) => ({ x, y, pressure: 1, t: index * stepMs }));
 }
 
-test('canvas background palette accepts all nine presets and validates custom colors', () => {
-  assert.equal(CANVAS_BACKGROUND_PRESETS.length, 9);
-  assert.deepEqual(CANVAS_BACKGROUND_PRESETS.map((preset) => preset.label), ['Light', 'Dark', 'Warm Paper', 'Slate', 'Blue', 'Green', 'Yellow', 'Rose', 'Transparent']);
+test('canvas background palette is restrained and validates custom colors', () => {
+  assert.equal(CANVAS_BACKGROUND_PRESETS.length, 8);
+  assert.deepEqual(CANVAS_BACKGROUND_PRESETS.map((preset) => preset.label), ['Warm Paper', 'White', 'Soft Gray', 'Soft Blue', 'Subtle Green', 'Charcoal', 'Black', 'Transparent']);
   assert.equal(normalizeCanvasColor('#abc'), '#abc');
   assert.equal(normalizeCanvasColor('#ABCDEF'), '#abcdef');
   assert.equal(normalizeCanvasColor('#aabbccdd'), '#aabbccdd');
@@ -70,7 +79,7 @@ test('canvas background palette accepts all nine presets and validates custom co
   assert.equal(toColorInputValue('transparent'), '#ffffff');
 });
 
-test('canvas polish hides leaked Excalidraw chrome and keeps the color copy Panvas-owned', async () => {
+test('canvas polish exposes authoritative selected-object actions while hiding duplicate chrome', async () => {
   const [styles, toolbar, view] = await Promise.all([
     readFile('src/styles/index.css', 'utf8'),
     readFile('src/components/canvas/CanvasToolbar.tsx', 'utf8'),
@@ -79,9 +88,27 @@ test('canvas polish hides leaked Excalidraw chrome and keeps the color copy Panv
   for (const selector of ['.excalidraw .help-icon', '.excalidraw .help-menu-button', '.excalidraw .layer-ui__wrapper__footer-right', '.excalidraw .layer-ui__wrapper__footer-left']) {
     assert.match(styles, new RegExp(selector.replace(/[.]/g, '\\$&')));
   }
-  assert.match(toolbar, /Snap edges and centers to nearby objects/);
+  assert.match(styles, /\.selected-shape-actions/);
+  assert.match(styles, /\.App-menu_top \.shapes-section/);
+  assert.match(toolbar, /Align edges and centers with nearby objects/);
   assert.match(view, /gestureRef\.current\.points\.push\(point\)/);
   assert.match(view, /activeBackgroundColor/);
+});
+
+test('canvas state defaults, persistence allowlist, embeds, and library callbacks are safe', () => {
+  assert.equal(resolveCanvasEditorTheme('system', 'dark'), 'dark');
+  assert.equal(resolveCanvasEditorTheme('system', 'ink'), 'light');
+  assert.equal(createCanvasInitialAppState({}, 'light').viewBackgroundColor, '#f7f1e3');
+  assert.equal(createCanvasInitialAppState({ viewBackgroundColor: '#123456' }, 'dark').viewBackgroundColor, '#123456');
+  assert.equal(resolveCanvasDocumentBackground({ viewBackgroundColor: '#E8F5EC' }), '#e8f5ec');
+  assert.equal(resolveCanvasDocumentBackground({ viewBackgroundColor: 'transparent' }), 'transparent');
+  const merged = mergeCanvasAppStateForPersistence({ futureField: 1, gridSize: null }, { gridSize: 20, transientField: 2 });
+  assert.deepEqual(merged, { futureField: 1, gridSize: 20 });
+  assert.equal(isSafeCanvasEmbedUrl('https://example.com/diagram'), true);
+  assert.equal(isSafeCanvasEmbedUrl('javascript:alert(1)'), false);
+  assert.equal(isSafeCanvasEmbedUrl('http://example.com'), false);
+  assert.equal(isTrustedExcalidrawLibraryUrl('https://libraries.excalidraw.com/libraries/test.excalidrawlib'), true);
+  assert.equal(isTrustedExcalidrawLibraryUrl('https://evil.example/test.excalidrawlib'), false);
 });
 
 test('canvas draw-to-shape adapter recognizes conservative native geometry', () => {

@@ -1,4 +1,4 @@
-import type { RecordPointer, SyncEntityKind } from '../types.ts';
+import type { RecordPointer, SafeCloudDiagnostic, SyncEntityKind } from '../types.ts';
 import type { ScannedSyncEntity } from '../engine.ts';
 
 export interface SyncV2Profile {
@@ -46,11 +46,28 @@ export interface SyncV2BaselineRecord {
   remoteHash: string | null;
   remoteRevision: number;
   tombstone: boolean;
+  /** Semantic identity of the actual local replica after application. */
+  localContentHash?: string;
 }
 
 export interface SyncV2ProfileState {
   profileId: string;
   accountIdentifier: string;
+}
+
+export type SyncV2WorkspaceClassification =
+  | 'healthy'
+  | 'repairable'
+  | 'orphaned'
+  | 'ambiguous'
+  | 'conflict'
+  | 'account-blocked';
+
+export interface SyncV2WorkspaceOutcome {
+  workspaceId: string;
+  classification: SyncV2WorkspaceClassification;
+  status: 'synced' | 'synced-review' | 'conflict' | 'orphaned' | 'error';
+  diagnostic?: SafeCloudDiagnostic;
 }
 
 type Awaitable<T> = T | Promise<T>;
@@ -60,6 +77,8 @@ export interface SyncV2BaselineStore {
   saveProfile(profile: SyncV2ProfileState): Awaitable<void>;
   loadWorkspace(workspaceId: string): Awaitable<SyncV2BaselineRecord[]>;
   saveWorkspace(workspaceId: string, records: SyncV2BaselineRecord[]): Awaitable<void>;
+  /** Removes the device-local V2 profile and all workspace BASE records. */
+  clear?(): Awaitable<void>;
 }
 
 export interface SyncV2MigrationConflict {
@@ -72,13 +91,31 @@ export interface SyncV2MigrationConflict {
   localHash: string;
   remoteHash: string;
   localBytes: Uint8Array;
+  /** Optional remote bytes retained for an explicit device-wins recovery. */
+  remoteBytes?: Uint8Array;
+  /** How an explicit conflict choice was reconciled. */
+  resolution?: 'cloud' | 'device' | 'both';
   createdAt: number;
   resolvedAt: number | null;
+}
+
+export type SyncV2ConflictChoice = 'cloud' | 'device' | 'both';
+
+export interface SyncV2ConflictResolution {
+  workspaceId: string;
+  kind: SyncEntityKind;
+  id: string;
+  choice: SyncV2ConflictChoice;
 }
 
 export interface SyncV2ConflictStore {
   preserve(conflict: SyncV2MigrationConflict): Promise<'created' | 'present'>;
   hasUnresolved(profileId: string): Promise<boolean>;
+  listUnresolved?(profileId: string): Promise<SyncV2MigrationConflict[]>;
+  /** Acknowledges a preserved review without deleting its recovery bytes. */
+  resolve?(conflictId: string, profileId: string): Promise<boolean>;
+  /** Removes device-local review/recovery records during an explicit reset. */
+  clear?(): Promise<void>;
 }
 
 export interface SyncV2RemoteRead<T> { value: T | null; etag: string | null }
@@ -98,10 +135,27 @@ export interface SyncV2Provider {
 export interface SyncV2LocalSource {
   beginCycle?(): void;
   endCycle?(): void;
+  /**
+   * Only a durable, complete local replica may replace a manifest pointer
+   * whose content-addressed object is absent from the remote store. Browser
+   * caches deliberately do not have this authority because they may be an
+   * old, incomplete replica returning after another device was used.
+   */
+  canRepairMissingRemoteObjects?(): boolean;
   listWorkspaceIds(): Promise<string[]>;
   scanWorkspace(workspaceId: string): Promise<ScannedSyncEntity[]>;
+  scanWorkspaceIncludingUnowned?(workspaceId: string): Promise<ScannedSyncEntity[]>;
+  /** Bypasses the cycle snapshot for edit detection and post-apply baselines. */
+  scanFreshWorkspace?(workspaceId: string): Promise<ScannedSyncEntity[]>;
+  /**
+   * Returns only a trusted, canonical workspace-root recovery record. It must
+   * never include page/document payloads. Missing or untrusted recovery is
+   * represented by null so the engine can quarantine the workspace safely.
+   */
+  getRecoveryWorkspaceRoot?(workspaceId: string): Promise<ScannedSyncEntity | null>;
 }
 
 export interface SyncV2LocalAdapter {
-  applyRecord(input: { workspaceId: string; record: SyncV2Record; bytes: Uint8Array | null }): Promise<void>;
+  applyRecord(input: { workspaceId: string; record: SyncV2Record; bytes: Uint8Array | null; allowStaleOwnershipRepair?: boolean }): Promise<void>;
+  applyWorkspace?(input: { workspaceId: string; expected: ScannedSyncEntity[]; downloads: Array<{ record: SyncV2Record; bytes: Uint8Array | null }>; allowStaleOwnershipRepair?: boolean; assertCurrent?: () => void }): Promise<void>;
 }

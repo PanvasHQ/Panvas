@@ -2,18 +2,27 @@
 // Panvas — Status Bar
 // ============================================
 
-import React from 'react';
+import React, { useSyncExternalStore } from 'react';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
-import { Check, Loader2, AlertCircle } from 'lucide-react';
 import { SyncIndicator } from '../ui/SyncIndicator';
-import { useSyncStore } from '@/stores/syncStore';
+import { useCloudSyncStore } from '@/stores/cloudSyncStore';
 import { CLOUD_SYNC_ENABLED } from '@/config/features';
+import { getCloudSyncPresentation } from '@/services/cloudsync/presentation';
+import { getBrowserStorageDurabilityState, subscribeBrowserStorageDurability } from '@/services/storage/browserStorageDurability';
 
 export function StatusBar() {
   const { saveStatus } = useCanvasStore();
   const { activeCanvasId } = useWorkspaceStore();
-  const isOnline = useSyncStore(state => state.isOnline);
+  const cloudStatus = useCloudSyncStore(state => state.statusByProvider.googledrive);
+  const cloudConnection = useCloudSyncStore(state => state.connectionByProvider.googledrive);
+  const cloudError = useCloudSyncStore(state => state.lastError);
+  const cloudReviewCount = useCloudSyncStore(state => state.reviewItems.length);
+  const cloudRecoveryCount = useCloudSyncStore(state => state.workspaceRecoveryIssues.length);
+  const cloudPresentation = getCloudSyncPresentation({ enabled: CLOUD_SYNC_ENABLED, status: cloudStatus, connection: cloudConnection, lastError: cloudError, recoveryOnly: cloudStatus === 'synced-review' && cloudRecoveryCount > 0 && cloudReviewCount === 0 });
+  const browserStorage = useSyncExternalStore(subscribeBrowserStorageDurability, getBrowserStorageDurabilityState, getBrowserStorageDurabilityState);
+  const isBrowserMode = typeof window !== 'undefined' && !window.panvas;
+  const showStorageNotice = isBrowserMode && ['denied', 'unsupported', 'error'].includes(browserStorage.persistence);
 
   const statusConfig = {
     idle: { dot: 'bg-panvas-text-tertiary', text: 'Ready' },
@@ -46,7 +55,12 @@ export function StatusBar() {
       </div>
 
       <div className="flex items-center gap-3">
-        <span role="status" aria-label="Connectivity" className="text-panvas-text-tertiary">{isOnline ? (CLOUD_SYNC_ENABLED ? 'Online' : 'Local only') : 'Offline · saved locally'}</span>
+        {showStorageNotice && (
+          <span role="status" aria-label="Browser storage durability" title={browserStorage.message} className="text-panvas-accent-amber">
+            Browser storage: best effort
+          </span>
+        )}
+        <span role="status" aria-label="Connectivity" className="text-panvas-text-tertiary">{cloudPresentation.connectivityLabel}</span>
         <span className="opacity-50">v0.1.0</span>
       </div>
     </div>

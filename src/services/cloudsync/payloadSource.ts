@@ -8,13 +8,71 @@ import { parsePdfAnnotationStorageId } from '../../lib/pdfAnnotationStorage.ts';
 
 const encode = (value: unknown): Uint8Array => new TextEncoder().encode(canonicalizeJson(value));
 
+/**
+ * userId is a local ownership stamp, not shared document content. Electron
+ * intentionally stores it as null while the browser stamps every downloaded
+ * row with the currently authenticated user. Including that field in a V2
+ * payload hash makes an unchanged browser replica look like an offline edit
+ * and creates a false conflict on the next device sync. Keep the ownership
+ * field in local storage and validate it at the database boundary, but
+ * canonicalize it to the legacy wire value (`null`) for device exchange.
+ * Keeping the key/value shape preserves compatibility with V2 objects already
+ * uploaded by Electron before this fix.
+ */
+function canonicalSyncValue(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const copy = { ...(value as Record<string, unknown>) };
+  if (Object.prototype.hasOwnProperty.call(copy, 'userId')) copy.userId = null;
+  return copy;
+}
+
+const encodeSyncValue = (value: unknown): Uint8Array => encode(canonicalSyncValue(value));
+
+const normalizeUserId = (userId: string | null | undefined): string | null => userId || null;
+type BrowserUserIdReader = () => string | null;
+let browserUserIdReader: BrowserUserIdReader = () => null;
+
+/** Installed by the application shell so the sync core stays importable in
+ * Node-based tests and non-authenticated browser contexts. */
+export function setCurrentBrowserUserIdReader(reader: BrowserUserIdReader): void {
+  browserUserIdReader = reader;
+}
+
+export const currentBrowserUserId = (): string | null => browserUserIdReader();
+const belongsToCurrentBrowserUser = (value: { userId?: string | null }): boolean =>
+  normalizeUserId(value.userId) === currentBrowserUserId();
+
+function recoveryOwnership(owner: string | null, recovery: boolean): ScannedSyncEntity['ownership'] {
+  const current = currentBrowserUserId();
+  // A browser may be authorized with Google Drive while no optional Panvas
+  // account session exists. In that mode null ownership is local bookkeeping,
+  // not a stable identity; mark it as recovery metadata so a verified cloud
+  // download can tolerate metadata-only writes during the run. The engine
+  // still compares content identities, so real document edits remain guarded.
+  if (recovery && current === null && owner === null) return 'unowned-recovery';
+  if (owner === current) return 'current';
+  if (!recovery) return undefined;
+  // Drive OAuth is valid even when the optional Panvas/Supabase session is
+  // absent. In that mode a non-null local stamp is still stale metadata, not
+  // proof that the verified Drive account is different.
+  return owner === null ? 'unowned-recovery' : 'foreign-recovery';
+}
+
 async function readBrowserSnapshot() {
+  const userId = currentBrowserUserId();
   const [workspaces, folders, notebooks, sections, pages, contents, drawings, canvases, scenes, blocks, pdfs, media] = await Promise.all([
     db.workspaces.toArray(), db.folders.toArray(), db.notebooks.toArray(), db.notebookSections.toArray(), db.notebookPages.toArray(),
     db.notebookPageContents.toArray(), db.notebookPageDrawings.toArray(), db.canvasFiles.toArray(), db.canvasData.toArray(),
     db.customBlocks.toArray(), db.pdfFiles.toArray(), db.imageFiles.toArray(),
   ]);
-  return { workspaces, folders, notebooks, sections, pages, contents, drawings, canvases, scenes, blocks, pdfs, media };
+  return {
+    // Keep the snapshot complete. Normal scans filter to the authenticated
+    // owner; verified returning-device recovery may inspect stale ownership
+    // stamps as well so it can prove whether the row belongs to the cloud
+    // replica being restored.
+    workspaces, folders, notebooks, sections, pages, contents, drawings, canvases,
+    scenes, blocks, pdfs, media,
+  };
 }
 
 export type BrowserSyncSnapshot = Awaited<ReturnType<typeof readBrowserSnapshot>>;
@@ -121,63 +179,102 @@ export class LocalSyncPayloadSource implements SyncPayloadSource {
   private readonly scanned = new Map<string, ScannedSyncEntity>();
   private readonly snapshotReader: () => Promise<BrowserSyncSnapshot>;
   private browserSnapshot: Promise<BrowserSyncSnapshot> | null = null;
+  private cacheUserId: string | null = currentBrowserUserId();
+
+  private checkCacheOwner(): void {
+    const userId = currentBrowserUserId();
+    if (this.cacheUserId !== userId) {
+      this.scanned.clear(); this.browserSnapshot = null; this.cacheUserId = userId;
+    }
+  }
 
   constructor(snapshotReader: () => Promise<BrowserSyncSnapshot> = readBrowserSnapshot) {
     this.snapshotReader = snapshotReader;
   }
 
   beginCycle(): void {
+    this.checkCacheOwner();
+    this.scanned.clear();
     if (!(typeof window !== 'undefined' && window.panvas)) this.browserSnapshot = this.snapshotReader();
   }
 
-  endCycle(): void { this.browserSnapshot = null; }
+  endCycle(): void { this.browserSnapshot = null; this.scanned.clear(); }
 
   async listWorkspaceIds(): Promise<string[]> {
+    this.checkCacheOwner();
     if (typeof window !== 'undefined' && window.panvas) {
       const [active, trash] = await Promise.all([window.panvas.workspace.getAll(), window.panvas.trash.getAll(null)]);
       return [...new Set([...active, ...trash.workspaces].map(item => item.id))];
     }
-    return (await (this.browserSnapshot ?? this.snapshotReader())).workspaces.map(item => item.id);
+    return (await (this.browserSnapshot ?? this.snapshotReader())).workspaces
+      .filter(item => belongsToCurrentBrowserUser(item))
+      .map(item => item.id);
   }
 
   async scanWorkspace(workspaceId: string): Promise<ScannedSyncEntity[]> {
+    this.checkCacheOwner();
+    const owner = this.cacheUserId;
     const entities = typeof window !== 'undefined' && window.panvas
       ? await this.scanElectronWorkspace(workspaceId)
-      : await this.scanBrowserWorkspace(workspaceId);
+      : await this.scanBrowserWorkspace(workspaceId, false);
+    this.checkCacheOwner();
+    if (owner !== this.cacheUserId) return [];
     for (const [key, entity] of this.scanned) if (entity.workspaceId === workspaceId) this.scanned.delete(key);
     for (const entity of entities) this.scanned.set(`${entity.entityType}:${entity.entityId}`, entity);
     return entities;
   }
 
+  async scanWorkspaceIncludingUnowned(workspaceId: string): Promise<ScannedSyncEntity[]> {
+    this.checkCacheOwner();
+    if (typeof window !== 'undefined' && window.panvas) return this.scanWorkspace(workspaceId);
+    const entities = await this.scanBrowserWorkspace(workspaceId, true);
+    for (const [key, entity] of this.scanned) if (entity.workspaceId === workspaceId) this.scanned.delete(key);
+    for (const entity of entities) this.scanned.set(`${entity.entityType}:${entity.entityId}`, entity);
+    return entities;
+  }
+
+  async getRecoveryWorkspaceRoot(workspaceId: string): Promise<ScannedSyncEntity | null> {
+    this.checkCacheOwner();
+    if (typeof window === 'undefined' || !window.panvas?.workspace.getRecoveryWorkspaceRoot) return null;
+    const workspace = await window.panvas.workspace.getRecoveryWorkspaceRoot(workspaceId);
+    if (!workspace || workspace.id !== workspaceId || workspace.deletedAt) return null;
+    return this.entity('workspace', workspaceId, workspaceId, null, workspace, null, true);
+  }
+
   async loadPayload(entry: SyncJournalEntry): Promise<Uint8Array | null> {
+    this.checkCacheOwner();
     const cached = this.scanned.get(`${entry.entityType}:${entry.entityId}`);
-    if (cached) return cached.bytes;
+    if (cached) return cached.workspaceId === entry.workspaceId ? cached.bytes : null;
     try {
       if (typeof window !== 'undefined' && window.panvas) {
         const found = (await this.scanElectronWorkspace(entry.workspaceId))
           .find(item => item.entityType === entry.entityType && item.entityId === entry.entityId);
         return found?.bytes ?? null;
       }
-      return this.loadBrowserPayload(entry);
+      return await this.loadBrowserPayload(entry);
     } catch { return null; }
   }
 
   async parentOf(entry: SyncJournalEntry): Promise<string | null> {
+    this.checkCacheOwner();
     const cached = this.scanned.get(`${entry.entityType}:${entry.entityId}`);
-    if (cached) return cached.parentId;
+    if (cached) return cached.workspaceId === entry.workspaceId ? cached.parentId : null;
     try {
       if (typeof window !== 'undefined' && window.panvas) {
         const found = (await this.scanElectronWorkspace(entry.workspaceId))
           .find(item => item.entityType === entry.entityType && item.entityId === entry.entityId);
         return found?.parentId ?? null;
       }
-      return this.browserParent(entry);
+      return await this.browserParent(entry);
     } catch { return null; }
   }
 
-  private entity(entityType: SyncEntityKind, entityId: string, workspaceId: string, parentId: string | null, value: unknown, deletedAt?: number | null): ScannedSyncEntity {
+  private entity(entityType: SyncEntityKind, entityId: string, workspaceId: string, parentId: string | null, value: unknown, deletedAt?: number | null, recovery = false): ScannedSyncEntity {
     const tombstone = Boolean(deletedAt);
-    return { entityType, entityId, workspaceId, parentId, bytes: tombstone ? null : encode(value), tombstone, deletedAt: deletedAt ?? null };
+    const owner = value && typeof value === 'object' && 'userId' in value ? normalizeUserId((value as { userId?: string | null }).userId) : currentBrowserUserId();
+    const current = currentBrowserUserId();
+    const ownership = recoveryOwnership(owner, recovery);
+    return { entityType, entityId, workspaceId, parentId, bytes: tombstone ? null : encodeSyncValue(value), tombstone, deletedAt: deletedAt ?? null, ownership };
   }
 
   private async scanElectronWorkspace(workspaceId: string): Promise<ScannedSyncEntity[]> {
@@ -231,6 +328,12 @@ export class LocalSyncPayloadSource implements SyncPayloadSource {
       const scene = await api.canvas.load(workspaceId, canvas.id);
       if (scene !== null && scene !== undefined) {
         entities.push(this.entity('canvasScene', canvas.id, workspaceId, canvas.id, scene));
+        // Native scenes own their blocks on disk; browsers store the same
+        // blocks separately. Emit both representations so a workspace copy
+        // can remap every block ID and a fresh browser gets usable blocks.
+        for (const block of Array.isArray(scene.customBlocks) ? scene.customBlocks : []) {
+          entities.push(this.entity('customBlock', block.id, workspaceId, canvas.id, { ...block, canvasFileId: canvas.id }, block.deletedAt));
+        }
         rememberCanvasAssets(referencedAssets, scene, canvas.id);
       }
       return entities;
@@ -246,14 +349,29 @@ export class LocalSyncPayloadSource implements SyncPayloadSource {
       const stored = item.kind === 'pdf' ? await api.binary.getPdf(item.id) : item.kind === 'audio' ? await api.binary.getAudio(item.id) : await api.binary.getImage(item.id);
       if (!stored?.data) return null;
       const mimeType = item.kind === 'pdf' ? 'application/pdf' : (stored as any).mimeType ?? item.mimeType ?? 'application/octet-stream';
-      return { entityType: 'asset' as const, entityId: item.id, workspaceId, parentId: item.ownerId, bytes: encodeAssetEnvelope({ id: item.id, ownerId: item.ownerId, fileName: stored.fileName || item.fileName || item.id, mimeType, assetKind: item.kind, createdAt: item.createdAt ?? (stored as any).createdAt ?? 0, userId: item.userId ?? null }, new Uint8Array(stored.data)), tombstone: false, deletedAt: null };
+      return { entityType: 'asset' as const, entityId: item.id, workspaceId, parentId: item.ownerId, bytes: encodeAssetEnvelope({ id: item.id, ownerId: item.ownerId, fileName: stored.fileName || item.fileName || item.id, mimeType, assetKind: item.kind, createdAt: item.createdAt ?? (stored as any).createdAt ?? 0, userId: null }, new Uint8Array(stored.data)), tombstone: false, deletedAt: null };
     });
     result.push(...assetEntities.filter((item): item is NonNullable<typeof item> => item !== null));
     return result;
   }
 
-  private async scanBrowserWorkspace(workspaceId: string): Promise<ScannedSyncEntity[]> {
-    const { workspaces, folders: allFolders, notebooks: allNotebooks, sections, pages, contents, drawings, canvases: allCanvases, scenes, blocks, pdfs, media } = await (this.browserSnapshot ?? this.snapshotReader());
+  private async scanBrowserWorkspace(workspaceId: string, includeUnowned: boolean): Promise<ScannedSyncEntity[]> {
+    const snapshot = await (this.browserSnapshot ?? this.snapshotReader());
+    const eligible = <T extends { userId?: string | null }>(items: T[]): T[] => items.filter(item => belongsToCurrentBrowserUser(item) || includeUnowned);
+    const owned = eligible;
+    const workspaces = owned(snapshot.workspaces);
+    const allFolders = owned(snapshot.folders);
+    const allNotebooks = owned(snapshot.notebooks);
+    const sections = owned(snapshot.sections);
+    const pages = owned(snapshot.pages);
+    const contents = owned(snapshot.contents);
+    const drawings = owned(snapshot.drawings);
+    const allCanvases = owned(snapshot.canvases);
+    const scenes = owned(snapshot.scenes);
+    const blocks = owned(snapshot.blocks);
+    const pdfs = owned(snapshot.pdfs);
+    const media = owned(snapshot.media);
+    const makeEntity = (entityType: SyncEntityKind, entityId: string, rowWorkspaceId: string, parentId: string | null, value: unknown, deletedAt?: number | null) => this.entity(entityType, entityId, rowWorkspaceId, parentId, value, deletedAt, includeUnowned);
     const workspace = workspaces.find(item => item.id === workspaceId);
     if (!workspace) return [];
     const folders = allFolders.filter(item => item.workspaceId === workspaceId);
@@ -262,26 +380,26 @@ export class LocalSyncPayloadSource implements SyncPayloadSource {
     const notebookIds = new Set(notebooks.map(item => item.id));
     const pageIds = new Set(pages.filter(item => notebookIds.has(item.notebookId)).map(item => item.id));
     const canvasIds = new Set(canvases.map(item => item.id));
-    const result: ScannedSyncEntity[] = [this.entity('workspace', workspace.id, workspaceId, null, workspace, workspace.deletedAt)];
-    for (const item of folders) result.push(this.entity('folder', item.id, workspaceId, item.parentId ?? workspaceId, item, item.deletedAt));
-    for (const item of notebooks) result.push(this.entity('notebook', item.id, workspaceId, item.folderId ?? workspaceId, item, item.deletedAt));
-    for (const item of sections.filter(item => notebookIds.has(item.notebookId))) result.push(this.entity('notebookSection', item.id, workspaceId, item.notebookId, item, item.deletedAt));
-    for (const item of pages.filter(item => notebookIds.has(item.notebookId))) result.push(this.entity('notebookPage', item.id, workspaceId, item.sectionId ?? item.notebookId, item, item.deletedAt));
-    for (const item of contents.filter(item => pageIds.has(item.pageId))) result.push(this.entity('pageContent', item.pageId, workspaceId, item.pageId, item));
+    const result: ScannedSyncEntity[] = [makeEntity('workspace', workspace.id, workspaceId, null, workspace, workspace.deletedAt)];
+    for (const item of folders) result.push(makeEntity('folder', item.id, workspaceId, item.parentId ?? workspaceId, item, item.deletedAt));
+    for (const item of notebooks) result.push(makeEntity('notebook', item.id, workspaceId, item.folderId ?? workspaceId, item, item.deletedAt));
+    for (const item of sections.filter(item => notebookIds.has(item.notebookId))) result.push(makeEntity('notebookSection', item.id, workspaceId, item.notebookId, item, item.deletedAt));
+    for (const item of pages.filter(item => notebookIds.has(item.notebookId))) result.push(makeEntity('notebookPage', item.id, workspaceId, item.sectionId ?? item.notebookId, item, item.deletedAt));
+    for (const item of contents.filter(item => pageIds.has(item.pageId))) result.push(makeEntity('pageContent', item.pageId, workspaceId, item.pageId, item));
     const drawingIds = new Set<string>();
     for (const item of drawings) {
       const annotation = parsePdfAnnotationStorageId(item.pageId);
       const ownerPageId = annotation?.ownerPageId ?? item.pageId;
       if (!pageIds.has(ownerPageId)) continue;
-      result.push(this.entity('pageDrawing', item.pageId, workspaceId, ownerPageId, item));
+      result.push(makeEntity('pageDrawing', item.pageId, workspaceId, ownerPageId, item));
       drawingIds.add(item.pageId);
     }
-    for (const item of canvases) result.push(this.entity('canvasFile', item.id, workspaceId, item.folderId ?? item.notebookId ?? workspaceId, item, item.deletedAt));
-    for (const item of scenes.filter(item => canvasIds.has(item.canvasFileId))) result.push(this.entity('canvasScene', item.canvasFileId, workspaceId, item.canvasFileId, item));
-    for (const item of blocks.filter(item => canvasIds.has(item.canvasFileId))) result.push(this.entity('customBlock', item.id, workspaceId, item.canvasFileId, item));
+    for (const item of canvases) result.push(makeEntity('canvasFile', item.id, workspaceId, item.folderId ?? item.notebookId ?? workspaceId, item, item.deletedAt));
+    for (const item of scenes.filter(item => canvasIds.has(item.canvasFileId))) result.push(makeEntity('canvasScene', item.canvasFileId, workspaceId, item.canvasFileId, item));
+    for (const item of blocks.filter(item => canvasIds.has(item.canvasFileId))) result.push(makeEntity('customBlock', item.id, workspaceId, item.canvasFileId, item));
     const ownerIds = new Set([...pageIds, ...canvasIds, ...drawingIds]);
-    for (const item of pdfs.filter(item => ownerIds.has(item.canvasFileId))) result.push({ entityType: 'asset', entityId: item.id, workspaceId, parentId: item.canvasFileId, bytes: encodeAssetEnvelope({ id: item.id, ownerId: item.canvasFileId, fileName: item.fileName, mimeType: 'application/pdf', assetKind: 'pdf', createdAt: item.createdAt, userId: item.userId }, new Uint8Array(item.data)), tombstone: false, deletedAt: null });
-    for (const item of media.filter(item => ownerIds.has(item.canvasFileId))) result.push({ entityType: 'asset', entityId: item.id, workspaceId, parentId: item.canvasFileId, bytes: encodeAssetEnvelope({ id: item.id, ownerId: item.canvasFileId, fileName: item.fileName, mimeType: item.mimeType, assetKind: /^audio\//i.test(item.mimeType) ? 'audio' : 'image', createdAt: item.createdAt, userId: item.userId }, new Uint8Array(item.data)), tombstone: false, deletedAt: null });
+    for (const item of pdfs.filter(item => ownerIds.has(item.canvasFileId))) result.push({ entityType: 'asset', entityId: item.id, workspaceId, parentId: item.canvasFileId, bytes: encodeAssetEnvelope({ id: item.id, ownerId: item.canvasFileId, fileName: item.fileName, mimeType: 'application/pdf', assetKind: 'pdf', createdAt: item.createdAt, userId: null }, new Uint8Array(item.data)), tombstone: false, deletedAt: null, ownership: recoveryOwnership(normalizeUserId(item.userId), includeUnowned) });
+    for (const item of media.filter(item => ownerIds.has(item.canvasFileId))) result.push({ entityType: 'asset', entityId: item.id, workspaceId, parentId: item.canvasFileId, bytes: encodeAssetEnvelope({ id: item.id, ownerId: item.canvasFileId, fileName: item.fileName, mimeType: item.mimeType, assetKind: /^audio\//i.test(item.mimeType) ? 'audio' : 'image', createdAt: item.createdAt, userId: null }, new Uint8Array(item.data)), tombstone: false, deletedAt: null, ownership: recoveryOwnership(normalizeUserId(item.userId), includeUnowned) });
     return result;
   }
 
@@ -300,27 +418,40 @@ export class LocalSyncPayloadSource implements SyncPayloadSource {
       case 'customBlock': value = await db.customBlocks.get(entry.entityId); break;
       case 'asset': {
         const asset = await db.pdfFiles.get(entry.entityId) ?? await db.imageFiles.get(entry.entityId);
-        if (!asset) return null;
+        if (!asset || !belongsToCurrentBrowserUser(asset)) return null;
         const isPdf = !('mimeType' in asset);
         const mimeType = isPdf ? 'application/pdf' : String(asset.mimeType);
         return encodeAssetEnvelope({ id: asset.id, ownerId: asset.canvasFileId, fileName: asset.fileName, mimeType, assetKind: isPdf ? 'pdf' : /^audio\//i.test(mimeType) ? 'audio' : 'image', createdAt: asset.createdAt, userId: asset.userId }, new Uint8Array(asset.data));
       }
       default: value = null;
     }
-    return value === null || value === undefined ? null : encode(value);
+    return value === null || value === undefined || !belongsToCurrentBrowserUser(value as { userId?: string | null }) ? null : encode(value);
   }
 
   private async browserParent(entry: SyncJournalEntry): Promise<string | null> {
+    const ownedParent = async <T extends { userId?: string | null }>(
+      itemPromise: Promise<T | undefined>,
+      parent: (item: T) => string | null,
+    ): Promise<string | null> => {
+      const item = await itemPromise;
+      return item && belongsToCurrentBrowserUser(item) ? parent(item) : null;
+    };
     switch (entry.entityType) {
-      case 'folder': return (await db.folders.get(entry.entityId))?.parentId ?? entry.workspaceId;
-      case 'notebook': return (await db.notebooks.get(entry.entityId))?.folderId ?? entry.workspaceId;
-      case 'notebookSection': return (await db.notebookSections.get(entry.entityId))?.notebookId ?? null;
-      case 'notebookPage': { const item = await db.notebookPages.get(entry.entityId); return item?.sectionId ?? item?.notebookId ?? null; }
-      case 'pageContent': case 'canvasScene': return entry.entityId;
-      case 'pageDrawing': return parsePdfAnnotationStorageId(entry.entityId)?.ownerPageId ?? entry.entityId;
-      case 'canvasFile': { const item = await db.canvasFiles.get(entry.entityId); return item?.folderId ?? item?.notebookId ?? entry.workspaceId; }
-      case 'customBlock': return (await db.customBlocks.get(entry.entityId))?.canvasFileId ?? null;
-      case 'asset': return (await db.pdfFiles.get(entry.entityId))?.canvasFileId ?? (await db.imageFiles.get(entry.entityId))?.canvasFileId ?? null;
+      case 'folder': return ownedParent(db.folders.get(entry.entityId), item => item.parentId ?? entry.workspaceId);
+      case 'notebook': return ownedParent(db.notebooks.get(entry.entityId), item => item.folderId ?? entry.workspaceId);
+      case 'notebookSection': return ownedParent(db.notebookSections.get(entry.entityId), item => item.notebookId ?? null);
+      case 'notebookPage': return ownedParent(db.notebookPages.get(entry.entityId), item => item.sectionId ?? item.notebookId ?? null);
+      case 'pageContent': return ownedParent(db.notebookPageContents.get(entry.entityId), () => entry.entityId);
+      case 'canvasScene': return ownedParent(db.canvasData.get(entry.entityId), () => entry.entityId);
+      case 'pageDrawing': return ownedParent(db.notebookPageDrawings.get(entry.entityId), () => parsePdfAnnotationStorageId(entry.entityId)?.ownerPageId ?? entry.entityId);
+      case 'canvasFile': return ownedParent(db.canvasFiles.get(entry.entityId), item => item.folderId ?? item.notebookId ?? entry.workspaceId);
+      case 'customBlock': return ownedParent(db.customBlocks.get(entry.entityId), item => item.canvasFileId ?? null);
+      case 'asset': {
+        const pdf = await db.pdfFiles.get(entry.entityId);
+        if (pdf && belongsToCurrentBrowserUser(pdf)) return pdf.canvasFileId ?? null;
+        const image = await db.imageFiles.get(entry.entityId);
+        return image && belongsToCurrentBrowserUser(image) ? image.canvasFileId ?? null : null;
+      }
       default: return null;
     }
   }

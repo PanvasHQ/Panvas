@@ -319,11 +319,13 @@ test('voice-note rename controls use semantic foreground tokens in light and dar
   const utilities = await readFile(new URL('../src/components/notebook/NotebookAudioControl.tsx', import.meta.url), 'utf8');
   for (const source of [floating, utilities]) {
     assert.match(source, /aria-label="Voice note name"[^>]*\/|text-panvas-text-primary[^>]*aria-label="Voice note name"/);
-    assert.match(source, /text-panvas-text-secondary hover:text-panvas-text-primary/);
   }
   assert.doesNotMatch(floating, /aria-label="(?:Save|Cancel) voice note name"[^>]*className="[^"]*text-white/);
   assert.doesNotMatch(utilities, /aria-label="(?:Save|Cancel) voice note name"[^>]*className="[^"]*text-white/);
-  assert.match(floating, /min-w-0 flex-1 truncate text-xs font-semibold text-panvas-text-primary/);
+  // Card foreground follows persisted document color, not the application theme.
+  assert.match(floating, /const style = voiceNoteStyle\(object, offset\)/);
+  assert.match(floating, /style=\{\{ \.\.\.style/);
+  assert.match(utilities, /text-panvas-text-secondary hover:text-panvas-text-primary/);
 });
 
 test('canvas voice-note controls mirror the Page voice-note theme-safe interaction contract', async () => {
@@ -371,4 +373,3 @@ test('drawing persistence coordinator isolates different notebooks and pages und
   assert.equal(repository.saves.includes('ws-1/nb-A/page-A1'), true);
   assert.equal(repository.saves.includes('ws-1/nb-B/page-B1'), true);
 });
-

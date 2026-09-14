@@ -14,6 +14,7 @@ import { DEFAULT_NOTEBOOK_COVER } from './notebookCovers';
 import { NotebookCoverPicker } from './NotebookCoverPicker';
 import { readLastLibraryView, rememberLibraryView } from '@/services/library/libraryRouteState';
 import { useIsMobileViewport } from '@/hooks/useIsMobileViewport';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 
 const filters: Array<{ id: LibraryFilter; label: string }> = [
   { id: 'all', label: 'All' }, { id: 'notebook', label: 'Notebooks' },
@@ -56,6 +57,12 @@ export function LibraryWorkspace() {
   const [customizingFolderId, setCustomizingFolderId] = useState<string | null>(null);
   const [customizingNotebookId, setCustomizingNotebookId] = useState<string | null>(null);
   const [isCreateMenuOpen, setIsCreateMenuOpen] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    title: string;
+    description: string;
+    confirmLabel: string;
+    onConfirm: () => Promise<void>;
+  } | null>(null);
 
   useEffect(() => {
     if (store.activeWorkspaceId) void store.loadWorkspaceContents(store.activeWorkspaceId);
@@ -152,34 +159,50 @@ export function LibraryWorkspace() {
     }
   };
 
-  const handlePermanentDelete = async (file: LibraryFile) => {
-    if (!window.confirm(`Permanently delete "${file.title}"? This cannot be undone.`)) return;
-    setTrashBusy(true);
-    try {
-      await store.permanentlyDeleteItem(file.id, trashEntityType(file));
-      showToast(`Deleted "${file.title}" permanently.`, 'success');
-    } catch (error) {
-      console.warn('[LibraryWorkspace] Permanent Trash delete failed:', error);
-      showToast('Could not permanently delete this item.', 'error');
-    } finally {
-      setTrashBusy(false);
-    }
+  const handlePermanentDelete = (file: LibraryFile) => {
+    if (trashBusy) return;
+    setConfirmDialog({
+      title: 'Delete this item permanently?',
+      description: `“${file.title}” will be permanently deleted. This action cannot be undone.`,
+      confirmLabel: 'Delete permanently',
+      onConfirm: async () => {
+        setTrashBusy(true);
+        try {
+          await store.permanentlyDeleteItem(file.id, trashEntityType(file));
+          showToast(`Deleted "${file.title}" permanently.`, 'success');
+        } catch (error) {
+          console.warn('[LibraryWorkspace] Permanent Trash delete failed:', error);
+          showToast('Could not permanently delete this item.', 'error');
+        } finally {
+          setTrashBusy(false);
+          setConfirmDialog(null);
+        }
+      },
+    });
   };
 
-  const handleDeleteAllTrash = async () => {
+  const handleDeleteAllTrash = () => {
     const count = trashFiles.length;
-    if (count === 0 || !window.confirm(`Permanently delete all ${count} Trash item${count === 1 ? '' : 's'}? This cannot be undone.`)) return;
-    setTrashBusy(true);
-    try {
-      const result = await store.permanentlyDeleteAllTrash();
-      if (result.failed > 0) showToast(`${result.deleted} item${result.deleted === 1 ? '' : 's'} deleted; ${result.failed} could not be deleted.`, 'error');
-      else showToast(`Deleted ${result.deleted} Trash item${result.deleted === 1 ? '' : 's'} permanently.`, 'success');
-    } catch (error) {
-      console.warn('[LibraryWorkspace] Delete all Trash failed:', error);
-      showToast('Could not empty Trash.', 'error');
-    } finally {
-      setTrashBusy(false);
-    }
+    if (count === 0 || trashBusy) return;
+    setConfirmDialog({
+      title: 'Empty Trash permanently?',
+      description: `This will permanently delete all ${count} Trash item${count === 1 ? '' : 's'}. This cannot be undone.`,
+      confirmLabel: 'Empty Trash',
+      onConfirm: async () => {
+        setTrashBusy(true);
+        try {
+          const result = await store.permanentlyDeleteAllTrash();
+          if (result.failed > 0) showToast(`${result.deleted} item${result.deleted === 1 ? '' : 's'} deleted; ${result.failed} could not be deleted.`, 'error');
+          else showToast(`Deleted ${result.deleted} Trash item${result.deleted === 1 ? '' : 's'} permanently.`, 'success');
+        } catch (error) {
+          console.warn('[LibraryWorkspace] Delete all Trash failed:', error);
+          showToast('Could not empty Trash.', 'error');
+        } finally {
+          setTrashBusy(false);
+          setConfirmDialog(null);
+        }
+      },
+    });
   };
 
   const handleContextMenu = (event: React.MouseEvent, file: LibraryFile) => {
@@ -500,6 +523,16 @@ export function LibraryWorkspace() {
       )}
     </section>
     {customizingNotebookId && (() => { const notebook = store.notebooks.find(item => item.id === customizingNotebookId); return notebook ? <NotebookCoverDialog notebook={notebook} onClose={() => setCustomizingNotebookId(null)} /> : null; })()}
+    {confirmDialog && (
+      <ConfirmDialog
+        open
+        title={confirmDialog.title}
+        description={confirmDialog.description}
+        confirmLabel={confirmDialog.confirmLabel}
+        onCancel={() => setConfirmDialog(null)}
+        onConfirm={confirmDialog.onConfirm}
+      />
+    )}
   </div></main>;
 }
 

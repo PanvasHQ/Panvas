@@ -1,0 +1,7 @@
+media-master/
+release/
+tests/
+scratch/
+docs/
+*.md
+

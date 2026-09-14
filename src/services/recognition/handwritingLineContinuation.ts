@@ -47,10 +47,6 @@ function sourceGeometry(text: TextObject): Omit<GeneratedHandwritingLineMatch, '
   };
 }
 
-function verticalOverlap(left: BoundingBox, right: BoundingBox): number {
-  return Math.max(0, Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y));
-}
-
 function horizontalGap(left: BoundingBox, right: BoundingBox): number {
   if (right.x > left.x + left.width) return right.x - (left.x + left.width);
   if (left.x > right.x + right.width) return left.x - (right.x + right.width);
@@ -65,20 +61,18 @@ export function findSameGeneratedHandwritingLine(
   pageId: string | null,
 ): GeneratedHandwritingLineMatch | null {
   const sourceBaseline = sourceBounds.y + sourceBounds.height * 0.82;
-  const sourceCenter = sourceBounds.y + sourceBounds.height / 2;
   return texts.flatMap(text => {
     if (text.layerId !== layerId) return [];
     const geometry = sourceGeometry(text);
     if (!geometry) return [];
     const existingPageId = text.metadata?.sourcePageId;
     if (pageId && typeof existingPageId === 'string' && existingPageId !== pageId) return [];
-    const scale = Math.max(1, sourceBounds.height, geometry.sourceLineHeight, geometry.sourceBounds.height);
+    // A continuation's persisted sourceBounds is a union of every appended
+    // group, so its height is not a trustworthy line-height tolerance.
+    const scale = Math.max(1, sourceBounds.height, geometry.sourceLineHeight);
     const baselineDistance = Math.abs(sourceBaseline - geometry.sourceBaseline);
-    const existingCenter = geometry.sourceBounds.y + geometry.sourceBounds.height / 2;
-    const centerDistance = Math.abs(sourceCenter - existingCenter);
-    const overlap = verticalOverlap(sourceBounds, geometry.sourceBounds);
-    const overlapRatio = overlap / Math.max(1, Math.min(sourceBounds.height, geometry.sourceBounds.height));
-    if (baselineDistance > scale * 0.58 && centerDistance > scale * 0.55 && overlapRatio < 0.35) return [];
+    const gap = horizontalGap(sourceBounds, geometry.sourceBounds);
+    if (baselineDistance > scale * 0.58 || gap > scale * 5) return [];
 
     const tolerance = scale * 0.35;
     const side: HandwritingContinuationSide = sourceBounds.x + sourceBounds.width <= geometry.sourceBounds.x + tolerance
@@ -90,7 +84,7 @@ export function findSameGeneratedHandwritingLine(
       text,
       ...geometry,
       side,
-      score: baselineDistance + centerDistance * 0.35 + horizontalGap(sourceBounds, geometry.sourceBounds) * 0.02,
+      score: baselineDistance + gap * 0.02,
     }];
   }).sort((left, right) => left.score - right.score)[0] ?? null;
 }

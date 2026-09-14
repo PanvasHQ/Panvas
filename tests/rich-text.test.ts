@@ -149,14 +149,21 @@ test('loading surfaces use the canonical Panvas mark with restrained, theme-awar
   assert.ok(!/<h1>/i.test(html.split('<div id="root">')[1] ?? ''));
 
   const app = await read('../src/app/App.tsx');
-  assert.match(app, /\.\/panvas_logo\.png/);
+  assert.match(app, /PANVAS_LOGO_SRC/);
+  const brand = await read('../src/lib/brand.ts');
+  assert.match(brand, /window\.location\.protocol === 'file:'/);
+  assert.match(brand, /'\.\/panvas_logo\.png'/);
+  assert.match(brand, /'\/panvas_logo\.png'/);
   assert.match(app, /Starting…/);
   assert.match(app, /animate-\[slideInRight_1\.4s_ease-in-out_infinite\]/);
   assert.ok(!/animate-pulse-subtle/.test(app));
 });
 
 test('the contextual text strip and the Aa menu share one formatting surface', async () => {
-  const toolbar = await read('../src/components/notebook/NotebookFloatingToolbar.tsx');
+  const [toolbar, fontPicker] = await Promise.all([
+    read('../src/components/notebook/NotebookFloatingToolbar.tsx'),
+    read('../src/components/notebook/TextFontPicker.tsx'),
+  ]);
   // One shared menu body, consumed by both the trigger and the strip.
   assert.equal((toolbar.match(/function TextFormatMenuContent/g) ?? []).length, 1);
   assert.equal((toolbar.match(/<TextFormatMenuContent /g) ?? []).length, 2);
@@ -164,6 +171,11 @@ test('the contextual text strip and the Aa menu share one formatting surface', a
   assert.match(toolbar, /<TextFormattingStrip editor=\{editor\} engine=\{engine\} enabled=\{activeTool === 'text'\} \/>/);
   assert.match(toolbar, /if \(!enabled \|\| !resolvedEditor\) return null/);
   assert.match(toolbar, /resolveFormattingEditor\(editor, engine\)/);
+  assert.equal((toolbar.match(/<TextFontPicker/g) ?? []).length, 2);
+  assert.match(fontPicker, /role="listbox"/);
+  assert.match(fontPicker, /style=\{fontOptionStyle\(font, state\)\}/);
+  const richTextMenu = toolbar.slice(toolbar.indexOf('function TextFormatMenuContent'), toolbar.indexOf('function TextFormattingStrip'));
+  assert.ok(!richTextMenu.includes('<optgroup label="Handwriting">'));
   // Strip holds the pointer so the editor never blurs and no ink is created.
   assert.match(toolbar, /aria-label="Text formatting"/);
   // Paragraph/typography commands exist only in the shared menu body (once);

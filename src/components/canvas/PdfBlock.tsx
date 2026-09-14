@@ -145,9 +145,12 @@ export function PdfBlock({ block }: PdfBlockProps) {
         {totalPages > 0 && (
           <div className="ml-auto flex items-center gap-1">
             <button
+              type="button"
               onClick={() => setCurrentPage((p: number) => Math.max(1, p - 1))}
               disabled={currentPage <= 1}
               className="btn-icon p-0.5 disabled:opacity-30"
+              aria-label="Previous PDF page"
+              title="Previous PDF page"
             >
               <ChevronLeft size={12} />
             </button>
@@ -155,28 +158,33 @@ export function PdfBlock({ block }: PdfBlockProps) {
               {currentPage}/{totalPages}
             </span>
             <button
+              type="button"
               onClick={() => setCurrentPage((p: number) => Math.min(totalPages, p + 1))}
               disabled={currentPage >= totalPages}
               className="btn-icon p-0.5 disabled:opacity-30"
+              aria-label="Next PDF page"
+              title="Next PDF page"
             >
               <ChevronRight size={12} />
             </button>
 
             <div className="w-px h-3 bg-panvas-border-subtle mx-1" />
 
-            <button onClick={() => setScale((s: number) => Math.max(0.5, s - 0.25))} className="btn-icon p-0.5">
+            <button type="button" onClick={() => setScale((s: number) => Math.max(0.5, s - 0.25))} className="btn-icon p-0.5" aria-label="Zoom out PDF" title="Zoom out PDF">
               <ZoomOut size={12} />
             </button>
-            <button onClick={() => setScale((s: number) => Math.min(3, s + 0.25))} className="btn-icon p-0.5">
+            <button type="button" onClick={() => setScale((s: number) => Math.min(3, s + 0.25))} className="btn-icon p-0.5" aria-label="Zoom in PDF" title="Zoom in PDF">
               <ZoomIn size={12} />
             </button>
           </div>
         )}
 
         <button
+          type="button"
           onClick={() => deleteBlock(block.id)}
           className="btn-icon p-1 hover:text-panvas-accent-rose"
-          title="Delete"
+          title="Delete PDF block"
+          aria-label="Delete PDF block"
         >
           <Trash2 size={12} />
         </button>

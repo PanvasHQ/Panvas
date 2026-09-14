@@ -365,6 +365,13 @@ test('page metadata finishes before pageContent and pageDrawing begin', async ()
   assert.deepEqual(new Set(started.slice(1)), new Set(['pageContent', 'pageDrawing']));
 });
 
+test('Electron remote applies serialize workspace metadata read-modify-write operations', async () => {
+  const source = await fs.readFile(new URL('../electron/ipc/WorkspaceService.ts', import.meta.url), 'utf8');
+  assert.match(source, /remoteApplyTails/);
+  assert.match(source, /applyRemoteRecordUnlocked/);
+  assert.match(source, /previous\s*\.catch\(\(\) => undefined\)\s*\.then\(\(\) => this\.applyRemoteRecordUnlocked/);
+});
+
 test('remote download failures return sanitized diagnostic fields instead of logging payload context', async () => {
   const provider = new MemoryProvider();
   provider.getObject = async () => { throw new GoogleDriveApiError({ stage: 'Object download', status: 503, reason: 'backendError', message: 'internal provider text' }); };

@@ -2,7 +2,6 @@ import { ipcMain, app, dialog, BrowserWindow, type IpcMainInvokeEvent } from 'el
 import path from 'path';
 import fs from 'fs';
 import { promises as fsPromises } from 'fs';
-import { pathToFileURL } from 'url';
 import { generateId } from '../../src/lib/utils/id.js';
 import { writeQueue } from './write-queue.js';
 import { workspaceService } from './WorkspaceService.js';
@@ -17,6 +16,12 @@ import {
 import { runNativePdfPrint } from '../../src/services/pdf/nativePrintLifecycle.js';
 import { getDeletedWorkspaceItems, setCanvasDeletedAt, setFolderDeletedAt, setNotebookDeletedAt, setSectionDeletedAt, setWorkspaceDeletedAt } from './workspace-trash.js';
 import { parsePdfAnnotationStorageId } from '../../src/lib/pdfAnnotationStorage.js';
+import { importDexieWorkspace, resolveMigrationWorkspaceDirectory } from './migration-import.js';
+import { isUnmarkedLegacyDefaultShell, type WorkspaceMigrationBundle } from '../../src/lib/migration-core.js';
+import { requireTrustedSender } from './security.js';
+import { createNotebookPageFiles } from './notebook-page-create.js';
+import { cloudApplyFailure } from '../../src/services/cloudsync/errors.js';
+import { NativeRemoteRecordApplyError } from './workspace-sync-order.js';
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_NAME_LENGTH = 160;
@@ -63,14 +68,20 @@ function requireJsonPayload(value: unknown, label: string, maxBytes = MAX_PAYLOA
 
 function requirePagePropertyPatch(value: unknown, label: string): void {
   requirePlainObject(value, label);
-  const allowed = new Set(['paperColor', 'template', 'ruleLineColor', 'orientation', 'pageSize', 'margins']);
+  const allowed = new Set(['paperColor', 'template', 'ruleLineColor', 'orientation', 'pageSize', 'margins', 'templateFields', 'extraHeight', 'extraTop', 'extraRight', 'extraBottom', 'extraLeft']);
   if (Object.keys(value).some(key => !allowed.has(key))) throw new Error(`Invalid ${label}.`);
   for (const [key, entry] of Object.entries(value)) {
     if ((key === 'paperColor' || key === 'ruleLineColor') && (typeof entry !== 'string' || !/^#[0-9a-f]{6,8}$/i.test(entry))) throw new Error(`Invalid ${key}.`);
     if (key === 'template' && (typeof entry !== 'string' || !PAGE_TEMPLATES.has(entry))) throw new Error('Invalid template.');
     if (key === 'orientation' && entry !== 'portrait' && entry !== 'landscape') throw new Error('Invalid orientation.');
-    if (key === 'pageSize' && !['A4', 'A5', 'Letter', 'Custom'].includes(String(entry))) throw new Error('Invalid page size.');
+    if (key === 'pageSize' && !['A3', 'A4', 'A5', 'Letter', 'Custom'].includes(String(entry))) throw new Error('Invalid page size.');
     if (key === 'margins' && !['No Margin', 'Normal', 'Narrow', 'Wide'].includes(String(entry))) throw new Error('Invalid margins.');
+    if (['extraHeight', 'extraTop', 'extraRight', 'extraBottom', 'extraLeft'].includes(key)
+      && (typeof entry !== 'number' || !Number.isFinite(entry) || entry < 0 || entry > 6000)) throw new Error(`Invalid ${key}.`);
+    if (key === 'templateFields') {
+      requirePlainObject(entry, 'template fields');
+      if (Object.keys(entry).length > 100 || Object.entries(entry).some(([field, fieldValue]) => field.length > 100 || typeof fieldValue !== 'string' || fieldValue.length > 10_000)) throw new Error('Invalid template fields.');
+    }
   }
 }
 
@@ -135,20 +146,6 @@ function requireUpdates(channel: string, updates: unknown): void {
   }
 }
 
-function validateSender(event: IpcMainInvokeEvent): void {
-  const senderUrl = event.senderFrame?.url;
-  let trusted = false;
-  try {
-    const sender = new URL(senderUrl ?? '');
-    trusted = process.env.VITE_DEV_SERVER_URL
-      ? sender.origin === new URL(process.env.VITE_DEV_SERVER_URL).origin
-      : sender.href.split('#')[0] === pathToFileURL(path.join(app.getAppPath(), 'dist', 'index.html')).href;
-  } catch {
-    trusted = false;
-  }
-  if (!trusted) throw new Error('Untrusted IPC sender.');
-}
-
 function validateArguments(channel: string, args: unknown[]): void {
   const idArguments: Record<string, number[]> = {
     'workspace:update': [0], 'workspace:reorder': [0],
@@ -163,16 +160,25 @@ function validateArguments(channel: string, args: unknown[]): void {
     'binary:getPdf': [0], 'binary:getImage': [0], 'binary:getAudio': [0], 'binary:deleteAudio': [0],
     'backup:export': [0],
     'trash:permanentlyDelete': [0, 1],
-    'cloudsync:listPageDrawingRecords': [0],
+    'cloudsync:listPageDrawingRecords': [0], 'cloudsync:applyRemoteRecords': [0],
+    'workspace:getRecoveryWorkspaceRoot': [0],
   };
   for (const index of idArguments[channel] ?? []) requireId(args[index], 'identifier');
 
   if (channel === 'workspace:create') requireName(args[0], 'workspace name');
+  if (channel === 'storage:setRoot' && (typeof args[0] !== 'string' || args[0].length > 4096)) throw new Error('Invalid storage folder.');
   if (channel === 'folder:create' || channel === 'canvasFile:create' || channel === 'notebook:create') {
     requireName(args[1], 'name'); requireOptionalId(args[2], 'parent identifier');
   }
   if (channel === 'notebookSection:create') requireName(args[2], 'section name');
-  if (channel === 'notebookPage:create') requireName(args[3], 'page title');
+  if (channel === 'notebookPage:create') {
+    requireName(args[3], 'page title');
+    const type = args[4] ?? 'default';
+    if (type !== 'default' && type !== 'pdf') throw new Error('Invalid page type.');
+    requireOptionalId(args[5], 'PDF data identifier');
+    if (type === 'pdf' && args[5] === undefined) throw new Error('PDF pages require a PDF data identifier.');
+    if (type === 'default' && args[5] !== undefined) throw new Error('Default pages cannot reference PDF data.');
+  }
   if (channel === 'notebook:applyPageDefaults') requirePagePropertyPatch(args[2], 'page defaults');
   if (channel === 'notebook:restorePageDefaults') requirePagePropertySnapshot(args[1]);
   if (channel === 'workspace:reorder') {
@@ -198,9 +204,23 @@ function validateArguments(channel: string, args: unknown[]): void {
     requirePlainObject(args[1], 'remote sync record');
     const record = args[1] as Record<string, unknown>;
     requireId(record.id, 'remote entity identifier');
+    if (record.parentId !== undefined && record.parentId !== null) requireId(record.parentId, 'remote parent identifier');
     if (!['workspace', 'folder', 'notebook', 'notebookSection', 'notebookPage', 'pageContent', 'pageDrawing', 'canvasFile', 'canvasScene', 'customBlock'].includes(String(record.kind))) throw new Error('Invalid remote entity kind.');
     if (typeof record.tombstone !== 'boolean') throw new Error('Invalid remote tombstone.');
     if (!record.tombstone) requireJsonPayload(record.payload, 'remote sync payload');
+  }
+  if (channel === 'cloudsync:applyRemoteRecords') {
+    requireId(args[0], 'workspace identifier');
+    if (!Array.isArray(args[1]) || args[1].length > 100_000) throw new Error('Invalid remote sync record batch.');
+    for (const candidate of args[1]) {
+      requirePlainObject(candidate, 'remote sync record');
+      const record = candidate as Record<string, unknown>;
+      requireId(record.id, 'remote entity identifier');
+      if (record.parentId !== undefined && record.parentId !== null) requireId(record.parentId, 'remote parent identifier');
+      if (!['workspace', 'folder', 'notebook', 'notebookSection', 'notebookPage', 'pageContent', 'pageDrawing', 'canvasFile', 'canvasScene', 'customBlock'].includes(String(record.kind))) throw new Error('Invalid remote entity kind.');
+      if (typeof record.tombstone !== 'boolean') throw new Error('Invalid remote tombstone.');
+      if (!record.tombstone) requireJsonPayload(record.payload, 'remote sync payload');
+    }
   }
   if (channel === 'settings:get' || channel === 'settings:set') {
     if (args[0] !== null) requireId(args[0], 'workspace identifier');
@@ -240,18 +260,37 @@ function validateArguments(channel: string, args: unknown[]): void {
   if (channel === 'binary:getPdf') requireId(args[0], 'pdf identifier');
   if (channel === 'binary:getImage') requireId(args[0], 'image identifier');
   if (channel === 'migration:importWorkspace') {
-    requirePlainObject(args[0], 'workspace migration');
-    requireName(args[0].name, 'workspace name'); requireId(args[0].id, 'workspace identifier');
-    if (!Array.isArray(args[1]) || args[1].length > 10_000) throw new Error('Invalid migration canvas data.');
-    requireJsonPayload(args[0], 'workspace migration'); requireJsonPayload(args[1], 'migration canvas data');
-    for (const notebook of Array.isArray(args[0].notebooks) ? args[0].notebooks : []) { requirePlainObject(notebook, 'notebook migration'); requireId(notebook.id, 'notebook identifier'); }
-    for (const canvas of args[1]) { requirePlainObject(canvas, 'canvas migration'); requireId(canvas.canvasFileId, 'canvas identifier'); }
+    requirePlainObject(args[0], 'workspace migration bundle');
+    const bundle = args[0] as Record<string, any>;
+    requirePlainObject(bundle.workspace, 'workspace migration');
+    requireName(bundle.workspace.name, 'workspace name'); requireId(bundle.workspace.id, 'workspace identifier');
+    requireJsonPayload(bundle.workspace, 'workspace migration');
+    for (const key of ['canvasData', 'pageContents', 'pageDrawings', 'pdfFiles', 'imageFiles']) {
+      if (!Array.isArray(bundle[key]) || bundle[key].length > 10_000) throw new Error(`Invalid migration ${key}.`);
+    }
+    for (const [collection, idKey] of [['notebooks', 'id'], ['notebookSections', 'id'], ['notebookPages', 'id']] as const) {
+      for (const item of Array.isArray(bundle.workspace[collection]) ? bundle.workspace[collection] : []) {
+        requirePlainObject(item, `${collection} migration`);
+        requireId(item[idKey], `${collection} identifier`);
+        if (collection === 'notebookSections') requireId(item.notebookId, 'notebook identifier');
+        if (collection === 'notebookPages') {
+          requireId(item.notebookId, 'notebook identifier');
+          requireId(item.sectionId, 'section identifier');
+        }
+      }
+    }
+    for (const canvas of bundle.canvasData) { requirePlainObject(canvas, 'canvas migration'); requireId(canvas.canvasFileId, 'canvas identifier'); requireJsonPayload(canvas, 'canvas migration'); }
+    for (const record of [...bundle.pageContents, ...bundle.pageDrawings]) { requirePlainObject(record, 'page payload migration'); requireId(record.pageId, 'page payload identifier'); requireId(record.notebookId, 'notebook identifier'); requireJsonPayload(record.data, 'page payload migration'); }
+    for (const asset of [...bundle.pdfFiles, ...bundle.imageFiles]) {
+      requirePlainObject(asset, 'asset migration'); requireId(asset.id, 'asset identifier'); requireName(asset.fileName, 'asset file name');
+      if (!(asset.data instanceof ArrayBuffer) || asset.data.byteLength === 0 || asset.data.byteLength > MAX_BINARY_BYTES) throw new Error('Invalid migration asset payload.');
+    }
   }
 }
 
 function registerHandler(channel: string, handler: (event: IpcMainInvokeEvent, ...args: any[]) => unknown): void {
   ipcMain.handle(channel, async (event, ...args) => {
-    validateSender(event);
+    requireTrustedSender(event);
     validateArguments(channel, args);
     return handler(event, ...args);
   });
@@ -415,6 +454,7 @@ export function registerDomainHandlers() {
 
   registerHandler('workspace:create', async (event, name: string) => {
     await workspaceService.ensureBaseDir();
+    await workspaceService.assertStorageRootAvailable();
     const workspaceId = generateId('ws');
     const workspaceDir = workspaceService.getWorkspaceDirByName(name);
     const panvasDir = path.join(workspaceDir, '.panvas');
@@ -460,6 +500,7 @@ export function registerDomainHandlers() {
     await fsPromises.mkdir(path.join(workspaceDir, 'PDF'), { recursive: true });
     
     workspaceService.registerWorkspace(workspaceId, workspaceDir);
+    await workspaceService.rememberWorkspaceLocation(workspaceId, workspaceDir);
     return workspaceObj;
   });
 
@@ -481,6 +522,7 @@ export function registerDomainHandlers() {
       try {
         const ws = await workspaceService.readWorkspaceJson(workspaceDir);
         workspaceService.registerWorkspace(ws.id, workspaceDir);
+        await workspaceService.rememberWorkspaceLocation(ws.id, workspaceDir);
         return ws;
       } catch (e) {
         throw new Error('Selected folder is not a valid Panvas workspace or is corrupted.');
@@ -531,31 +573,44 @@ export function registerDomainHandlers() {
       await fsPromises.mkdir(path.join(workspaceDir, 'PDF'), { recursive: true });
       
       workspaceService.registerWorkspace(workspaceId, workspaceDir);
+      await workspaceService.rememberWorkspaceLocation(workspaceId, workspaceDir);
       return workspaceObj;
     }
   });
 
-  registerHandler('workspace:getAll', async (event) => {
-    await workspaceService.ensureBaseDir();
-    const defaultLocation = workspaceService.getWorkspaceDirByName('');
-    
-    const workspaces: any[] = [];
-    const entries = await fsPromises.readdir(defaultLocation, { withFileTypes: true }).catch(() => []);
-    
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        const workspaceDir = path.join(defaultLocation, entry.name);
-        try {
-          const ws = await workspaceService.readWorkspaceJson(workspaceDir);
-          workspaceService.registerWorkspace(ws.id, workspaceDir);
-          if (!ws.deletedAt) workspaces.push(ws);
-        } catch (e) {
-          // Not a panvas workspace or corrupted
-        }
-      }
+  // Storage preferences affect only where future workspaces and new binary
+  // assets are created. Existing registered workspace directories remain in
+  // the service registry and are never moved by this operation.
+  registerHandler('storage:getRoot', async () => workspaceService.getStorageRootInfo());
+
+  registerHandler('storage:setRoot', async (_event, selectedPath: string) => workspaceService.setStorageRoot(selectedPath));
+
+  registerHandler('storage:chooseRoot', async (event) => {
+    let result: Awaited<ReturnType<typeof dialog.showOpenDialog>>;
+    try {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      result = win
+        ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] })
+        : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] });
+    } catch {
+      throw new Error('The storage folder chooser is unavailable.');
     }
-    return workspaces;
+    if (result.canceled || result.filePaths.length === 0) return null;
+    try {
+      return await workspaceService.setStorageRoot(result.filePaths[0]);
+    } catch {
+      throw new Error('The selected storage folder is unavailable or not writable.');
+    }
   });
+
+  registerHandler('workspace:getAll', async (event) => {
+    const entries = await workspaceService.discoverWorkspaces();
+    return entries.map(entry => entry.workspace).filter(workspace => !workspace.deletedAt);
+  });
+
+  registerHandler('workspace:getRecoveryWorkspaceRoot', async (_event, workspaceId: string) => workspaceService.getRecoveryWorkspaceRoot(workspaceId));
+
+  registerHandler('workspace:getStartupSnapshot', async () => workspaceService.getStartupSnapshot());
 
   registerHandler('workspace:update', async (event, workspaceId: string, updates: any) => {
     const dir = workspaceService.getWorkspaceDirById(workspaceId);
@@ -966,36 +1021,24 @@ export function registerDomainHandlers() {
     return true;
   });
 
-  registerHandler('notebookPage:create', async (event, workspaceId: string, notebookId: string, sectionId: string, title: string) => {
+  registerHandler('notebookPage:create', async (event, workspaceId: string, notebookId: string, sectionId: string, title: string, type: 'default' | 'pdf' = 'default', pdfDataId?: string) => {
     const dir = workspaceService.getWorkspaceDirById(workspaceId);
     const ws = await workspaceService.readWorkspaceJson(dir);
-    const page = {
-      id: generateId('page'),
+    const pageId = generateId('page');
+    const now = Date.now();
+    return createNotebookPageFiles({
+      workspaceDir: dir,
+      workspace: ws,
       notebookId,
       sectionId,
       title,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      lastOpenedAt: Date.now(),
-      order: ws.notebookPages.length,
-      pagePropertyOverrides: {},
-      deletedAt: null
-    };
-    
-    ws.notebookPages.push(page);
-    await workspaceService.writeWorkspaceJson(dir, ws);
-    
-    // Create page metadata and content files
-    const pagesDir = path.join(dir, 'Notebooks', notebookId, 'pages');
-    await fsPromises.mkdir(pagesDir, { recursive: true });
-
-    const pagePath = path.join(pagesDir, `${page.id}.json`);
-    const contentPath = path.join(pagesDir, `${page.id}.content.json`);
-    
-    await writeQueue.enqueue(pagePath, JSON.stringify(page, null, 2));
-    await writeQueue.enqueue(contentPath, JSON.stringify({ type: 'doc', content: [] }, null, 2)); // Empty TipTap doc
-    
-    return page;
+      type,
+      pdfDataId,
+      pageId,
+      now,
+      writeWorkspace: () => workspaceService.writeWorkspaceJson(dir, ws),
+      writeQueue,
+    });
   });
 
   registerHandler('notebookPage:getAll', async (event, workspaceId: string) => {
@@ -1051,17 +1094,8 @@ export function registerDomainHandlers() {
       const dir = workspaceService.getWorkspaceDirById(workspaceId);
       workspaces.push(await workspaceService.readWorkspaceJson(dir));
     } else {
-      await workspaceService.ensureBaseDir();
-      const defaultLocation = workspaceService.getWorkspaceDirByName('');
-      const entries = await fsPromises.readdir(defaultLocation, { withFileTypes: true }).catch(() => []);
-      for (const entry of entries) if (entry.isDirectory()) {
-        try {
-          const workspaceDir = path.join(defaultLocation, entry.name);
-          const workspace = await workspaceService.readWorkspaceJson(workspaceDir);
-          workspaceService.registerWorkspace(workspace.id, workspaceDir);
-          workspaces.push(workspace);
-        } catch { /* ignore invalid workspace */ }
-      }
+      const entries = await workspaceService.discoverWorkspaces();
+      workspaces.push(...entries.map(entry => entry.workspace));
     }
     const merged = workspaces.reduce((result, ws) => {
       // Workspace JSON stores its root as the document itself; the shared
@@ -1200,9 +1234,9 @@ export function registerDomainHandlers() {
     if (win) {
       // Transparent background so the app's own header shows through; only the
       // symbol color needs to contrast with the active theme.
-      // Ink is a warm light-paper theme, not a dark theme. Treating it as
-      // dark made the native minimize/maximize/close glyphs disappear against
-      // the title-bar surface.
+      // Ink is a paper-toned light theme, not a dark theme. Treating it as
+      // dark makes the native minimize/maximize/close glyphs disappear
+      // against the title-bar surface.
       const symbolColor = theme === 'dark' ? '#f6f3ed' : '#2f2921';
       win.setTitleBarOverlay({
         color: '#00000000',
@@ -1222,14 +1256,17 @@ export function registerDomainHandlers() {
   // metadata file's presence implies a complete payload.
 
   registerHandler('binary:storePdf', async (event, id: string, fileName: string, data: ArrayBuffer) => {
+    await workspaceService.ensureBaseDir();
+    await workspaceService.assertStorageRootAvailable();
     const dir = workspaceService.getPdfStoreDir();
     await fsPromises.mkdir(dir, { recursive: true });
-    await fsPromises.writeFile(path.join(dir, `${id}.bin`), new Uint8Array(data));
-    await fsPromises.writeFile(path.join(dir, `${id}.meta.json`), JSON.stringify({ id, fileName, createdAt: Date.now() }, null, 2));
+    await writeQueue.enqueue(path.join(dir, `${id}.bin`), new Uint8Array(data));
+    await writeQueue.enqueue(path.join(dir, `${id}.meta.json`), JSON.stringify({ id, fileName, createdAt: Date.now() }, null, 2));
     return true;
   });
 
   registerHandler('binary:getPdf', async (event, id: string) => {
+    await workspaceService.ensureBaseDir();
     const dir = workspaceService.getPdfStoreDir();
     try {
       const meta = JSON.parse(await fsPromises.readFile(path.join(dir, `${id}.meta.json`), 'utf8'));
@@ -1243,14 +1280,17 @@ export function registerDomainHandlers() {
   });
 
   registerHandler('binary:storeImage', async (event, id: string, fileName: string, mimeType: string, data: ArrayBuffer) => {
+    await workspaceService.ensureBaseDir();
+    await workspaceService.assertStorageRootAvailable();
     const dir = workspaceService.getImageStoreDir();
     await fsPromises.mkdir(dir, { recursive: true });
-    await fsPromises.writeFile(path.join(dir, `${id}.bin`), new Uint8Array(data));
-    await fsPromises.writeFile(path.join(dir, `${id}.meta.json`), JSON.stringify({ id, fileName, mimeType, createdAt: Date.now() }, null, 2));
+    await writeQueue.enqueue(path.join(dir, `${id}.bin`), new Uint8Array(data));
+    await writeQueue.enqueue(path.join(dir, `${id}.meta.json`), JSON.stringify({ id, fileName, mimeType, createdAt: Date.now() }, null, 2));
     return true;
   });
 
   registerHandler('binary:getImage', async (event, id: string) => {
+    await workspaceService.ensureBaseDir();
     const dir = workspaceService.getImageStoreDir();
     try {
       const meta = JSON.parse(await fsPromises.readFile(path.join(dir, `${id}.meta.json`), 'utf8'));
@@ -1264,14 +1304,17 @@ export function registerDomainHandlers() {
   });
 
   registerHandler('binary:storeAudio', async (event, id: string, fileName: string, mimeType: string, data: ArrayBuffer) => {
+    await workspaceService.ensureBaseDir();
+    await workspaceService.assertStorageRootAvailable();
     const dir = workspaceService.getAudioStoreDir();
     await fsPromises.mkdir(dir, { recursive: true });
-    await fsPromises.writeFile(path.join(dir, `${id}.bin`), new Uint8Array(data));
+    await writeQueue.enqueue(path.join(dir, `${id}.bin`), new Uint8Array(data));
     await writeQueue.enqueue(path.join(dir, `${id}.meta.json`), JSON.stringify({ id, fileName, mimeType, createdAt: Date.now() }, null, 2));
     return true;
   });
 
   registerHandler('binary:getAudio', async (event, id: string) => {
+    await workspaceService.ensureBaseDir();
     const dir = workspaceService.getAudioStoreDir();
     try {
       const meta = JSON.parse(await fsPromises.readFile(path.join(dir, `${id}.meta.json`), 'utf8'));
@@ -1285,6 +1328,7 @@ export function registerDomainHandlers() {
   });
 
   registerHandler('binary:deleteAudio', async (event, id: string) => {
+    await workspaceService.ensureBaseDir();
     const dir = workspaceService.getAudioStoreDir();
     await Promise.all([
       fsPromises.rm(path.join(dir, `${id}.bin`), { force: true }),
@@ -1294,54 +1338,55 @@ export function registerDomainHandlers() {
   });
 
   // ---- MIGRATION ----
-  registerHandler('migration:importWorkspace', async (event, workspaceObj: any, canvasDataList: any[]) => {
+  registerHandler('migration:importWorkspace', async (event, bundle: WorkspaceMigrationBundle) => {
     await workspaceService.ensureBaseDir();
-    const workspaceDir = workspaceService.getWorkspaceDirByName(workspaceObj.name);
-    const panvasDir = path.join(workspaceDir, '.panvas');
-    
-    // Idempotency: if workspace.json exists, we don't overwrite if it's already fully migrated
-    // But to be safe, we will just construct it.
-    await fsPromises.mkdir(panvasDir, { recursive: true });
-    
-    await fsPromises.writeFile(path.join(panvasDir, 'system.json'), JSON.stringify({ version: 1, migration_complete: true }, null, 2));
-    await fsPromises.writeFile(path.join(panvasDir, 'workspace.json'), JSON.stringify(workspaceObj, null, 2));
-    await fsPromises.writeFile(path.join(panvasDir, 'settings.json'), JSON.stringify({ version: 1 }, null, 2));
-    
-    await fsPromises.mkdir(path.join(panvasDir, 'journal'), { recursive: true });
-    await fsPromises.mkdir(path.join(panvasDir, 'recovery'), { recursive: true });
-    await fsPromises.mkdir(path.join(panvasDir, 'temp'), { recursive: true });
-    await fsPromises.mkdir(path.join(panvasDir, 'Plugins'), { recursive: true });
-    
-    await fsPromises.mkdir(path.join(workspaceDir, 'Assets', 'images'), { recursive: true });
-    await fsPromises.mkdir(path.join(workspaceDir, 'Assets', 'pdfs'), { recursive: true });
-    await fsPromises.mkdir(path.join(workspaceDir, 'Assets', 'videos'), { recursive: true });
-    await fsPromises.mkdir(path.join(workspaceDir, 'Assets', 'audio'), { recursive: true });
-    await fsPromises.mkdir(path.join(workspaceDir, 'Assets', 'attachments'), { recursive: true });
-    
-    await fsPromises.mkdir(path.join(workspaceDir, 'Notebooks'), { recursive: true });
-    await fsPromises.mkdir(path.join(workspaceDir, 'Canvas'), { recursive: true });
-    await fsPromises.mkdir(path.join(workspaceDir, 'PDF'), { recursive: true });
-
-    // Ensure notebook directories exist
-    if (workspaceObj.notebooks) {
-      for (const nb of workspaceObj.notebooks) {
-        await fsPromises.mkdir(path.join(workspaceDir, 'Notebooks', nb.id, 'pages'), { recursive: true });
-      }
+    await workspaceService.assertStorageRootAvailable();
+    // A returning profile may already have a usable filesystem workspace while
+    // Dexie still contains an old unmarked random-ID default shell. That shell
+    // is a migration artifact, not a second user workspace. Once any active
+    // local root exists, acknowledge the source row without allocating a new
+    // `My Workspace (Migrated …)` directory. A truly empty profile can still
+    // import the one retained shell selected by migration-core.
+    if (isUnmarkedLegacyDefaultShell(bundle)) {
+      const existing = await workspaceService.discoverWorkspaces();
+      if (existing.some(entry => !entry.workspace.deletedAt)) return true;
     }
-
-    // Write canvas data
-    for (const cd of canvasDataList) {
-      const contentPath = path.join(workspaceDir, 'Canvas', `${cd.canvasFileId}.json`);
-      await writeQueue.enqueue(contentPath, JSON.stringify(cd, null, 2));
-    }
-    
-    workspaceService.registerWorkspace(workspaceObj.id, workspaceDir);
-    return true;
+    const existingWorkspaceDir = await workspaceService.findWorkspaceDirByCanonicalId(bundle.workspace.id);
+    const storageRoot = await workspaceService.getStorageRootInfo();
+    const workspaceDir = existingWorkspaceDir
+      ?? await resolveMigrationWorkspaceDirectory(storageRoot.path, bundle.workspace);
+    return importDexieWorkspace(bundle, {
+      workspaceDir,
+      pdfStoreDir: workspaceService.getPdfStoreDir(),
+      imageStoreDir: workspaceService.getImageStoreDir(),
+      audioStoreDir: workspaceService.getAudioStoreDir(),
+      writeQueue,
+      registerWorkspace: (workspaceId, dir) => workspaceService.registerWorkspace(workspaceId, dir),
+    });
   });
 
-  registerHandler('cloudsync:applyRemoteRecord', async (_event, workspaceId: string, record: { kind: import('../../src/services/cloudsync/types.js').SyncEntityKind; id: string; payload: unknown; tombstone: boolean }) => {
-    await workspaceService.applyRemoteRecord(workspaceId, record.kind, record.id, record.payload, record.tombstone);
+  registerHandler('cloudsync:applyRemoteRecord', async (_event, workspaceId: string, record: { kind: import('../../src/services/cloudsync/types.js').SyncEntityKind; id: string; parentId?: string | null; payload: unknown; tombstone: boolean }) => {
+    await workspaceService.applyRemoteRecord(workspaceId, record.kind, record.id, record.payload, record.tombstone, record.parentId);
     return true;
+  });
+  registerHandler('cloudsync:applyRemoteRecords', async (_event, workspaceId: string, records: Array<{ kind: import('../../src/services/cloudsync/types.js').SyncEntityKind; id: string; parentId?: string | null; payload: unknown; tombstone: boolean }>) => {
+    try {
+      await workspaceService.applyRemoteRecords(workspaceId, records);
+      return { success: true as const };
+    } catch (error) {
+      const record = error instanceof NativeRemoteRecordApplyError ? error.record : null;
+      const normalized = cloudApplyFailure(error instanceof NativeRemoteRecordApplyError ? error.sourceError : error, {
+        workspaceId,
+        entityKind: record?.kind ?? 'workspace',
+        entityId: record?.id ?? workspaceId,
+        parentId: record?.parentId,
+        schemaVersion: 2,
+        operation: 'apply-workspace',
+        stage: 'local-record-apply',
+        throwingFunction: 'WorkspaceService.applyRemoteRecords',
+      });
+      return { success: false as const, errorCode: normalized.code, diagnostic: normalized.diagnostic };
+    }
   });
   registerHandler('cloudsync:listPageDrawingRecords', async (_event, workspaceId: string) => workspaceService.listPageDrawingRecords(workspaceId));
 }

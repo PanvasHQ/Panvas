@@ -60,6 +60,12 @@ export class InputManager {
   /** Immutable owner of the active canvas gesture. Cleared on every finish. */
   private strokeModeAtStart: NotebookMode | null = null;
   private strokeContextAtStart: DrawingStrokeContext | null = null;
+  private cachedCanvasRect: DOMRect | null = null;
+  private cachedCssWidth = 0;
+  private cachedCssHeight = 0;
+  private lastProcessedClientX = -1;
+  private lastProcessedClientY = -1;
+  private hasReceivedRawUpdateInCurrentStroke = false;
 
   // Select-mode pointer routing. Transform gestures continue to be owned by
   // SelectionEngine; lasso only records the freehand enclosure passed to its existing
@@ -118,6 +124,11 @@ export class InputManager {
     return () => this.strokeLifecycleListeners.delete(listener);
   }
 
+  /** Promote an incomplete single-pointer edit into a two-finger viewport gesture. */
+  cancelActivePointerInteraction(): void {
+    this.cancelTransientInteraction();
+  }
+
   private notifyStrokeLifecycle(event: InkStrokeLifecycleEvent): void {
     for (const listener of this.strokeLifecycleListeners) listener(event);
   }
@@ -157,6 +168,9 @@ export class InputManager {
     canvas.addEventListener('pointermove', this.handlePointerMove);
     canvas.addEventListener('pointerup', this.handlePointerUp);
     canvas.addEventListener('pointercancel', this.handlePointerUp);
+    if (typeof window !== 'undefined' && 'onpointerrawupdate' in window) {
+      canvas.addEventListener('pointerrawupdate', this.handlePointerMove as EventListener);
+    }
     // NOTE: `pointerleave` is deliberately NOT wired to handlePointerUp. Every gesture
     // start below calls setPointerCapture on this canvas, so `pointerup` is guaranteed
     // to be delivered here even when the button is released outside the element.
@@ -175,12 +189,22 @@ export class InputManager {
     this.canvas.removeEventListener('pointermove', this.handlePointerMove);
     this.canvas.removeEventListener('pointerup', this.handlePointerUp);
     this.canvas.removeEventListener('pointercancel', this.handlePointerUp);
+    if (typeof window !== 'undefined' && 'onpointerrawupdate' in window) {
+      this.canvas.removeEventListener('pointerrawupdate', this.handlePointerMove as EventListener);
+    }
     if (typeof window !== 'undefined') window.removeEventListener('blur', this.cancelTransientInteraction);
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     this.clearSelectionCursor();
     this.rulerDragMode = null;
     this.laserPointerActive = false;
     this.isDrawing = false;
+    this.drawingEngine?.endLiveStroke?.();
+    this.cachedCanvasRect = null;
+    this.cachedCssWidth = 0;
+    this.cachedCssHeight = 0;
+    this.lastProcessedClientX = -1;
+    this.lastProcessedClientY = -1;
+    this.hasReceivedRawUpdateInCurrentStroke = false;
     this.strokeModeAtStart = null;
     this.strokeContextAtStart = null;
     this.selectionDragMode = 'none';
@@ -268,6 +292,14 @@ export class InputManager {
       this.cancelTransientInteraction();
       return;
     }
+    if (this.isDrawing && e.clientX === this.lastProcessedClientX && e.clientY === this.lastProcessedClientY) {
+      return;
+    }
+    if (e.type === 'pointerrawupdate') {
+      this.hasReceivedRawUpdateInCurrentStroke = true;
+    }
+    this.lastProcessedClientX = e.clientX;
+    this.lastProcessedClientY = e.clientY;
     if (this.rulerDragMode) {
       this.continueRulerInteraction(e);
       return;
@@ -380,8 +412,15 @@ export class InputManager {
     const wasDrawingInk = this.isDrawing && this.strokeModeAtStart === 'draw';
 
     this.isDrawing = false;
+    this.drawingEngine?.endLiveStroke?.();
     this.strokeModeAtStart = null;
     this.strokeContextAtStart = null;
+    this.cachedCanvasRect = null;
+    this.cachedCssWidth = 0;
+    this.cachedCssHeight = 0;
+    this.lastProcessedClientX = -1;
+    this.lastProcessedClientY = -1;
+    this.hasReceivedRawUpdateInCurrentStroke = false;
     this.currentPoints = [];
     this.lastEraserPoint = null;
     this.selectionDragMode = 'none';
@@ -463,6 +502,7 @@ export class InputManager {
     }
 
     const newText = {
+      fontFamily: this.textManager.getDefaultFontFamily(),
       id: generateId(),
       type: 'text' as const,
       x: point.x,
@@ -475,7 +515,7 @@ export class InputManager {
           content: [{
             type: 'text',
             text: '',
-            marks: [{ type: 'textStyle', attrs: { color: this.toolManager.getState().color } }]
+            marks: [{ type: 'textStyle', attrs: { color: this.toolManager.getState().color, fontFamily: this.textManager.getDefaultFontFamily() } }]
           }] 
         }] 
       },
@@ -494,7 +534,9 @@ export class InputManager {
 
   private startSelection(e: PointerEvent): void {
     if (this.canvas) {
-      this.canvas.setPointerCapture(e.pointerId);
+      try {
+        this.canvas.setPointerCapture(e.pointerId);
+      } catch {}
     }
     const point = this.getCanvasPoint(e);
 
@@ -661,12 +703,17 @@ export class InputManager {
   private getCanvasPoint(e: PointerEvent): StrokePoint {
     if (!this.canvas) return { x: 0, y: 0, pressure: 0.5, t: 0 };
 
-    const rect = this.canvas.getBoundingClientRect();
+    const useCache = this.isDrawing && this.strokeModeAtStart === 'draw' && Boolean(this.cachedCanvasRect);
+    const rect = useCache ? this.cachedCanvasRect! : this.canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return { x: 0, y: 0, pressure: 0.5, t: 0 };
 
     // Base document CSS dimensions of the canvas
-    const cssWidth = this.canvas.clientWidth || (this.canvas.width / (window.devicePixelRatio || 1));
-    const cssHeight = this.canvas.clientHeight || (this.canvas.height / (window.devicePixelRatio || 1));
+    const cssWidth = (useCache && this.cachedCssWidth > 0)
+      ? this.cachedCssWidth
+      : (this.canvas.clientWidth || (this.canvas.width / (window.devicePixelRatio || 1)));
+    const cssHeight = (useCache && this.cachedCssHeight > 0)
+      ? this.cachedCssHeight
+      : (this.canvas.clientHeight || (this.canvas.height / (window.devicePixelRatio || 1)));
 
     // First map client pixels into the canvas CSS box. PDF canvases use zoomed CSS
     // dimensions and apply the same zoom in the drawing context, so ViewportManager then
@@ -693,15 +740,35 @@ export class InputManager {
 
   private startDrawing(e: PointerEvent): void {
     if (this.canvas) {
-      this.canvas.setPointerCapture(e.pointerId);
+      try {
+        this.canvas.setPointerCapture(e.pointerId);
+      } catch {
+        // Pointer capture can fail in synthetic tests or if pointer was already lost
+      }
+      this.cachedCanvasRect = this.canvas.getBoundingClientRect();
+      this.cachedCssWidth = this.canvas.clientWidth || (this.canvas.width / (window.devicePixelRatio || 1));
+      this.cachedCssHeight = this.canvas.clientHeight || (this.canvas.height / (window.devicePixelRatio || 1));
     }
     this.isDrawing = true;
+    this.hasReceivedRawUpdateInCurrentStroke = false;
+    this.drawingEngine?.beginLiveStroke?.();
     const toolState = this.toolManager.getState();
     this.strokeModeAtStart = toolState.mode;
     this.strokeContextAtStart = resolveDrawingStrokeContext(toolState);
     this.strokeStartTime = Date.now();
     this.inkInputFilter.reset();
-    this.currentPoints = [this.inkInputFilter.push(this.getRulerConstrainedPoint(e), this.strokeContextAtStart.stabilization)];
+    const firstPoint = this.inkInputFilter.push(this.getRulerConstrainedPoint(e), this.strokeContextAtStart.stabilization);
+    this.currentPoints = [firstPoint];
+    this.drawingEngine.renderLiveStroke(
+      this.currentPoints,
+      this.strokeContextAtStart.tool,
+      this.strokeContextAtStart.color,
+      this.strokeContextAtStart.thickness,
+      this.strokeContextAtStart.opacity,
+      this.strokeContextAtStart.strokePattern,
+      this.strokeContextAtStart.inkFamily,
+      firstPoint,
+    );
     if (this.strokeContextAtStart.recognitionEligible) {
       this.notifyStrokeLifecycle({
         type: 'start',
@@ -712,8 +779,18 @@ export class InputManager {
 
   private continueDrawing(e: PointerEvent): void {
     const strokeContext = this.strokeContextAtStart ?? resolveDrawingStrokeContext(this.toolManager.getState());
-    const point = this.inkInputFilter.push(this.getRulerConstrainedPoint(e), strokeContext.stabilization);
-    this.currentPoints.push(point);
+    const useCoalesced = !this.hasReceivedRawUpdateInCurrentStroke && typeof e.getCoalescedEvents === 'function';
+    const coalesced = useCoalesced ? e.getCoalescedEvents() : [];
+    const eventsToProcess = coalesced.length > 0 ? coalesced : [e];
+
+    let latestRawPoint: StrokePoint | undefined;
+    for (const ev of eventsToProcess) {
+      const rawPoint = this.getRulerConstrainedPoint(ev);
+      latestRawPoint = rawPoint;
+      const point = this.inkInputFilter.push(rawPoint, strokeContext.stabilization);
+      this.currentPoints.push(point);
+    }
+
     this.drawingEngine.renderLiveStroke(
       this.currentPoints,
       strokeContext.tool,
@@ -721,6 +798,8 @@ export class InputManager {
       strokeContext.thickness,
       strokeContext.opacity,
       strokeContext.strokePattern,
+      strokeContext.inkFamily,
+      latestRawPoint,
     );
   }
 
@@ -731,11 +810,18 @@ export class InputManager {
 
   private finishDrawing(_e: PointerEvent): void {
     this.isDrawing = false;
+    this.drawingEngine?.endLiveStroke?.();
+    this.cachedCanvasRect = null;
+    this.cachedCssWidth = 0;
+    this.cachedCssHeight = 0;
+    this.lastProcessedClientX = -1;
+    this.lastProcessedClientY = -1;
+    this.hasReceivedRawUpdateInCurrentStroke = false;
     const gestureMode = this.strokeModeAtStart;
     this.strokeModeAtStart = null;
     const strokeContext = this.strokeContextAtStart ?? resolveDrawingStrokeContext(this.toolManager.getState());
     this.strokeContextAtStart = null;
-    if (this.currentPoints.length < 2) {
+    if (this.currentPoints.length < 1) {
       this.currentPoints = [];
       this.drawingEngine.redraw();
       if (strokeContext.recognitionEligible) {
@@ -827,6 +913,7 @@ export class InputManager {
       thickness: strokeContext.thickness,
       opacity: strokeContext.opacity,
       pattern: strokeContext.strokePattern,
+      inkFamily: strokeContext.inkFamily,
       createdAt: Date.now(),
     };
 
@@ -866,7 +953,9 @@ export class InputManager {
 
   private startErasing(e: PointerEvent): void {
     if (this.canvas) {
-      this.canvas.setPointerCapture(e.pointerId);
+      try {
+        this.canvas.setPointerCapture(e.pointerId);
+      } catch {}
     }
     this.isDrawing = true;
     this.strokeModeAtStart = 'erase';
@@ -913,7 +1002,9 @@ export class InputManager {
 
   private startShape(e: PointerEvent): void {
     if (this.canvas) {
-      this.canvas.setPointerCapture(e.pointerId);
+      try {
+        this.canvas.setPointerCapture(e.pointerId);
+      } catch {}
     }
     this.isDrawing = true;
     this.strokeModeAtStart = 'shape';
@@ -927,6 +1018,7 @@ export class InputManager {
       id: this.activeShapeId,
       type: 'shape',
       shapeType: toolState.shapeTool,
+      lineStyle: toolState.lineStyle,
       x: this.shapeStartPoint.x,
       y: this.shapeStartPoint.y,
       width: 0,

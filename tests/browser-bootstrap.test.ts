@@ -69,24 +69,61 @@ test('Vite forces Zustand and the application onto one React runtime', async () 
 });
 
 test('cloud status surfaces agree on conflicts/account migration and connected Google Drive suppresses the local-mode prompt', async () => {
-  const [indicator, panel, guard, store] = await Promise.all([
+  const [indicator, presentation, panel, guard, store, adoption, errors] = await Promise.all([
     readFile('src/components/ui/SyncIndicator.tsx', 'utf8'),
+    readFile('src/services/cloudsync/presentation.ts', 'utf8'),
     readFile('src/components/library/CloudSyncPanel.tsx', 'utf8'),
     readFile('src/components/auth/AuthGuard.tsx', 'utf8'),
     readFile('src/stores/cloudSyncStore.ts', 'utf8'),
+    readFile('src/services/cloudsync/v2/accountAdoption.ts', 'utf8'),
+    readFile('src/services/cloudsync/errors.ts', 'utf8'),
   ]);
-  assert.match(indicator, /gdStatus === 'conflict'/, 'the global header must not render a conflict as Synced');
-  assert.match(indicator, /gdStatus === 'account-migration-required'/, 'the global header must not render an account migration as Synced');
+  assert.match(indicator, /getCloudSyncPresentation/, 'the global header must use the canonical cloud status presentation');
+  assert.match(presentation, /'conflict'/, 'the canonical presentation must not render a conflict as Synced');
+  assert.match(presentation, /'account-migration-required'/, 'the canonical presentation must not render an account migration as Synced');
   assert.match(panel, /gdStatus === 'conflict'/, 'the card must render the same conflict state');
   assert.match(panel, /Move sync to this Google account/, 'the card must expose one explicit account migration action');
-  assert.match(panel, /window\.confirm/, 'moving sync to another account requires explicit confirmation');
+  assert.match(panel, /CLOUD_SYNC_V2_ENABLED && gdStatus === 'account-migration-required'/, 'V2 account mismatch must have an inline recovery action');
+  assert.match(panel, /Use this account/, 'the connected account recovery action must be explicit');
+  assert.match(panel, /<ConfirmDialog/, 'moving sync to another account requires the shared asynchronous confirmation dialog');
+  assert.doesNotMatch(panel, /window\.confirm/, 'active cloud sync flows must not use native confirmation');
   assert.match(guard, /!isAuthenticated && !googleDriveConnection/, 'Google Drive auth is sufficient to suppress the unrelated local-mode prompt');
   assert.match(store, /unresolvedAfterApply/, 'account finalization must use post-apply journal state');
   assert.match(store, /finalizeAccountSync/, 'lastSynced and provider status share one final decision');
   assert.match(store, /accountMigrationWorkspaceIds/, 'foreign-account workspace bindings must be detected');
   assert.match(store, /moveSyncToCurrentGoogleAccount/, 'account migration must be an explicit store action');
+  assert.match(store, /const priorBindings = adoption\.bindings;\s*replaceWorkspaceBindings\(priorBindings\)/, 'V2 adoption must commit the complete repaired binding set atomically');
+  assert.match(adoption, /remote-account-ambiguous/, 'V2 account migration must refuse a non-empty unowned namespace');
+  assert.match(errors, /remote-account-conflict/, 'a conflicting destination must have a specific safe error');
+  for (const stage of ['account_adoption.start', 'account_adoption.destination_checked', 'account_adoption.bindings_reconciled', 'account_adoption.provider_reset', 'account_adoption.sync_started', 'account_adoption.success', 'account_adoption.failure']) {
+    assert.match(store, new RegExp(stage.replace('.', '\\.'), 'g'), `account adoption must emit the sanitized ${stage} diagnostic`);
+  }
+  assert.match(panel, /cloud-sync-review/, 'Review changes must focus a visible review surface');
+  assert.match(panel, /loadReviewChanges/, 'Review changes must load preserved conflict records');
+  assert.match(panel, /setIsAccountMigrationDialogOpen\(false\);\s*try \{\s*const success = await moveSyncToCurrentGoogleAccount/, 'account adoption must release the modal before long-running sync begins');
+  assert.match(panel, /requestAnimationFrame/, 'Review changes must wait for the conditional review section to mount before scrolling');
+  assert.match(panel, /Keep Google Drive version/, 'Review state must provide an explicit completion action');
+  assert.match(panel, /resolveReviewChanges/, 'Review completion must resolve preserved markers instead of leaving users stuck');
+  assert.match(store, /reviewItems: \[\]/, 'failed account adoption must clear stale review rows');
+  assert.match(store, /sync-conflict:/, 'generic V2 conflicts must remain visible in the review surface');
   assert.match(store, /commitMigratedWorkspaceJournal[\s\S]*moveWorkspaceBinding/, 'new-account journal state and binding move only after migration succeeds');
   assert.doesNotMatch(store, /migrateDiscoveredWorkspaceBinding/, 'remote discovery must not silently rebind a foreign-account workspace');
+});
+
+test('desktop legacy import cannot hold the startup splash open or race Cloud Sync', async () => {
+  const [app, migration, cloudSync, workspaceService] = await Promise.all([
+    readFile('src/app/App.tsx', 'utf8'),
+    readFile('src/lib/migration.ts', 'utf8'),
+    readFile('src/stores/cloudSyncStore.ts', 'utf8'),
+    readFile('electron/ipc/WorkspaceService.ts', 'utf8'),
+  ]);
+  const beforeReady = app.slice(0, app.indexOf('setIsReady(true);'));
+  assert.doesNotMatch(beforeReady, /await migrateFromDexieToFs\(\)/, 'legacy import must not block the startup splash');
+  assert.match(app, /setIsReady\(true\);[\s\S]*window\.setTimeout\(\(\) => \{[\s\S]*migrateFromDexieToFs\(\)/, 'legacy import starts only after the app is ready to paint');
+  assert.match(migration, /let migrationRun: Promise<boolean> \| null = null/);
+  assert.match(migration, /if \(!migrationRun\)/, 'startup and Sync now must share one import run');
+  assert.match(cloudSync, /Preparing local workspaces…[\s\S]*await migrateFromDexieToFs\(\)/, 'Cloud Sync must join the import before enumerating workspaces');
+  assert.match(workspaceService, /WORKSPACE_DISCOVERY_CONCURRENCY/, 'large historical profiles use bounded concurrent metadata discovery');
 });
 
 test('ordinary Vite environment constructs no Supabase client and coalesces auth bootstrap', async () => {

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en" class="dark">
   <head>
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://*.supabase.co https://*.posthog.com https://huggingface.co https://*.huggingface.co https://*.hf.co https://cas-bridge.xethub.hf.co https://www.googleapis.com https://*.googleapis.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://accounts.google.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-src https://accounts.google.com/gsi/; form-action 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://*.supabase.co https://*.posthog.com https://huggingface.co https://*.huggingface.co https://*.hf.co https://cas-bridge.xethub.hf.co https://www.googleapis.com https://*.googleapis.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://accounts.google.com https://libraries.excalidraw.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-src https://accounts.google.com/gsi/; form-action 'self'" />
     <style>
       html, body, #root { min-height: 100%; margin: 0; }
       /* Pre-React bootstrap fallback in Panvas's paper language: warm neutral
@@ -54,6 +54,11 @@
     <script src="./excalidraw-config.js"></script>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/panvas_logo.png" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Panvas — A visual thinking workspace for engineers, researchers, and technical students. Think. Sketch. Write. Build." />
     
@@ -70,8 +75,6 @@
     <meta property="twitter:image" content="/og-image.png" />
 
     <title>Panvas — Visual Research Workspace</title>
-    <!-- Activated by the editor boundary, never render-blocking on the public page. -->
-    <link data-panvas-editor-fonts data-href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600;700&family=Kalam:wght@300;400;700&family=Patrick+Hand&family=Permanent+Marker&family=Shadows+Into+Light&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400..700;1,6..72,400..700&display=swap" />
   </head>
   <body class="bg-[#0D1117] text-white antialiased">
     <div id="root">

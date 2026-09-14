@@ -8,7 +8,6 @@ import type { User, Session } from '@supabase/supabase-js';
 import { authService } from '@/services/auth/AuthService';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { useCanvasStore } from '@/stores/canvasStore';
-import { useSyncStore } from '@/stores/syncStore';
 
 interface AuthState {
   user: User | null;
@@ -130,8 +129,6 @@ export const useAuthStore = create<AuthState>((set) => ({
       // signs in; signing out must never be a destructive data operation.
       useWorkspaceStore.getState().reset();
       useCanvasStore.getState().reset();
-      useSyncStore.getState().reset();
-
       const { loadWorkspaces, loadRecentFiles } = useWorkspaceStore.getState();
       await loadWorkspaces();
       await loadRecentFiles();

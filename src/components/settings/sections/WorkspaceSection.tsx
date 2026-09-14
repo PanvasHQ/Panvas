@@ -5,10 +5,11 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '@/database/schema';
 import { useAuthStore } from '@/stores/authStore';
-import { useSyncStore } from '@/stores/syncStore';
-import { HardDrive, Database, LayoutGrid, Cloud, History } from 'lucide-react';
+import { useCloudSyncStore } from '@/stores/cloudSyncStore';
+import { HardDrive, Database, LayoutGrid, Cloud, History, FolderOpen } from 'lucide-react';
 import { StorageService, type StorageMetrics } from '@/services/storage/StorageService';
 import { CLOUD_SYNC_ENABLED } from '@/config/features';
+import { getCloudSyncPresentation } from '@/services/cloudsync/presentation';
 
 function timeAgo(timestamp: number) {
   const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
@@ -24,12 +25,18 @@ function timeAgo(timestamp: number) {
 
 export function WorkspaceSection() {
   const { user } = useAuthStore();
-  const { status, lastSyncedAt } = useSyncStore();
+  const { statusByProvider, connectionByProvider, lastSyncedByProvider, lastError, reviewItems, workspaceRecoveryIssues } = useCloudSyncStore();
+  const recoveryOnly = statusByProvider.googledrive === 'synced-review' && workspaceRecoveryIssues.length > 0 && reviewItems.length === 0;
+  const presentation = getCloudSyncPresentation({ enabled: CLOUD_SYNC_ENABLED, status: statusByProvider.googledrive, connection: connectionByProvider.googledrive, lastError, recoveryOnly });
+  const lastSyncedAt = lastSyncedByProvider.googledrive;
   const [stats, setStats] = useState({
     workspaces: 0,
     canvases: 0,
   });
   const [storage, setStorage] = useState<StorageMetrics | null>(null);
+  const [storageRoot, setStorageRoot] = useState<{ path: string; configuredPath: string | null; isDefault: boolean; available: boolean } | null>(null);
+  const [storageRootError, setStorageRootError] = useState<string | null>(null);
+  const [isChoosingStorageRoot, setIsChoosingStorageRoot] = useState(false);
 
   useEffect(() => {
     async function loadStats() {
@@ -51,14 +58,31 @@ export function WorkspaceSection() {
     loadStats();
   }, [user]);
 
-  const syncStatusMap: Record<string, string> = {
-    idle: 'Idle',
-    syncing: 'Syncing...',
-    synced: 'Synced',
-    error: 'Error',
-    offline: 'Offline',
-    pending: 'Pending'
-  };
+  useEffect(() => {
+    const api = typeof window !== 'undefined' ? window.panvas?.storage : undefined;
+    if (!api) return;
+    void api.getRoot()
+      .then(setStorageRoot)
+      .catch(() => setStorageRootError('Storage location could not be read.'));
+  }, []);
+
+  async function chooseStorageRoot() {
+    const api = typeof window !== 'undefined' ? window.panvas?.storage : undefined;
+    if (!api || isChoosingStorageRoot) return;
+    setIsChoosingStorageRoot(true);
+    setStorageRootError(null);
+    try {
+      // The native handler validates and persists only after the user picks a
+      // writable directory. A canceled dialog returns null and leaves state
+      // unchanged.
+      const result = await api.chooseRoot();
+      if (result) setStorageRoot(result);
+    } catch {
+      setStorageRootError('The selected folder is unavailable or not writable.');
+    } finally {
+      setIsChoosingStorageRoot(false);
+    }
+  }
 
   return (
     <div className="flex flex-col gap-8 animate-in fade-in duration-300">
@@ -88,6 +112,31 @@ export function WorkspaceSection() {
           </div>
         </div>
       </div>
+
+      {storageRoot && (
+        <div className="flex flex-col gap-2">
+          <label className="text-xs font-semibold uppercase tracking-wider text-panvas-text-muted">Panvas Storage Location</label>
+          <div className="panvas-surface flex flex-col gap-3 p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-sm text-panvas-text-secondary">New workspaces and desktop assets are stored here.</p>
+                <p className="mt-1 break-all text-sm font-medium text-panvas-text-primary">{storageRoot.path}</p>
+                {!storageRoot.available && <p className="mt-1 text-xs text-amber-600">The previously selected folder is unavailable; existing data was not moved.</p>}
+              </div>
+              <button
+                type="button"
+                onClick={() => void chooseStorageRoot()}
+                disabled={isChoosingStorageRoot}
+                className="inline-flex shrink-0 items-center gap-2 rounded-md border border-panvas-border-subtle px-3 py-2 text-sm text-panvas-text-primary hover:bg-panvas-bg-tertiary disabled:opacity-50"
+              >
+                <FolderOpen size={15} />
+                {isChoosingStorageRoot ? 'Choosing…' : 'Change folder'}
+              </button>
+            </div>
+            {storageRootError && <p role="alert" className="text-xs text-red-600">{storageRootError}</p>}
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-6">
         <div className="flex flex-col gap-2">
@@ -151,20 +200,20 @@ export function WorkspaceSection() {
                 <Cloud size={16} className="text-panvas-text-secondary" />
                 <span className="text-sm text-panvas-text-secondary">Cloud Sync</span>
               </div>
-              <span className={`rounded-full px-2 py-0.5 text-sm font-medium ${CLOUD_SYNC_ENABLED && user ? 'bg-panvas-accent-emerald/10 text-panvas-accent-emerald' : 'bg-panvas-bg-tertiary text-panvas-text-muted'}`}>
-                {CLOUD_SYNC_ENABLED && user ? 'Enabled' : CLOUD_SYNC_ENABLED ? 'Not connected' : 'Disabled'}
+              <span className={`rounded-full px-2 py-0.5 text-sm font-medium ${presentation.connected ? 'bg-panvas-accent-emerald/10 text-panvas-accent-emerald' : 'bg-panvas-bg-tertiary text-panvas-text-muted'}`}>
+                {presentation.settingsLabel}
               </span>
             </div>
-            {CLOUD_SYNC_ENABLED && user && (
+            {presentation.connected && (
               <div className="flex items-center justify-between p-4 border-b border-panvas-border-subtle">
                 <div className="flex items-center gap-3">
                   <Cloud size={16} className="text-panvas-text-secondary" />
                   <span className="text-sm text-panvas-text-secondary">Sync Status</span>
                 </div>
-                <span className="text-sm font-medium text-panvas-text-primary capitalize">{syncStatusMap[status] || status}</span>
+                <span className="text-sm font-medium text-panvas-text-primary">{presentation.settingsLabel}</span>
               </div>
             )}
-            {CLOUD_SYNC_ENABLED && user && lastSyncedAt && (
+            {presentation.showLastSynced && lastSyncedAt && (
               <div className="flex items-center justify-between p-4">
                 <div className="flex items-center gap-3">
                   <History size={16} className="text-panvas-text-secondary" />

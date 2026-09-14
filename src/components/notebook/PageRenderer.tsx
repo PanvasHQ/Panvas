@@ -2,11 +2,12 @@
 // Panvas — Notebook Page Renderer
 // ============================================
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import type { PageProperties } from './engine/drawingTypes';
 import { TEMPLATE_REGISTRY } from './templates/TemplateRegistry.tsx';
-import { useUIStore } from '@/stores/uiStore';
-import { resolvePageDimensions } from '@/lib/pageProperties';
+import { resolvePageTemplateRenderModel } from '@/lib/pageProperties';
+
+export { formatPageIndicator } from './pageIndicator';
 
 export interface PageRendererProps {
   id: string;
@@ -78,15 +79,17 @@ function TemplateFieldInput({ field, template, scale, value, color, editable, on
 }
 
 export const PageRenderer: React.FC<PageRendererProps> = ({ id, width, height, properties, className = '', children, pageNumberText, editable = false, onUpdateProperties }) => {
-  const { theme } = useUIStore();
-  const isDark = theme === 'dark';
-  const isInk = theme === 'ink';
-
-  const { template, margins, paperColor, ruleLineColor } = properties;
-
-  const { width: baseWidth, height: baseHeight } = resolvePageDimensions(properties);
-
-  const scale = width / baseWidth;
+  const templateResourceScope = useId();
+  const { template, margins } = properties;
+  const renderModel = resolvePageTemplateRenderModel(properties);
+  const geometry = renderModel;
+  const scale = width / geometry.width;
+  const source = {
+    left: geometry.source.left * scale,
+    top: geometry.source.top * scale,
+    width: geometry.source.width * scale,
+    height: geometry.source.height * scale,
+  };
 
   // Margin insets based on selection
   const getMarginInset = () => {
@@ -99,38 +102,10 @@ export const PageRenderer: React.FC<PageRendererProps> = ({ id, width, height, p
 
   const marginInset = getMarginInset();
 
-  // Resolve effective paper background color
-  const resolvePaperColor = () => {
-    if (!paperColor || paperColor === 'default') {
-      if (isDark) return '#1e1e1e';
-      if (isInk) return '#FBF8F0';
-      return '#ffffff';
-    }
-    // If the paperColor is plain white and we are in dark theme without custom override,
-    // ensure dark mode users get a dark canvas paper surface
-    if (paperColor === '#ffffff' && isDark) {
-      return '#1e1e1e';
-    }
-    return paperColor;
-  };
-
-  const effectiveBgColor = resolvePaperColor();
-
-  // Resolve rule/grid line color for readability against effective background
-  const resolveLineColor = () => {
-    if (ruleLineColor && ruleLineColor !== '#e0e0e0') {
-      return ruleLineColor;
-    }
-    if (isDark && (effectiveBgColor === '#1e1e1e' || effectiveBgColor === '#181818' || effectiveBgColor === '#232323')) {
-      return 'rgba(255, 255, 255, 0.18)';
-    }
-    if (isInk) {
-      return 'rgba(90, 78, 66, 0.22)';
-    }
-    return 'rgba(0, 0, 0, 0.12)';
-  };
-
-  const effectiveLineColor = resolveLineColor();
+  // Paper and template ink are persisted document values. Application theme
+  // only styles Panvas chrome and must never rewrite either value.
+  const effectiveBgColor = renderModel.paperColor;
+  const effectiveLineColor = renderModel.lineColor;
 
   // Retrieve template definition from registry
   const templateDef = TEMPLATE_REGISTRY[template] || TEMPLATE_REGISTRY.Blank;
@@ -151,17 +126,17 @@ export const PageRenderer: React.FC<PageRendererProps> = ({ id, width, height, p
         className="absolute inset-0 pointer-events-none select-none"
         width="100%"
         height="100%"
-        viewBox={`0 0 ${baseWidth} ${baseHeight}`}
+        viewBox={`0 0 ${geometry.width} ${geometry.height}`}
         style={{ width: '100%', height: '100%' }}
       >
-        {templateDef.renderSVG(baseWidth, baseHeight, effectiveLineColor, isDark)}
+        {templateDef.renderSVG(geometry.width, geometry.height, effectiveLineColor, false, templateResourceScope)}
       </svg>
 
-      {editableTemplateFields(template, baseWidth).map(field => (
+      {editableTemplateFields(template, geometry.source.width).map(field => (
         <TemplateFieldInput
           key={`${template}-${field.key}`}
           value={properties.templateFields?.[field.key] ?? ''}
-          field={field}
+          field={{ ...field, x: field.x + geometry.source.left, y: field.y + geometry.source.top }}
           template={template}
           scale={scale}
           color={effectiveLineColor}
@@ -175,13 +150,21 @@ export const PageRenderer: React.FC<PageRendererProps> = ({ id, width, height, p
         <div 
           className="absolute pointer-events-none transition-all duration-200 border border-dashed"
           style={{
-            left: `${marginInset}px`,
-            top: `${marginInset}px`,
-            width: `${Math.max(10, width - marginInset * 2)}px`,
-            height: `${Math.max(10, height - marginInset * 2)}px`,
-            borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.1)',
+            left: `${source.left + marginInset}px`,
+            top: `${source.top + marginInset}px`,
+            width: `${Math.max(10, source.width - marginInset * 2)}px`,
+            height: `${Math.max(10, source.height - marginInset * 2)}px`,
+            borderColor: 'rgba(0, 0, 0, 0.1)',
           }}
           aria-hidden="true"
+        />
+      )}
+
+      {(geometry.noteSpace.top || geometry.noteSpace.right || geometry.noteSpace.bottom || geometry.noteSpace.left) > 0 && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute border border-panvas-border-default/45"
+          style={{ left: source.left, top: source.top, width: source.width, height: source.height }}
         />
       )}
 
@@ -191,8 +174,14 @@ export const PageRenderer: React.FC<PageRendererProps> = ({ id, width, height, p
       {/* Page Number Indicator */}
       {pageNumberText && (
         <div 
-          className="absolute bottom-3 right-4 text-[11px] font-mono font-medium pointer-events-none select-none text-panvas-text-tertiary"
-          style={{ opacity: 0.75 }}
+          className="absolute pointer-events-none select-none whitespace-nowrap text-right text-[11px] font-mono font-medium tabular-nums text-panvas-text-tertiary"
+          style={{
+            opacity: 0.75,
+            left: Math.max(8, source.left + source.width - 92),
+            top: source.top + source.height - 28,
+            width: 84,
+            minWidth: 84,
+          }}
         >
           {pageNumberText}
         </div>

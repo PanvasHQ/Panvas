@@ -1,0 +1,12 @@
+<!doctype html>
+<html>
+  <head><meta charset="UTF-8" /><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws:; font-src 'self' data:" /></head>
+  <body><div id="root"></div>
+    <script type="module">
+      import React from 'react';
+      import { createRoot } from 'react-dom/client';
+      import CloudSyncInteractionFixture from './cloud-sync-interaction.tsx';
+      createRoot(document.getElementById('root')).render(React.createElement(CloudSyncInteractionFixture));
+    </script>
+  </body>
+</html>

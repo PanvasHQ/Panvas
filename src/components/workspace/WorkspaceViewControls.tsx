@@ -63,7 +63,7 @@ export function WorkspaceViewInspector() {
 }
 
 /** A side inspector for document types without the notebook page-properties controls. */
-export function WorkspaceViewInspectorPanel({ onClose }: { onClose: () => void }) {
+export function WorkspaceViewInspectorPanel({ onClose, children }: { onClose: () => void; children?: React.ReactNode }) {
   return (
     <aside className="panvas-view-inspector panvas-layer-sheet absolute inset-y-0 right-0 flex w-72 max-w-[calc(100%-1rem)] flex-col overflow-y-auto border-l border-panvas-border-subtle bg-panvas-bg-primary shadow-2xl max-[599px]:fixed max-[599px]:inset-x-0 max-[599px]:top-auto max-[599px]:bottom-0 max-[599px]:h-auto max-[599px]:max-h-[70vh] max-[599px]:w-full max-[599px]:rounded-t-2xl max-[599px]:border-l-0 max-[599px]:border-t" role="dialog" aria-modal="false" aria-labelledby="workspace-view-inspector-title">
       <div className="flex items-center justify-between border-b border-panvas-border-subtle p-4">
@@ -73,7 +73,7 @@ export function WorkspaceViewInspectorPanel({ onClose }: { onClose: () => void }
         </div>
         <button type="button" onClick={onClose} className="panvas-icon-control focus-ring" aria-label="Close page and view inspector" title="Close page and view inspector"><X size={15} /></button>
       </div>
-      <div className="p-4"><WorkspaceViewInspector /></div>
+      <div className="p-4"><WorkspaceViewInspector />{children && <div className="mt-4 border-t border-panvas-border-subtle pt-4">{children}</div>}</div>
     </aside>
   );
 }

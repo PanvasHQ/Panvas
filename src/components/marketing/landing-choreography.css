@@ -226,9 +226,29 @@
 /* Soft north-east morning light and directional product-surface shading. */
 .pl-atmosphere-sun { background:radial-gradient(circle at 88% 8%,#fffdf5 0 2.5%,#ffeab8a8 8%,#ffe7ad42 22%,transparent 44%),conic-gradient(from 204deg at 90% 6%,transparent 0 7deg,#fff0bd38 12deg,transparent 18deg 29deg,#fff7dc24 34deg,transparent 43deg 360deg); mix-blend-mode:screen; filter:blur(.2px); }
 .pl-atmosphere-sun::after { content:""; position:absolute; width:clamp(120px,12vw,220px); aspect-ratio:1; right:4.5%; top:3%; border-radius:50%; background:#fff2c46b; box-shadow:0 0 42px 18px #fff2c45c,0 0 120px 60px #ffe5a72e; filter:blur(12px); opacity:.72; }
+.pl-atmosphere-sun::after { content:""; position:absolute; width:clamp(120px,12vw,220px); aspect-ratio:1; right:4.5%; top:3%; border-radius:50%; background:#fff2c46b; box-shadow:0 0 42px 18px #fff2c45c,0 0 120px 60px #ffe5a72e; filter:blur(12px); opacity:.72; animation: pl-sun-breathe 10s ease-in-out infinite; }
+.pl-atmosphere-fallback { animation: pl-cloud-drift 24s ease-in-out infinite; }
 .pl-hero-art::before { content:""; position:absolute; z-index:5; pointer-events:none; width:76%; height:42%; right:-11%; top:-19%; transform:rotate(-13deg); background:linear-gradient(108deg,transparent 8%,#fff7dc1f 31%,#fffdf2a3 50%,#fff4cc27 67%,transparent 84%); filter:blur(18px); mix-blend-mode:screen; opacity:.82; }
 .pl-hero-depth { box-shadow:0 1px 0 #fffdf5,-15px 22px 38px -24px #6a5d3d42,26px 42px 62px -34px #273f596b,0 70px 80px -54px #47648c54; }
 .pl-hero-depth::after { content:""; position:absolute; z-index:6; inset:0; border-radius:inherit; pointer-events:none; background:linear-gradient(126deg,#fff2c85c 0%,#fff9e82e 18%,transparent 34%,transparent 67%,#446e9126 100%); box-shadow:inset 1px 1px #fffdf0d1,inset -12px -15px 30px #42647c12; }
+
+@keyframes pl-sun-breathe {
+  0%, 100% { opacity: .72; transform: scale(1); }
+  50% { opacity: .82; transform: scale(1.03); }
+}
+
+@keyframes pl-cloud-drift {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(-10px, 3px, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pl-atmosphere-sun::after,
+  .pl-atmosphere-fallback {
+    animation: none !important;
+    transform: none !important;
+  }
+}
 
 /* Silver / steel / ink editorial wash, with a restrained warm paper glint. */
 .pl-footer { isolation:isolate; overflow:hidden; color:#17191b; background:radial-gradient(ellipse at 17% 16%,#eed9a750 0%,transparent 38%),linear-gradient(180deg,#f2f3f1 0%,#d9dcde 22%,#adb5bd 42%,#60778b 61%,#344654 74%,#171d22 89%,#090b0d 100%); background-blend-mode:screen,normal; }

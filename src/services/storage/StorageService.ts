@@ -3,6 +3,7 @@
 // ============================================
 
 import { useAuthStore } from '@/stores/authStore';
+import { getBrowserStorageDurabilityState, initializeBrowserStorageDurability } from './browserStorageDurability';
 
 export interface StorageMetrics {
   usedBytes: number;
@@ -18,16 +19,11 @@ export class StorageService {
    * Relies on navigator.storage API, falls back to 0 if unavailable.
    */
   static async getUsedBytes(): Promise<number> {
-    if (navigator.storage && navigator.storage.estimate) {
-      try {
-        const estimate = await navigator.storage.estimate();
-        return estimate.usage || 0;
-      } catch (e) {
-        console.warn('Failed to estimate storage usage', e);
-        return 0;
-      }
-    }
-    return 0;
+    const isBrowserMode = typeof window !== 'undefined' && !window.panvas;
+    const result = isBrowserMode
+      ? await initializeBrowserStorageDurability()
+      : getBrowserStorageDurabilityState();
+    return result.estimate.usage ?? 0;
   }
 
   /**

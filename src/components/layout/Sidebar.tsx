@@ -14,6 +14,7 @@ import {
   Tag,
   Trash2,
   FileUp,
+  LayoutGrid,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
@@ -93,6 +94,10 @@ export function Sidebar() {
     } catch (err: any) {
       console.error(err);
       showToast(`Failed to import PDF: ${err.message}`, 'error');
+      const cleanMsg = typeof err?.message === 'string' && !err.message.includes('\\') && !err.message.includes('/') && err.message.length < 80
+        ? err.message
+        : 'Please check that the file is valid and accessible.';
+      showToast(`Failed to import PDF: ${cleanMsg}`, 'error');
     }
   };
 
@@ -174,7 +179,11 @@ export function Sidebar() {
               <NewItemAction icon={<ListTree size={14} />} label="New Section" description="Add a section to this notebook" onClick={() => activeNotebookId ? openCreateDialog('section', activeNotebookId) : showToast('Select a notebook first', 'info')} close={() => setIsNewMenuOpen(false)} />
               <NewItemAction icon={<FileText size={14} />} label="New Page" description="Start a page in this section" onClick={() => activeNotebookSectionId ? openCreateDialog('page', activeNotebookSectionId) : showToast('Select a section first', 'info')} close={() => setIsNewMenuOpen(false)} />
               <div className="my-1 h-px bg-panvas-border-subtle" />
-              <NewItemAction icon={<FileText size={14} />} label="New Canvas" description="An infinite visual workspace" onClick={() => openCreateDialog('canvas')} close={() => setIsNewMenuOpen(false)} />
+              <NewItemAction icon={<LayoutGrid size={14} />} label="New Canvas" description="An infinite visual workspace" onClick={() => activeNotebookSectionId
+                ? openCreateDialog('canvas', activeNotebookSectionId, 'section')
+                : activeNotebookId
+                  ? openCreateDialog('canvas', activeNotebookId, 'notebook')
+                  : openCreateDialog('canvas')} close={() => setIsNewMenuOpen(false)} />
             </div>
           )}
         </div>

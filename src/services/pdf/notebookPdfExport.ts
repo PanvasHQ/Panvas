@@ -1,3 +1,9 @@
+import { drawPdfShape } from './drawPdfShape.ts';
+import { concatTransformationMatrix, pushGraphicsState, popGraphicsState, clip, endPath, rectangle } from 'pdf-lib';
+import { getStickyNoteColor, getStickyNoteOpacity, getStickyNoteShape, getStickyPaper } from '../../components/notebook/stickyNotes.ts';
+import { drawPdfLine } from './drawPdfLine.ts';
+import { drawPdfStroke } from './drawPdfStroke.ts';
+import { drawPdfImage } from './drawPdfImage.ts';
 import {
   PDFDocument,
   StandardFonts,
@@ -11,6 +17,7 @@ import type { DrawingData, NotebookObject, PageProperties, Shape, Stroke, TextOb
 import { DEFAULT_PAGE_LAYER_ID, createDefaultPageLayer } from '../../components/notebook/engine/drawingTypes.ts';
 import type { NotebookCover, NotebookPage, NotebookSection } from '../../types/notebook.ts';
 import { resolveNotebookCover } from '../../lib/notebookCover.ts';
+import { resolvePageNoteSpace } from '../../lib/pageProperties.ts';
 
 export interface NotebookExportImage {
   mimeType: string;
@@ -176,15 +183,21 @@ export interface NotebookPageGeometry {
   pdfHeight: number;
   scaleX: number;
   scaleY: number;
+  sourceX: number;
+  sourceY: number;
+  sourceWidth: number;
+  sourceHeight: number;
 }
 
 const PHYSICAL_POINTS = {
+  A3: { width: 841.8898, height: 1190.5512 },
   A4: { width: 595.2756, height: 841.8898 },
   A5: { width: 419.5276, height: 595.2756 },
   Letter: { width: 612, height: 792 },
 } as const;
 
 const LOGICAL_PIXELS = {
+  A3: { width: 1123, height: 1587 },
   A4: { width: 794, height: 1123 },
   A5: { width: 595, height: 842 },
   Letter: { width: 816, height: 1056 },
@@ -196,16 +209,27 @@ export function resolveNotebookPageGeometry(properties: PageProperties): Noteboo
   const logical = LOGICAL_PIXELS[properties.pageSize];
   const landscape = properties.orientation === 'landscape';
   const pdfWidth = landscape ? physical.height : physical.width;
-  const pdfHeight = landscape ? physical.width : physical.height;
+  const basePdfHeight = landscape ? physical.width : physical.height;
   const logicalWidth = landscape ? logical.height : logical.width;
-  const logicalHeight = landscape ? logical.width : logical.height;
+  const baseLogicalHeight = landscape ? logical.width : logical.height;
+  const noteSpace = resolvePageNoteSpace(properties);
+  const scaleX = pdfWidth / logicalWidth;
+  const scaleY = basePdfHeight / baseLogicalHeight;
+  const surfaceLogicalWidth = noteSpace.left + logicalWidth + noteSpace.right;
+  const logicalHeight = noteSpace.top + baseLogicalHeight + noteSpace.bottom;
+  const surfacePdfWidth = surfaceLogicalWidth * scaleX;
+  const pdfHeight = logicalHeight * scaleY;
   return {
-    logicalWidth,
+    logicalWidth: surfaceLogicalWidth,
     logicalHeight,
-    pdfWidth,
+    pdfWidth: surfacePdfWidth,
     pdfHeight,
-    scaleX: pdfWidth / logicalWidth,
-    scaleY: pdfHeight / logicalHeight,
+    scaleX,
+    scaleY,
+    sourceX: noteSpace.left,
+    sourceY: noteSpace.top,
+    sourceWidth: logicalWidth,
+    sourceHeight: baseLogicalHeight,
   };
 }
 
@@ -341,12 +365,12 @@ function drawTemplate(page: PDFPage, properties: PageProperties, g: NotebookPage
   }
   const margin = properties.margins === 'No Margin' ? 0 : properties.margins === 'Narrow' ? 32 : properties.margins === 'Wide' ? 104 : 64;
   if (margin > 0) {
-    const topLeft = point(g, margin, margin);
-    page.drawRectangle({ x: topLeft.x, y: point(g, 0, g.logicalHeight - margin).y, width: (g.logicalWidth - margin * 2) * g.scaleX, height: (g.logicalHeight - margin * 2) * g.scaleY, borderColor: ink, borderWidth: 0.45, borderDashArray: [2, 2], opacity: 0.35 });
+    const left = g.sourceX + margin;
+    page.drawRectangle({ x: left * g.scaleX, y: point(g, 0, g.sourceY + g.sourceHeight - margin).y, width: (g.sourceWidth - margin * 2) * g.scaleX, height: (g.sourceHeight - margin * 2) * g.scaleY, borderColor: ink, borderWidth: 0.45, borderDashArray: [2, 2], opacity: 0.35 });
   }
 }
 
-function visibleObjects(data: DrawingData): NotebookObject[] {
+export function visibleObjects(data: DrawingData): NotebookObject[] {
   const objects = data.version === 1 ? [...(data.strokes ?? []), ...(data.shapes ?? [])] : [...(data.objects ?? [])];
   const layers = data.layers?.length ? [...data.layers].sort((a, b) => a.order - b.order) : [createDefaultPageLayer()];
   const visible = new Set(layers.filter(layer => layer.visible).map(layer => layer.id));
@@ -354,49 +378,18 @@ function visibleObjects(data: DrawingData): NotebookObject[] {
   return objects
     .map((object, index) => ({ object, index, layer: order.get(object.layerId ?? DEFAULT_PAGE_LAYER_ID) ?? 0 }))
     .filter(entry => visible.has(entry.object.layerId ?? DEFAULT_PAGE_LAYER_ID))
-    .sort((a, b) => a.layer - b.layer || a.index - b.index)
+    .sort((a, b) => a.layer - b.layer || ({ image: 0, stroke: 1, shape: 2, text: 3 }[a.object.type] - { image: 0, stroke: 1, shape: 2, text: 3 }[b.object.type]) || a.index - b.index)
     .map(entry => entry.object);
 }
 
-function drawStroke(page: PDFPage, stroke: Stroke, g: NotebookPageGeometry) {
-  for (let i = 1; i < stroke.points.length; i += 1) {
-    page.drawLine({ start: point(g, stroke.points[i - 1].x, stroke.points[i - 1].y), end: point(g, stroke.points[i].x, stroke.points[i].y), thickness: stroke.thickness * (g.scaleX + g.scaleY) / 2, color: color(stroke.color), opacity: opacity(stroke.opacity), lineCap: 1 });
-  }
-}
+function drawStroke(page: PDFPage, stroke: Stroke, g: NotebookPageGeometry) { drawPdfStroke(page, stroke, g.scaleX, g.scaleY); }
 
 function rotated(x: number, y: number, cx: number, cy: number, angle: number) {
   const r = angle * Math.PI / 180; const dx = x - cx; const dy = y - cy;
   return { x: cx + dx * Math.cos(r) - dy * Math.sin(r), y: cy + dx * Math.sin(r) + dy * Math.cos(r) };
 }
 
-function drawShape(page: PDFPage, shape: Shape, g: NotebookPageGeometry, result: NotebookPdfExportResult, pageId: string) {
-  const c = color(shape.color); const fill = shape.fill ? color(shape.fill) : undefined; const alpha = opacity(shape.opacity);
-  if (shape.shapeType === 'ellipse') {
-    const center = point(g, shape.x + shape.width / 2, shape.y + shape.height / 2);
-    page.drawEllipse({ x: center.x, y: center.y, xScale: Math.abs(shape.width * g.scaleX / 2), yScale: Math.abs(shape.height * g.scaleY / 2), borderColor: c, borderWidth: shape.strokeWidth * g.scaleX, color: fill, opacity: alpha, borderOpacity: alpha });
-    if (shape.rotation) { result.approximatedObjects += 1; addWarning(result, { code: 'ellipse-rotation-approximated', message: 'Rotated ellipse exported without rotation.', pageId, objectId: shape.id }); }
-    return;
-  }
-  const cx = shape.x + shape.width / 2; const cy = shape.y + shape.height / 2;
-  let vertices = shape.shapeType === 'triangle'
-    ? [{ x: cx, y: shape.y }, { x: shape.x + shape.width, y: shape.y + shape.height }, { x: shape.x, y: shape.y + shape.height }]
-    : shape.shapeType === 'diamond'
-      ? [{ x: cx, y: shape.y }, { x: shape.x + shape.width, y: cy }, { x: cx, y: shape.y + shape.height }, { x: shape.x, y: cy }]
-      : [{ x: shape.x, y: shape.y }, { x: shape.x + shape.width, y: shape.y }, { x: shape.x + shape.width, y: shape.y + shape.height }, { x: shape.x, y: shape.y + shape.height }];
-  if (shape.shapeType === 'line' || shape.shapeType === 'arrow') vertices = [vertices[0], vertices[2]];
-  vertices = vertices.map(vertex => rotated(vertex.x, vertex.y, cx, cy, shape.rotation || 0));
-  for (let i = 1; i < vertices.length; i += 1) page.drawLine({ start: point(g, vertices[i - 1].x, vertices[i - 1].y), end: point(g, vertices[i].x, vertices[i].y), thickness: shape.strokeWidth * g.scaleX, color: c, opacity: alpha });
-  if (vertices.length > 2) {
-    const last = vertices[vertices.length - 1];
-    page.drawLine({ start: point(g, last.x, last.y), end: point(g, vertices[0].x, vertices[0].y), thickness: shape.strokeWidth * g.scaleX, color: c, opacity: alpha });
-  }
-  if (fill) { result.approximatedObjects += 1; addWarning(result, { code: 'polygon-fill-approximated', message: 'A non-elliptic shape fill was omitted; its vector outline was preserved.', pageId, objectId: shape.id }); }
-  if (shape.shapeType === 'rounded-rectangle') { result.approximatedObjects += 1; addWarning(result, { code: 'rounded-corners-approximated', message: 'Rounded rectangle exported as a vector rectangle.', pageId, objectId: shape.id }); }
-  if (shape.shapeType === 'arrow') {
-    const end = vertices[1], start = vertices[0]; const angle = Math.atan2(end.y - start.y, end.x - start.x); const size = 12;
-    for (const delta of [-0.55, 0.55]) page.drawLine({ start: point(g, end.x, end.y), end: point(g, end.x - Math.cos(angle + delta) * size, end.y - Math.sin(angle + delta) * size), thickness: shape.strokeWidth * g.scaleX, color: c, opacity: alpha });
-  }
-}
+function drawShape(page: PDFPage, shape: Shape, g: NotebookPageGeometry, result: NotebookPdfExportResult, pageId: string) { drawPdfShape(page, shape, g.scaleX, g.scaleY); }
 
 type TextRun = { text: string; bold: boolean; italic: boolean; size: number; color: string };
 type TextLine = { runs: TextRun[]; align: 'left' | 'center' | 'right'; prefix?: string };
@@ -430,13 +423,24 @@ function textLines(content: any, result: NotebookPdfExportResult, pageId: string
 
 function fontFor(fonts: Record<string, PDFFont>, run: TextRun) { return fonts[run.bold ? (run.italic ? 'boldItalic' : 'bold') : (run.italic ? 'italic' : 'regular')]; }
 
-function drawTextObject(page: PDFPage, object: TextObject, g: NotebookPageGeometry, fonts: Record<string, PDFFont>, result: NotebookPdfExportResult, pageId: string) {
+export function drawTextObject(page: PDFPage, object: TextObject, g: NotebookPageGeometry, fonts: Record<string, PDFFont>, result: NotebookPdfExportResult, pageId: string) {
   const sticky = object.metadata?.isStickyNote === true;
+  const cx = (object.x + object.width / 2) * g.scaleX, cy = page.getHeight() - (object.y + (object.height ?? 180) / 2) * g.scaleY;
+  const rotation = -(object.rotation ?? 0) * Math.PI / 180;
+  page.pushOperators(pushGraphicsState(), concatTransformationMatrix(Math.cos(rotation), Math.sin(rotation), -Math.sin(rotation), Math.cos(rotation), cx - cx * Math.cos(rotation) + cy * Math.sin(rotation), cy - cx * Math.sin(rotation) - cy * Math.cos(rotation)));
   if (sticky) {
-    const top = point(g, object.x, object.y); const height = (object.height ?? 180) * g.scaleY;
-    page.drawRectangle({ x: top.x, y: top.y - height, width: object.width * g.scaleX, height, color: color(object.metadata?.color, '#fef08a'), opacity: 0.96 });
-    result.approximatedObjects += 1;
-    addWarning(result, { code: 'sticky-style-approximated', message: 'Sticky-note shadow and rounded corners were simplified.', pageId, objectId: object.id });
+    const shape = getStickyNoteShape(object), alpha = getStickyNoteOpacity(object);
+    const h = object.height ?? 180;
+    if (shape === 'star') {
+      const vertices = '50,0 63,38 100,38 69,59 82,100 50,75 18,100 31,59 0,38 37,38'.split(' ').map((p, i) => { const [x, y] = p.split(',').map(Number); return `${i ? 'L' : 'M'}${(object.x + x / 100 * object.width) * g.scaleX} ${(object.y + y / 100 * h) * g.scaleY}`; }).join(' ') + ' Z';
+      page.drawSvgPath(vertices, { x: 0, y: page.getHeight(), color: color(getStickyNoteColor(object)), opacity: alpha });
+    } else drawPdfShape(page, { ...object, type: 'shape', shapeType: shape === 'circle' || shape === 'oval' ? 'ellipse' : shape === 'rounded-rect' ? 'rounded-rectangle' : 'rectangle', height: h, rotation: 0, color: getStickyNoteColor(object), fill: getStickyNoteColor(object), opacity: alpha, strokeWidth: 0 }, g.scaleX, g.scaleY);
+    const paper = getStickyPaper(object);
+    if (paper !== 'plain') {
+      for (let y = 24; y < h; y += 24) page.drawLine({ start: point(g, object.x, object.y + y), end: point(g, object.x + object.width, object.y + y), thickness: g.scaleY * 0.7, color: color('#505050'), opacity: alpha * 0.14 });
+      if (paper === 'grid') for (let x = 24; x < object.width; x += 24) page.drawLine({ start: point(g, object.x + x, object.y), end: point(g, object.x + x, object.y + h), thickness: g.scaleX * 0.7, color: color('#505050'), opacity: alpha * 0.14 });
+    }
+    page.pushOperators(rectangle(object.x * g.scaleX, page.getHeight() - (object.y + h) * g.scaleY, object.width * g.scaleX, h * g.scaleY), clip(), endPath());
   }
   const inset = sticky ? 14 : 0; const width = Math.max(8, (object.width - inset * 2) * g.scaleX);
   let y = point(g, object.x, object.y + inset).y;
@@ -455,6 +459,7 @@ function drawTextObject(page: PDFPage, object: TextObject, g: NotebookPageGeomet
     y -= 3 * g.scaleY;
   }
   if (result.warnings.slice(warningCount).some(warning => warning.code === 'rich-text-approximated')) result.approximatedObjects += 1;
+  page.pushOperators(popGraphicsState());
 }
 
 export async function exportNotebookPdf(input: NotebookPdfExportInput): Promise<NotebookPdfExportResult> {
@@ -483,6 +488,9 @@ export async function exportNotebookPdf(input: NotebookPdfExportInput): Promise<
       const page = pdf.addPage([g.pdfWidth, g.pdfHeight]);
       page.drawRectangle({ x: 0, y: 0, width: g.pdfWidth, height: g.pdfHeight, color: color(source.properties.paperColor, '#ffffff') });
       drawTemplate(page, source.properties, g, result, source.id);
+      const hasNoteSpace = g.sourceX > 0 || g.sourceY > 0 || g.sourceWidth < g.logicalWidth || g.sourceHeight < g.logicalHeight;
+      if (hasNoteSpace) page.drawRectangle({ x: g.sourceX * g.scaleX, y: g.pdfHeight - (g.sourceY + g.sourceHeight) * g.scaleY, width: g.sourceWidth * g.scaleX, height: g.sourceHeight * g.scaleY, borderColor: color(source.properties.ruleLineColor, '#c8c3b8'), borderWidth: 0.35, opacity: 0.45 });
+      page.pushOperators(pushGraphicsState(), concatTransformationMatrix(1, 0, 0, 1, g.sourceX * g.scaleX, -g.sourceY * g.scaleY));
       for (const object of visibleObjects(source.drawing)) {
         if (object.type === 'stroke') drawStroke(page, object, g);
         else if (object.type === 'shape') drawShape(page, object, g, result, source.id);
@@ -499,9 +507,7 @@ export async function exportNotebookPdf(input: NotebookPdfExportInput): Promise<
               else throw new Error(`unsupported format ${asset.mimeType || 'unknown'}`);
               imageCache.set(object.fileId, embedded);
             }
-            const center = point(g, object.x + object.width / 2, object.y + object.height / 2);
-            const width = object.width * g.scaleX; const height = object.height * g.scaleY; const angle = object.rotation || 0; const r = angle * Math.PI / 180;
-            page.drawImage(embedded, { x: center.x - (width * Math.cos(r) - height * Math.sin(r)) / 2, y: center.y - (width * Math.sin(r) + height * Math.cos(r)) / 2, width, height, rotate: degrees(-angle) });
+            drawPdfImage(page, embedded, object, g.scaleX, g.scaleY);
           } catch (error) {
             result.unsupportedObjects += 1;
             addWarning(result, { code: 'image-skipped', message: `Image could not be embedded: ${error instanceof Error ? error.message : 'unknown error'}.`, pageId: source.id, objectId: object.id });
@@ -515,6 +521,7 @@ export async function exportNotebookPdf(input: NotebookPdfExportInput): Promise<
         }
         result.exportedObjects += 1;
       }
+      page.pushOperators(popGraphicsState());
       result.pageCount += 1;
     }
     result.bytes = await pdf.save();

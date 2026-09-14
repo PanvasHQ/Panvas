@@ -1,3 +1,8 @@
+import { FloatingLineControls } from './FloatingLineControls';
+import { StickyGallery } from './StickyGallery';
+import { LINE_STYLES, buildLineStyleGeometry, type LineStyle } from './engine/lineStyleGeometry';
+import type { InkFamily } from './engine/drawingTypes';
+import { INK_FAMILIES, buildInkFamilyGeometry, inkPolygonsPath } from './engine/inkFamilyGeometry';
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   Bold, Italic, Underline, Heading1, Heading2, Heading3, 
@@ -5,8 +10,11 @@ import {
   PenTool, Pencil, Highlighter, Eraser, MousePointer2, Square, Circle, ArrowRight, Minus, Slash, Type, Hand,
   Undo2, Redo2, X, MoreHorizontal, PenTool as PenToolIcon, ChevronLeft, ChevronRight, Maximize2, Minimize2, PanelLeft, PanelRight,
   Strikethrough, AlignLeft, AlignCenter, AlignRight, AlignJustify, ListOrdered, Palette, PaintBucket, Image as ImageIcon, Ruler, StickyNote, Languages,
-  CircleDot, Crosshair, LassoSelect, ScanLine, Shapes, Spline
+  CircleDot, Crosshair, LassoSelect, ScanLine, Shapes, Spline, Check
 } from 'lucide-react';
+import { FloatingImageControls } from './FloatingImageControls';
+import { TextFontPicker } from './TextFontPicker';
+import { applyNotebookTextFont } from './textTypography';
 import type { Editor } from '@tiptap/react';
 import type { NotebookEngine } from './engine/NotebookEngine';
 import type { DrawingToolId, EraserMode, ShapeType, StrokePattern } from './engine/drawingTypes';
@@ -35,8 +43,7 @@ import {
 } from './toolbarLayout';
 import {
   DEFAULT_HANDWRITING_TOOL_PREFERENCES,
-  HANDWRITING_FONT_FAMILIES,
-  STANDARD_TEXT_FONT_FAMILIES,
+  SUPPORTED_HANDWRITING_RECOGNITION_LANGUAGES,
   applyHandwritingInkPreferences,
   sanitizeHandwritingToolPreferences,
   type HandwritingToolPreferences,
@@ -76,6 +83,7 @@ interface ToolSettings {
   pressureSensitivity: boolean;
   stabilization: number;
   strokePattern: StrokePattern;
+  inkFamily?: InkFamily;
 }
 
 const DEFAULT_TOOL_SETTINGS: Record<DrawingTool, ToolSettings> = {
@@ -157,6 +165,8 @@ interface NotebookFloatingToolbarProps {
 }
 
 export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = ({ editor, engine, saveKey, workspaceId, hasSelectedStrokes = false, onConvertHandwriting, embedded = false, hideCollapseButton = false, fullscreenToolOnly = false, availableWidth }) => {
+  const isPhone = useIsMobileViewport();
+  const compactTools = useIsMobileViewport(1023);
   // Derive the displayed tool from the same ToolManager snapshot used by input routing.
   const toolState = useToolState(engine);
   const activeTool =
@@ -191,6 +201,7 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
   const [snapRecognizedLines, setSnapRecognizedLines] = useState(true);
   const [roughShapeRecognition, setRoughShapeRecognition] = useState(false);
   const [snapRecognizedShapes, setSnapRecognizedShapes] = useState(false);
+  const [, setSelectionRevision] = useState(0);
   const preferencesLoadedRef = useRef(false);
   
   const containerRef = useRef<HTMLDivElement>(null);
@@ -199,6 +210,10 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
   const gestureAnchorRef = useRef<HTMLButtonElement>(null);
   
   const [containerWidth, setContainerWidth] = useState<number | null>(null);
+
+  useEffect(() => engine.selection.subscribe(() => {
+    setSelectionRevision(revision => revision + 1);
+  }), [engine]);
 
   useEffect(() => {
     preferencesLoadedRef.current = false;
@@ -224,6 +239,7 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
               opacity: Number.isFinite(candidate.opacity) ? Math.max(5, Math.min(100, candidate.opacity)) : previous[tool].opacity,
               pressureSensitivity: candidate.pressureSensitivity !== false,
               stabilization: Number.isFinite(candidate.stabilization) ? Math.max(0, Math.min(100, candidate.stabilization)) : previous[tool].stabilization,
+              inkFamily: INK_FAMILIES.includes(candidate.inkFamily as InkFamily) ? candidate.inkFamily : undefined,
               strokePattern: candidate.strokePattern === 'dashed' || candidate.strokePattern === 'dotted' ? candidate.strokePattern : 'solid',
             };
           }
@@ -378,8 +394,16 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
 
     // Set engine state directly
     if (toolId === 'handwriting-to-text') {
-      applyHandwritingInkPreferences(engine.tools, handwritingSettings);
-      engine.tools.toggleHandwritingToText();
+      const turningOff = toolState.handwritingToTextEnabled
+        && toolState.mode === 'draw'
+        && (toolState.drawingTool === 'pen' || toolState.drawingTool === 'pencil');
+      if (turningOff) {
+        engine.tools.toggleHandwritingToText();
+      } else {
+        applyHandwritingInkPreferences(engine.tools, handwritingSettings);
+        engine.tools.setDrawingTool(toolState.drawingTool === 'pencil' ? 'pencil' : 'pen');
+        if (!toolState.handwritingToTextEnabled) engine.tools.toggleHandwritingToText();
+      }
     } else if (toolId === 'select') {
       engine.tools.setMode('select');
     } else if (toolId === 'hand') {
@@ -408,6 +432,7 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
       engine.tools.setSnapRecognizedShapes(snapRecognizedShapes);
       engine.tools.setStabilization(settings.stabilization);
       engine.tools.setStrokePattern(settings.strokePattern);
+      engine.tools.setInkFamily(settings.inkFamily);
     }
 
     // Close the overflow menu on activation (roadmap section 7). Done at the
@@ -455,10 +480,12 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
     }
     if (key === 'pressureSensitivity') engine.tools.setPressureSensitivity(value as boolean);
     if (key === 'stabilization') engine.tools.setStabilization(value as number);
+    if (key === 'inkFamily') engine.tools.setInkFamily(value as InkFamily | undefined);
     if (key === 'strokePattern') engine.tools.setStrokePattern(value as StrokePattern);
   };
 
   const updateHandwritingSettings = (updates: Partial<HandwritingToolPreferences>) => {
+    if (updates.fontFamily) applyNotebookTextFont(engine, updates.fontFamily, editor);
     const recentColors = updates.color
       ? recordRecentColor(handwritingSettings.recentColors, updates.color)
       : handwritingSettings.recentColors;
@@ -482,7 +509,8 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
 
   const currentSettings = isConfigurableDrawingTool(activeTool) ? toolSettings[activeTool] : null;
 
-  if (isToolbarCollapsed) {
+  const imageSelected = engine.selection.getSelectedElements().length === 1 && engine.selection.getSelectedElements()[0].type === 'image';
+  if (isToolbarCollapsed && !imageSelected && !compactTools) {
     return (
       <div
         className="pointer-events-auto flex items-start justify-center shadow-2xl rounded-xl"
@@ -621,8 +649,8 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
     {
       id: 'history',
       items: [
-        <ToolButton key="undo" icon={<Undo2 size={16} />} active={false} onClick={() => { if (activeTool === 'text') editor?.chain().focus().undo().run(); else engine.history.undo(); }} tooltip="Undo (Ctrl+Z)" />,
-        <ToolButton key="redo" icon={<Redo2 size={16} />} active={false} onClick={() => { if (activeTool === 'text') editor?.chain().focus().redo().run(); else engine.history.redo(); }} tooltip="Redo (Ctrl+Y)" />
+        <ToolButton key="undo" icon={<Undo2 size={16} />} active={false} onClick={() => { if (activeTool === 'text' && editor?.isFocused) editor?.chain().focus().undo().run(); else engine.history.undo(); }} tooltip="Undo (Ctrl+Z)" />,
+        <ToolButton key="redo" icon={<Redo2 size={16} />} active={false} onClick={() => { if (activeTool === 'text' && editor?.isFocused) editor?.chain().focus().redo().run(); else engine.history.redo(); }} tooltip="Redo (Ctrl+Y)" />
       ]
     },
     {
@@ -664,26 +692,13 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
       id: 'image',
       items: [
         <ToolButton key="image" icon={<ImageIcon size={16} />} active={false} onClick={() => { handleImageImport(); setShowOverflow(false); }} tooltip="Insert Image" />,
-        <ToolButton
-          key="sticky-note"
-          icon={<StickyNote size={16} />}
-          active={false}
-          onClick={() => {
-            editor?.commands.blur();
-            document.dispatchEvent(new CustomEvent('panvas:create-sticky-note'));
-            setShowOverflow(false);
-          }}
-          tooltip="Sticky Note"
-        />
+        <StickyGallery key="sticky-note" engine={engine} />
       ]
     },
     {
       id: 'shapes',
       items: [
-        <ToolButton key="rectangle" icon={<Square size={16} />} active={activeTool === 'rectangle'} onClick={() => handleToolClick('rectangle')} tooltip="Rectangle (R)" />,
-        <ToolButton key="ellipse" icon={<Circle size={16} />} active={activeTool === 'ellipse'} onClick={() => handleToolClick('ellipse')} tooltip="Ellipse (O)" />,
-        <ToolButton key="arrow" icon={<ArrowRight size={16} />} active={activeTool === 'arrow'} onClick={() => handleToolClick('arrow')} tooltip="Arrow (A)" />,
-        <ToolButton key="line" icon={<Minus size={16} />} active={activeTool === 'line'} onClick={() => handleToolClick('line')} tooltip="Line (L)" />
+        <ToolButton key="shapes-family" icon={<Shapes size={16} />} active={isShapeTool(activeTool)} onClick={() => handleToolClick(toolState.shapeTool)} tooltip="Shapes" hasPopup />
       ]
     },
     {
@@ -741,16 +756,18 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
   const layoutWidth = fullscreenToolOnly && availableWidth !== undefined
     ? availableWidth
     : containerWidth;
-  const layout = fullscreenToolOnly
-    ? resolveFullscreenToolbarLayout(layoutWidth)
-    : resolveToolbarLayout(layoutWidth);
-  const groupById = new Map(toolGroups.map(group => [group.id, group]));
   const activeToolGroupId: ToolbarGroupId =
     activeTool === 'laser' ? 'laser' :
     isConfigurableDrawingTool(activeTool) || activeTool === 'eraser' || activeTool === 'text' ? 'primary' :
     activeTool === 'select' ? 'select' :
     activeTool === 'hand' ? 'hand' :
     'shapes';
+  const layout = compactTools
+    ? { visible: [] as ToolbarGroupId[], overflow: ['primary', 'hand', 'handwriting', 'image', 'shapes', 'ruler', 'laser', 'gestures', 'format'] as ToolbarGroupId[] }
+    : fullscreenToolOnly
+    ? resolveFullscreenToolbarLayout(layoutWidth, activeToolGroupId)
+    : resolveToolbarLayout(layoutWidth, activeToolGroupId);
+  const groupById = new Map(toolGroups.map(group => [group.id, group]));
   // In compact mode only select is directly visible; every other active tool
   // lives behind the More button, which then carries the active-state dot.
   const activeToolInOverflow = layout.overflow.includes(activeToolGroupId)
@@ -758,10 +775,15 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
   const showInlineWritingPresets = isConfigurableDrawingTool(activeTool)
     && !toolState.handwritingToTextEnabled
     && layout.visible.includes('primary');
-  const showHandwritingSettings = toolState.handwritingToTextEnabled
+  const showHandwritingSettings = !isPhone && toolState.handwritingToTextEnabled
     && toolState.mode === 'draw'
     && (toolState.drawingTool === 'pen' || toolState.drawingTool === 'pencil');
-  const showSelectionGuide = activeTool === 'select';
+  const selectedElements = engine.selection.getSelectedElements();
+  const selectedImage = activeTool === 'select' && selectedElements.length === 1 && selectedElements[0].type === 'image'
+    ? engine.images.getImages().find(image => image.id === selectedElements[0].id)
+    : undefined;
+  const selectedLine = activeTool === 'select' && selectedElements.length === 1 && selectedElements[0].type === 'shape' ? engine.shapes.getShapes().find(shape => shape.id === selectedElements[0].id && (shape.shapeType === 'line' || shape.shapeType === 'arrow')) : undefined;
+  const showSelectionGuide = !isPhone && activeTool === 'select' && !selectedImage && !selectedLine;
 
   return (
     <div
@@ -853,6 +875,8 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
           color={toolState.color}
           thickness={toolState.thickness}
           opacity={toolState.opacity}
+          lineStyle={toolState.lineStyle ?? 'solid'}
+          onLineStyle={style => { engine.tools.setLineStyle(style); engine.selection.changeLineStyle(style); }}
           fillEnabled={toolState.shapeFillEnabled}
           onShape={shape => handleToolClick(shape)}
           onColor={value => {
@@ -872,6 +896,13 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
       </OverlayManager>
 
       <div ref={toolbarRef} className={`pointer-events-auto flex items-center justify-center gap-1 text-panvas-text-primary max-[599px]:gap-0.5 ${embedded ? 'px-1 py-1' : 'panvas-toolbar-surface panvas-floating-surface px-3 py-2 max-[599px]:px-1.5 max-[599px]:py-1'}`}>
+        {compactTools && <>
+          {groupById.get('history')?.items}
+          <ToolButton icon={<ToolGlyph tool={isConfigurableDrawingTool(activeTool) ? activeTool : 'pen'} color={getActiveToolColor(isConfigurableDrawingTool(activeTool) ? activeTool : 'pen', toolSettings)} />} active={isConfigurableDrawingTool(activeTool)} onClick={() => handleToolClick(isConfigurableDrawingTool(activeTool) ? activeTool : 'pen')} tooltip="Pen and writing settings" hasPopup />
+          {groupById.get('select')?.items}
+          <ToolButton icon={<Eraser size={18} />} active={activeTool === 'eraser'} onClick={() => handleToolClick('eraser')} tooltip="Eraser (E)" />
+          <ToolButton icon={<Type size={18} />} active={activeTool === 'text'} onClick={() => handleToolClick('text')} tooltip="Text (T)" />
+        </>}
         
         {layout.visible.map((groupId, index) => (
           <React.Fragment key={groupId}>
@@ -898,7 +929,7 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
 
         {layout.overflow.length > 0 && (
           <>
-            <Divider />
+            {!compactTools && <Divider />}
             <button
               ref={overflowAnchorRef}
               onMouseDown={(e) => e.preventDefault()}
@@ -957,8 +988,11 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
                         <ChevronRight size={15} className="text-panvas-text-tertiary" aria-hidden="true" />
                       </button>
                     ) : (
+                      <div>
+                      {isPhone && <div className="px-2 pb-1 text-xs font-medium text-panvas-text-secondary">{({ history: 'History', handwriting: 'Handwriting to text', primary: 'Writing tools', select: 'Selection', hand: 'Move around the page', image: 'Insert image or sticky note', shapes: 'Shapes', ruler: 'Ruler', laser: 'Presentation pointer', format: 'Formatting' } as Record<string, string>)[groupId]}</div>}
                       <div className="flex items-center justify-center gap-1 max-[599px]:flex-wrap max-[599px]:justify-start">
                         {groupById.get(groupId)?.items}
+                      </div>
                       </div>
                     )}
                     {index < layout.overflow.length - 1 && <div className="h-[1px] w-full bg-panvas-border-subtle my-1" />}
@@ -969,7 +1003,7 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
           </>
         )}
 
-        {!hideCollapseButton && <><Divider />
+        {!compactTools && !hideCollapseButton && <><Divider />
           <button type="button" onClick={() => setToolbarCollapsed(true)} className="panvas-icon-control focus-ring" title="Hide Toolbar" aria-label="Hide toolbar">
             <ChevronLeft size={16} />
           </button></>}
@@ -997,6 +1031,9 @@ export const NotebookFloatingToolbar: React.FC<NotebookFloatingToolbarProps> = (
           />
         </div>
       )}
+
+      {selectedLine && <FloatingLineControls engine={engine} shape={selectedLine} />}
+      {selectedImage && <FloatingImageControls key={selectedImage.id} image={selectedImage} engine={engine} />}
 
       {showSelectionGuide && (
         <div
@@ -1101,7 +1138,7 @@ function FormatMenuTrigger({ editor, engine }: { editor: Editor | null, engine: 
           className="w-[260px] rounded-xl bg-panvas-bg-primary border border-panvas-border-strong shadow-2xl overflow-y-auto max-h-[60vh] py-2 max-[599px]:w-[min(17rem,calc(100vw-1.5rem))]"
           onMouseDown={(event) => event.stopPropagation()}
         >
-          <TextFormatMenuContent commandEditor={commandEditor} applyTextCommand={applyTextCommand} />
+          <TextFormatMenuContent engine={engine} commandEditor={commandEditor} applyTextCommand={applyTextCommand} />
         </div>
       </OverlayManager>
     </>
@@ -1114,7 +1151,8 @@ function FormatMenuTrigger({ editor, engine }: { editor: Editor | null, engine: 
  * session command runner, so formatting applies to the live caret or the
  * retained selected range — never the whole object.
  */
-function TextFormatMenuContent({ commandEditor, applyTextCommand }: {
+function TextFormatMenuContent({ engine, commandEditor, applyTextCommand }: {
+  engine: NotebookEngine;
   commandEditor: Editor | null;
   applyTextCommand: (command: FormattingCommand) => void;
 }) {
@@ -1131,25 +1169,15 @@ function TextFormatMenuContent({ commandEditor, applyTextCommand }: {
       <div className="px-3 pb-1 mb-1 mt-2 border-b border-panvas-border-subtle text-2xs font-semibold text-panvas-text-tertiary uppercase tracking-wider">Typography</div>
       <div className="px-2 mb-2 space-y-2">
         <div className="flex gap-2">
-          <select
-            className="flex-1 rounded-md border border-panvas-border-default bg-panvas-bg-primary px-2 py-1 text-xs text-panvas-text-primary"
-            value={commandEditor?.getAttributes('textStyle').fontFamily || ''}
-            onChange={e => e.target.value ? applyTextCommand(c => c.setFontFamily(e.target.value)) : applyTextCommand(c => c.unsetFontFamily())}
-          >
-            <optgroup label="Standard">
-              <option value="" style={{ fontFamily: 'Inter, sans-serif' }}>Default Font (Inter)</option>
-              <option value="'Times New Roman', serif" style={{ fontFamily: "'Times New Roman', serif" }}>Times New Roman</option>
-              <option value="'Courier New', monospace" style={{ fontFamily: "'Courier New', monospace" }}>Courier New</option>
-              <option value="'Comic Sans MS', cursive" style={{ fontFamily: "'Comic Sans MS', cursive" }}>Comic Sans</option>
-            </optgroup>
-            <optgroup label="Handwriting">
-              <option value="'Patrick Hand', cursive" style={{ fontFamily: "'Patrick Hand', cursive" }}>Clean Handwriting</option>
-              <option value="'Kalam', cursive" style={{ fontFamily: "'Kalam', cursive" }}>Casual Handwriting</option>
-              <option value="'Permanent Marker', cursive" style={{ fontFamily: "'Permanent Marker', cursive" }}>Marker</option>
-              <option value="'Shadows Into Light', cursive" style={{ fontFamily: "'Shadows Into Light', cursive" }}>Notebook</option>
-              <option value="'Caveat', cursive" style={{ fontFamily: "'Caveat', cursive", fontSize: '1.2em' }}>Calligraphy</option>
-            </optgroup>
-          </select>
+          <TextFontPicker
+            value={commandEditor?.getAttributes('textStyle').fontFamily || engine.texts.getDefaultFontFamily()}
+            onChange={font => {
+              if (commandEditor?.isFocused && !commandEditor.state.selection.empty) {
+                engine.texts.setDefaultFontFamily(font);
+                applyTextCommand(c => c.setFontFamily(font || 'Inter, sans-serif'));
+              } else applyNotebookTextFont(engine, font, commandEditor);
+            }}
+          />
           <select
             className="w-20 rounded-md border border-panvas-border-default bg-panvas-bg-primary px-2 py-1 text-xs text-panvas-text-primary"
             value={commandEditor?.getAttributes('textStyle').fontSize || ''}
@@ -1311,7 +1339,7 @@ function TextFormattingStrip({ editor, engine, enabled }: {
           className="w-[260px] rounded-xl bg-panvas-bg-primary border border-panvas-border-strong shadow-2xl overflow-y-auto max-h-[60vh] py-2 max-[599px]:w-[min(17rem,calc(100vw-1.5rem))]"
           onMouseDown={(event) => event.stopPropagation()}
         >
-          <TextFormatMenuContent commandEditor={resolvedEditor} applyTextCommand={apply} />
+          <TextFormatMenuContent engine={engine} commandEditor={resolvedEditor} applyTextCommand={apply} />
         </div>
       </OverlayManager>
     </div>
@@ -1334,7 +1362,7 @@ function DrawingToolPopup({ toolName, settings, onUpdate, onClose, onOpenGesture
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-panvas-border-subtle bg-panvas-bg-secondary/50">
         <span className="text-sm font-semibold text-panvas-text-primary">{toolLabel} Settings</span>
-        <button onClick={onClose} className="text-panvas-text-secondary hover:text-panvas-text-primary transition-colors">
+        <button type="button" onClick={onClose} className="text-panvas-text-secondary hover:text-panvas-text-primary transition-colors" aria-label={`Close ${toolLabel} settings`} title={`Close ${toolLabel} settings`}>
           <X size={14} />
         </button>
       </div>
@@ -1344,6 +1372,12 @@ function DrawingToolPopup({ toolName, settings, onUpdate, onClose, onOpenGesture
         <div className="space-y-4 border-b border-panvas-border-subtle p-4 sm:border-b-0 sm:border-r">
           <div className="text-2xs font-semibold uppercase tracking-widest text-panvas-text-secondary">Stroke Style</div>
 
+          {toolName === 'pen' && <div className="grid grid-cols-2 gap-1.5" role="group" aria-label="Pen nib">
+            {([undefined, ...INK_FAMILIES] as const).map(family => <button key={family ?? 'legacy'} type="button" aria-pressed={settings.inkFamily === family} onClick={() => onUpdate('inkFamily', family)} className={`rounded-lg border px-2 py-1 text-left focus-ring ${settings.inkFamily === family ? 'border-panvas-accent-blue bg-panvas-bg-active' : 'border-panvas-border-subtle hover:bg-panvas-bg-hover'}`}>
+              <NibPreview family={family} color={settings.color} />
+              <span className="text-2xs capitalize">{family ?? 'Classic pen'}</span>
+            </button>)}
+          </div>}
           {/* Thickness */}
           <div>
             <div className="flex justify-between text-xs mb-1.5">
@@ -1405,7 +1439,7 @@ function DrawingToolPopup({ toolName, settings, onUpdate, onClose, onOpenGesture
           {/* Brush Preview */}
           <div className="rounded-lg bg-panvas-bg-secondary p-2.5 border border-panvas-border-subtle">
             <div className="text-2xs text-panvas-text-tertiary mb-1">Preview</div>
-            <svg className="w-full h-8" viewBox="0 0 200 32" fill="none">
+            {toolName === 'pen' && settings.inkFamily ? <NibPreview family={settings.inkFamily} color={settings.color} thickness={Math.min(settings.thickness, 10)} pattern={settings.strokePattern} opacity={settings.opacity / 100} pressure={settings.pressureSensitivity} /> : <svg className="w-full h-8" viewBox="0 0 200 32" fill="none">
               <path
                 d="M4 24C30 4 55 28 90 14S140 6 196 20"
                 stroke={settings.color}
@@ -1414,7 +1448,7 @@ function DrawingToolPopup({ toolName, settings, onUpdate, onClose, onOpenGesture
                 strokeDasharray={settings.strokePattern === 'dashed' ? '12 8' : settings.strokePattern === 'dotted' ? '0.1 8' : undefined}
                 opacity={settings.opacity / 100}
               />
-            </svg>
+            </svg>}
           </div>
         </div>
 
@@ -1726,7 +1760,7 @@ function EraserPopup({ settings, onUpdate, onClose }: {
     <div className="w-[260px] rounded-2xl bg-panvas-bg-primary border border-panvas-border-strong shadow-2xl backdrop-blur-xl overflow-hidden text-panvas-text-primary">
       <div className="flex items-center justify-between px-4 py-3 border-b border-panvas-border-subtle bg-panvas-bg-secondary/50">
         <span className="text-sm font-semibold">Eraser Settings</span>
-        <button onClick={onClose} className="text-panvas-text-secondary hover:text-panvas-text-primary transition-colors">
+        <button type="button" onClick={onClose} className="text-panvas-text-secondary hover:text-panvas-text-primary transition-colors" aria-label="Close Eraser settings" title="Close Eraser settings">
           <X size={14} />
         </button>
       </div>
@@ -1791,7 +1825,9 @@ function EraserPopup({ settings, onUpdate, onClose }: {
   );
 }
 
-function ShapePopup({ activeShape, color, thickness, opacity, fillEnabled, onShape, onColor, onThickness, onOpacity, onFill, onRotate, onClose }: {
+function ShapePopup({ lineStyle, onLineStyle, activeShape, color, thickness, opacity, fillEnabled, onShape, onColor, onThickness, onOpacity, onFill, onRotate, onClose }: {
+  lineStyle: LineStyle;
+  onLineStyle: (style: LineStyle) => void;
   activeShape: ShapeType;
   color: string;
   thickness: number;
@@ -1814,12 +1850,17 @@ function ShapePopup({ activeShape, color, thickness, opacity, fillEnabled, onSha
     <div className="w-[300px] rounded-2xl border border-panvas-border-strong bg-panvas-bg-primary text-panvas-text-primary shadow-2xl">
       <div className="flex items-center justify-between border-b border-panvas-border-subtle px-4 py-3">
         <span className="text-sm font-semibold">Shape settings</span>
-        <button type="button" onClick={onClose} className="text-panvas-text-secondary hover:text-panvas-text-primary"><X size={14} /></button>
+        <button type="button" onClick={onClose} className="text-panvas-text-secondary hover:text-panvas-text-primary" aria-label="Close shape settings" title="Close shape settings"><X size={14} /></button>
       </div>
       <div className="space-y-4 p-4">
         <div className="grid grid-cols-4 gap-1">
           {shapes.map(shape => <button key={shape.id} type="button" onClick={() => onShape(shape.id)} className={`rounded-md px-2 py-1.5 text-2xs focus-ring ${activeShape === shape.id ? 'bg-panvas-accent-blue/15 text-panvas-accent-blue ring-1 ring-panvas-accent-blue/40' : 'bg-panvas-bg-secondary text-panvas-text-secondary hover:bg-panvas-bg-hover'}`}>{shape.label}</button>)}
         </div>
+        {(activeShape === 'line' || activeShape === 'arrow') && <div className="grid grid-cols-3 gap-1" role="group" aria-label="Line style">
+          {LINE_STYLES.map(style => <button key={style} type="button" aria-pressed={lineStyle === style} onClick={() => onLineStyle(style)} className={`rounded-md border p-1.5 text-2xs capitalize focus-ring ${lineStyle === style ? 'border-panvas-accent-blue bg-panvas-bg-active' : 'border-panvas-border-subtle hover:bg-panvas-bg-hover'}`}>
+            <svg viewBox="0 0 80 24" className="h-6 w-full" aria-hidden="true">{(() => { const g = buildLineStyleGeometry({ id: 'preview', type: 'shape', createdAt: 0, shapeType: 'line', x: 5, y: 12, width: 70, height: 0, rotation: 0, strokeWidth: 1.5, color, fill: null, lineStyle: style }); return <g stroke="currentColor" strokeWidth="1.5" fill="none">{g.paths.map((path, i) => <polyline key={i} points={path.map(p => `${p.x},${p.y}`).join(' ')} />)}{g.dots.map((p, i) => <circle key={i} cx={p.x} cy={p.y} r={g.radius} fill="currentColor" />)}</g>; })()}</svg>{style}
+          </button>)}
+        </div>}
         <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-3 text-xs">
           <span className="text-panvas-text-secondary">Stroke</span>
           <div className="flex items-center gap-2"><input type="color" value={color} onChange={event => onColor(event.target.value)} className="h-7 w-9 rounded border-0 bg-transparent" /><input aria-label="Shape stroke width" type="range" min="1" max="16" step="1" value={thickness} onChange={event => onThickness(Number(event.target.value))} className="min-w-0 flex-1 accent-blue-500" /></div>
@@ -1836,21 +1877,7 @@ function ShapePopup({ activeShape, color, thickness, opacity, fillEnabled, onSha
   );
 }
 
-const HANDWRITING_LANGUAGES = [
-  { value: '', label: 'System language' },
-  { value: 'en-US', label: 'English (US)' },
-  { value: 'en-GB', label: 'English (UK)' },
-  { value: 'hi-IN', label: 'Hindi' },
-  { value: 'es-ES', label: 'Spanish' },
-  { value: 'fr-FR', label: 'French' },
-  { value: 'de-DE', label: 'German' },
-  { value: 'ja-JP', label: 'Japanese' },
-  { value: 'zh-CN', label: 'Chinese (Simplified)' },
-] as const;
-
-function fontLabel(fontFamily: string): string {
-  return fontFamily.replace(/[',"]/g, '').replace(/\s+(sans-serif|serif|monospace|cursive)$/, '');
-}
+const HANDWRITING_LANGUAGES = SUPPORTED_HANDWRITING_RECOGNITION_LANGUAGES;
 
 function HandwritingSettingsStrip({ settings, onChange, onPalette }: {
   settings: HandwritingToolPreferences;
@@ -1873,23 +1900,12 @@ function HandwritingSettingsStrip({ settings, onChange, onPalette }: {
     />
   );
 
-  const fontSelect = (
-    <select
-      aria-label="Output font"
-      title="Output font"
-      value={settings.fontFamily}
-      onChange={event => onChange({ fontFamily: event.target.value as HandwritingToolPreferences['fontFamily'] })}
-      className={`h-7 rounded-md border border-panvas-border-default bg-panvas-bg-primary px-1.5 text-2xs text-panvas-text-primary focus-ring ${isMobileViewport ? 'w-full' : 'max-w-36'}`}
-      style={{ fontFamily: settings.fontFamily }}
-    >
-      <optgroup label="Standard">
-        {STANDARD_TEXT_FONT_FAMILIES.map(font => <option key={font} value={font}>{fontLabel(font)}</option>)}
-      </optgroup>
-      <optgroup label="Handwriting">
-        {HANDWRITING_FONT_FAMILIES.map(font => <option key={font} value={font}>{fontLabel(font)}</option>)}
-      </optgroup>
-    </select>
-  );
+  const fontSelect = <TextFontPicker
+    ariaLabel="Output font"
+    value={settings.fontFamily}
+    onChange={font => onChange({ fontFamily: (font || 'Inter, sans-serif') as HandwritingToolPreferences['fontFamily'] })}
+    className={isMobileViewport ? 'w-full' : 'w-40'}
+  />;
 
   const sizeSelect = (
     <select
@@ -1908,7 +1924,7 @@ function HandwritingSettingsStrip({ settings, onChange, onPalette }: {
     <select
       aria-label="Recognition language"
       title="Recognition language"
-      value={settings.language}
+      value={settings.language || HANDWRITING_LANGUAGES[0].value}
       onChange={event => onChange({ language: event.target.value })}
       className={`h-7 rounded-md border border-panvas-border-default bg-panvas-bg-primary px-1.5 text-2xs text-panvas-text-primary focus-ring ${isMobileViewport ? 'w-full' : 'max-w-36'}`}
     >
@@ -2068,6 +2084,7 @@ function ToolButton({ icon, active, onClick, tooltip, hasPopup }: { icon: React.
       onClick={onClick}
       title={tooltip}
       aria-label={tooltip}
+      aria-pressed={active}
       className={`relative flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl p-2 transition-all duration-150 focus-ring max-[599px]:h-9 max-[599px]:w-9 max-[599px]:rounded-lg max-[599px]:p-1.5 ${
         active 
           ? 'bg-panvas-accent-blue/10 text-panvas-accent-blue font-bold shadow-sm ring-1 ring-panvas-accent-blue/50'
@@ -2086,4 +2103,11 @@ function ToolButton({ icon, active, onClick, tooltip, hasPopup }: { icon: React.
 
 function Divider() {
   return <div className="w-[1px] h-5 bg-panvas-border-subtle mx-1 flex-shrink-0 max-[599px]:h-4 max-[599px]:mx-0.5" />;
+}
+
+function NibPreview({ family, color, thickness = 3, pattern = 'solid', opacity = 1, pressure = true }: { family?: InkFamily; color: string; thickness?: number; pattern?: StrokePattern; opacity?: number; pressure?: boolean }) {
+  const points = Array.from({ length: 65 }, (_, i) => ({ x: 5 + i * 190 / 64, y: 20 - 10 * Math.sin(i / 64 * Math.PI * 3), pressure: pressure ? 0.2 + 0.65 * Math.sin(i / 64 * Math.PI) : 0.5, t: i }));
+  return <svg className="h-8 w-full" viewBox="0 0 200 40" aria-hidden="true">
+    {family ? <path d={inkPolygonsPath(buildInkFamilyGeometry({ id: 'preview', type: 'stroke', createdAt: 0, tool: 'pen', points, color, thickness, opacity, inkFamily: family, pattern }))} fill={color} opacity={opacity} /> : <path d="M5 20Q35 0 65 20T130 20T195 20" fill="none" stroke={color} strokeWidth={thickness} strokeLinecap="round" />}
+  </svg>;
 }

@@ -7,18 +7,38 @@ import Dexie, { type Table } from 'dexie';
 import type { Workspace, Folder, CanvasFile } from '@/types/workspace';
 import type { CanvasData, CustomBlock, PdfFileData, ImageFileData } from '@/types/canvas';
 import type { SyncQueueItem } from '@/types/sync';
-import type {
-  Notebook,
-  NotebookPage,
-  NotebookPageContentRecord,
-  NotebookPageDrawingRecord,
-  NotebookSection,
-} from '@/types/notebook';
+import {
+  DEFAULT_PAGE_PROPERTY_SET,
+  type Notebook,
+  type NotebookPage,
+  type NotebookPageContentRecord,
+  type NotebookPageDrawingRecord,
+  type NotebookSection,
+} from '../types/notebook.ts';
 import type { PdfAnnotation } from '@/types/pdfAnnotation';
 import type { SyncJournalEntry } from '@/services/cloudsync/types';
+import { initializeBrowserStorageDurability } from '../services/storage/browserStorageDurability.ts';
+import { generateId } from '../lib/utils/id.ts';
 
 export const SYSTEM_DEFAULT_WORKSPACE_ID = 'ws-system-default-v1';
 export const SYSTEM_WELCOME_CANVAS_ID = 'canvas-system-welcome-v1';
+export const SYSTEM_DEFAULT_NOTEBOOK_ID = 'nb-system-default-v1';
+export const SYSTEM_DEFAULT_SECTION_ID = 'sec-system-default-v1';
+export const SYSTEM_DEFAULT_PAGE_ID = 'page-system-default-v1';
+/** Set while an explicit device reset is hydrating from a verified cloud. */
+export const DEVICE_RESET_PENDING_KEY = 'panvas.cloudSync.deviceResetPending.v1';
+
+export function markDeviceResetPending(): void {
+  try { if (typeof localStorage !== 'undefined') localStorage.setItem(DEVICE_RESET_PENDING_KEY, 'true'); } catch { /* optional marker */ }
+}
+
+export function clearDeviceResetPending(): void {
+  try { if (typeof localStorage !== 'undefined') localStorage.removeItem(DEVICE_RESET_PENDING_KEY); } catch { /* optional marker */ }
+}
+
+export function isDeviceResetPending(): boolean {
+  try { return typeof localStorage !== 'undefined' && localStorage.getItem(DEVICE_RESET_PENDING_KEY) === 'true'; } catch { return false; }
+}
 
 export class PanvasDB extends Dexie {
   workspaces!: Table<Workspace>;
@@ -191,38 +211,102 @@ export const db = new PanvasDB();
 
 // Initialize with a default workspace if empty
 export async function initializeDatabase(userId: string | null = null): Promise<void> {
+  if (isDeviceResetPending()) return;
+  if (typeof window !== 'undefined' && !window.panvas) await initializeBrowserStorageDurability();
+  const normalizedUserId = userId || null;
   // Only check workspaces belonging to the targeted userId context
   const workspaceCount = await db.workspaces
-    .filter(workspace => (workspace.userId ?? null) === (userId ?? null) && !workspace.deletedAt)
+    .filter(workspace => (workspace.userId || null) === normalizedUserId && !workspace.deletedAt)
     .count();
   if (workspaceCount === 0) {
-    const now = Date.now();
-    const defaultWorkspaceId = SYSTEM_DEFAULT_WORKSPACE_ID;
-    const defaultCanvasId = SYSTEM_WELCOME_CANVAS_ID;
+    await db.transaction('rw', [
+      db.workspaces,
+      db.canvasFiles,
+      db.canvasData,
+      db.notebooks,
+      db.notebookSections,
+      db.notebookPages,
+      db.notebookPageContents,
+      db.notebookPageDrawings,
+      db.syncQueue,
+    ], async () => {
+      // The initial count is only a fast path. Re-check inside the write
+      // transaction because React StrictMode, auth restoration, and a sync
+      // bootstrap can call initializeDatabase concurrently. Without this
+      // second check, each caller can allocate a fresh random default before
+      // either transaction commits, recreating the duplicate-shell bug.
+      const targetWorkspaces = await db.workspaces
+        .filter(workspace => (workspace.userId || null) === normalizedUserId && !workspace.deletedAt)
+        .toArray();
+      if (targetWorkspaces.length > 0) return;
 
-    await db.transaction('rw', [db.workspaces, db.canvasFiles, db.canvasData], async () => {
-      const existingSystemWorkspace = await db.workspaces.get(defaultWorkspaceId);
-      if (existingSystemWorkspace && (existingSystemWorkspace.userId ?? null) !== (userId ?? null)) {
-        await db.workspaces.update(defaultWorkspaceId, { userId, syncStatus: userId ? 'pending' : 'local' });
-      }
+      const now = Date.now();
+      const fixedWorkspace = await db.workspaces.get(SYSTEM_DEFAULT_WORKSPACE_ID);
+      const fixedWorkspaceOwnedByTarget = Boolean(fixedWorkspace && !fixedWorkspace.deletedAt && (fixedWorkspace.userId || null) === normalizedUserId);
+      const defaultWorkspaceId = !fixedWorkspace || fixedWorkspaceOwnedByTarget
+        ? SYSTEM_DEFAULT_WORKSPACE_ID
+        : generateId('ws');
+      const existingSystemWorkspace = defaultWorkspaceId === SYSTEM_DEFAULT_WORKSPACE_ID
+        ? fixedWorkspace
+        : await db.workspaces.get(defaultWorkspaceId);
+      const fixedCanvas = await db.canvasFiles.get(SYSTEM_WELCOME_CANVAS_ID);
+      const fixedCanvasOwnedByTarget = Boolean(fixedCanvas && !fixedCanvas.deletedAt
+        && (fixedCanvas.userId || null) === normalizedUserId
+        && fixedCanvas.workspaceId === defaultWorkspaceId);
+      const defaultCanvasId = defaultWorkspaceId === SYSTEM_DEFAULT_WORKSPACE_ID && (!fixedCanvas || fixedCanvasOwnedByTarget)
+        ? SYSTEM_WELCOME_CANVAS_ID
+        : generateId('canvas');
+      const existingWelcomeCanvas = defaultCanvasId === SYSTEM_WELCOME_CANVAS_ID
+        ? fixedCanvas
+        : await db.canvasFiles.get(defaultCanvasId);
+
+      const fixedNotebook = await db.notebooks.get(SYSTEM_DEFAULT_NOTEBOOK_ID);
+      const fixedNotebookOwnedByTarget = Boolean(fixedNotebook && !fixedNotebook.deletedAt
+        && (fixedNotebook.userId || null) === normalizedUserId
+        && fixedNotebook.workspaceId === defaultWorkspaceId);
+      const defaultNotebookId = defaultWorkspaceId === SYSTEM_DEFAULT_WORKSPACE_ID && (!fixedNotebook || fixedNotebookOwnedByTarget)
+        ? SYSTEM_DEFAULT_NOTEBOOK_ID
+        : generateId('nb');
+      const existingNotebook = defaultNotebookId === SYSTEM_DEFAULT_NOTEBOOK_ID
+        ? fixedNotebook
+        : await db.notebooks.get(defaultNotebookId);
+
+      const fixedSection = await db.notebookSections.get(SYSTEM_DEFAULT_SECTION_ID);
+      const fixedSectionOwnedByTarget = Boolean(fixedSection && !fixedSection.deletedAt
+        && (fixedSection.userId || null) === normalizedUserId
+        && fixedSection.notebookId === defaultNotebookId);
+      const defaultSectionId = defaultNotebookId === SYSTEM_DEFAULT_NOTEBOOK_ID && (!fixedSection || fixedSectionOwnedByTarget)
+        ? SYSTEM_DEFAULT_SECTION_ID
+        : generateId('sec');
+      const existingSection = defaultSectionId === SYSTEM_DEFAULT_SECTION_ID
+        ? fixedSection
+        : await db.notebookSections.get(defaultSectionId);
+
+      const fixedPage = await db.notebookPages.get(SYSTEM_DEFAULT_PAGE_ID);
+      const fixedPageOwnedByTarget = Boolean(fixedPage && !fixedPage.deletedAt
+        && (fixedPage.userId || null) === normalizedUserId
+        && fixedPage.sectionId === defaultSectionId
+        && fixedPage.notebookId === defaultNotebookId);
+      const defaultPageId = defaultSectionId === SYSTEM_DEFAULT_SECTION_ID && (!fixedPage || fixedPageOwnedByTarget)
+        ? SYSTEM_DEFAULT_PAGE_ID
+        : generateId('page');
+      const existingPage = defaultPageId === SYSTEM_DEFAULT_PAGE_ID
+        ? fixedPage
+        : await db.notebookPages.get(defaultPageId);
+
       if (!existingSystemWorkspace) await db.workspaces.add({
         id: defaultWorkspaceId,
         name: 'My Workspace',
         createdAt: now,
         updatedAt: now,
         isPinned: false,
-        syncStatus: userId ? 'pending' : 'local',
-        userId: userId,
+        syncStatus: normalizedUserId ? 'pending' : 'local',
+        userId: normalizedUserId,
         deletedAt: null,
         isSystem: true,
         systemType: 'default',
       });
 
-      const existingWelcomeCanvas = await db.canvasFiles.get(defaultCanvasId);
-      if (existingWelcomeCanvas && (existingWelcomeCanvas.userId ?? null) !== (userId ?? null)) {
-        await db.canvasFiles.update(defaultCanvasId, { userId, workspaceId: defaultWorkspaceId, syncStatus: userId ? 'pending' : 'local' });
-        await db.canvasData.update(defaultCanvasId, { userId });
-      }
       if (!existingWelcomeCanvas) await db.canvasFiles.add({
         id: defaultCanvasId,
         workspaceId: defaultWorkspaceId,
@@ -233,8 +317,8 @@ export async function initializeDatabase(userId: string | null = null): Promise<
         lastOpenedAt: now,
         order: 0,
         isPinned: false,
-        syncStatus: userId ? 'pending' : 'local',
-        userId: userId,
+        syncStatus: normalizedUserId ? 'pending' : 'local',
+        userId: normalizedUserId,
         deletedAt: null,
         isSystem: true,
         systemType: 'welcome',
@@ -248,16 +332,79 @@ export async function initializeDatabase(userId: string | null = null): Promise<
         customBlocks: [],
         version: 1,
         updatedAt: now,
-        userId: userId,
+        userId: normalizedUserId,
       });
 
-      if (userId && !existingSystemWorkspace && !existingWelcomeCanvas) {
+      if (!existingNotebook) await db.notebooks.add({
+        id: defaultNotebookId,
+        workspaceId: defaultWorkspaceId,
+        folderId: null,
+        name: 'My Notebook',
+        createdAt: now,
+        updatedAt: now,
+        lastOpenedAt: now,
+        order: 0,
+        isExpanded: true,
+        isPinned: false,
+        userId: normalizedUserId,
+        deletedAt: null,
+        defaultPageProperties: { ...DEFAULT_PAGE_PROPERTY_SET },
+      });
+
+      if (!existingSection) await db.notebookSections.add({
+        id: defaultSectionId,
+        notebookId: defaultNotebookId,
+        name: 'Section 1',
+        createdAt: now,
+        updatedAt: now,
+        order: 0,
+        isExpanded: true,
+        userId: normalizedUserId,
+        deletedAt: null,
+      });
+
+      if (!existingPage) await db.notebookPages.add({
+        id: defaultPageId,
+        notebookId: defaultNotebookId,
+        sectionId: defaultSectionId,
+        title: 'Page 1',
+        type: 'default',
+        createdAt: now,
+        updatedAt: now,
+        lastOpenedAt: now,
+        order: 0,
+        userId: normalizedUserId,
+        deletedAt: null,
+        pagePropertyOverrides: {},
+      });
+
+      if (!(await db.notebookPageContents.get(defaultPageId))) await db.notebookPageContents.add({
+        pageId: defaultPageId,
+        workspaceId: defaultWorkspaceId,
+        notebookId: defaultNotebookId,
+        data: { type: 'doc', content: [] },
+        version: 1,
+        updatedAt: now,
+        userId: normalizedUserId,
+      });
+
+      if (!(await db.notebookPageDrawings.get(defaultPageId))) await db.notebookPageDrawings.add({
+        pageId: defaultPageId,
+        workspaceId: defaultWorkspaceId,
+        notebookId: defaultNotebookId,
+        data: { objects: [], layers: [] },
+        version: 1,
+        updatedAt: now,
+        userId: normalizedUserId,
+      });
+
+      if (normalizedUserId && !existingSystemWorkspace && !existingWelcomeCanvas) {
         await db.syncQueue.bulkAdd([
           {
             entityType: 'workspace',
             entityId: defaultWorkspaceId,
             action: 'create',
-            data: { id: defaultWorkspaceId, name: 'My Workspace', createdAt: now, updatedAt: now, isPinned: false, userId, isSystem: true, systemType: 'default' },
+            data: { id: defaultWorkspaceId, name: 'My Workspace', createdAt: now, updatedAt: now, isPinned: false, userId: normalizedUserId, isSystem: true, systemType: 'default' },
             status: 'pending',
             attempts: 0,
             createdAt: now,
@@ -266,7 +413,7 @@ export async function initializeDatabase(userId: string | null = null): Promise<
             entityType: 'canvasFile',
             entityId: defaultCanvasId,
             action: 'create',
-            data: { id: defaultCanvasId, workspaceId: defaultWorkspaceId, folderId: null, name: 'Welcome Canvas', createdAt: now, updatedAt: now, lastOpenedAt: now, order: 0, isPinned: false, userId, isSystem: true, systemType: 'welcome' },
+            data: { id: defaultCanvasId, workspaceId: defaultWorkspaceId, folderId: null, name: 'Welcome Canvas', createdAt: now, updatedAt: now, lastOpenedAt: now, order: 0, isPinned: false, userId: normalizedUserId, isSystem: true, systemType: 'welcome' },
             status: 'pending',
             attempts: 0,
             createdAt: now,
@@ -275,11 +422,11 @@ export async function initializeDatabase(userId: string | null = null): Promise<
             entityType: 'canvasData',
             entityId: defaultCanvasId,
             action: 'update',
-            data: { canvasFileId: defaultCanvasId, elements: [], appState: {}, files: {}, customBlocks: [], version: 1, updatedAt: now, userId },
+            data: { canvasFileId: defaultCanvasId, elements: [], appState: {}, files: {}, customBlocks: [], version: 1, updatedAt: now, userId: normalizedUserId },
             status: 'pending',
             attempts: 0,
             createdAt: now,
-          }
+          },
         ]);
       }
     });

@@ -1,3 +1,5 @@
+import { buildInkFamilyGeometry } from './inkFamilyGeometry.ts';
+import type { InkFamily } from './drawingTypes.ts';
 // ============================================
 // Panvas — Drawing Engine
 // ============================================
@@ -15,6 +17,7 @@ import { traceInkClip, strokeRegion, eraserCapsule, regionIntersects } from './i
 import { LayerManager } from './LayerManager.ts';
 import { RulerManager } from './RulerManager.ts';
 import { LaserManager } from './LaserManager.ts';
+import { buildStrokePatternGeometry } from './strokePatternGeometry.ts';
 
 export class DrawingEngine {
   private strokes: Stroke[] = [];
@@ -31,6 +34,8 @@ export class DrawingEngine {
   private canvasCssWidth = 0;
   private canvasCssHeight = 0;
   private layerCanvases = new Map<string, CanvasRenderingContext2D>();
+  private liveSnapshotCanvas: HTMLCanvasElement | null = null;
+  private isLiveDrawing = false;
 
   attachLayerCanvas(id: string, canvas: HTMLCanvasElement, width: number, height: number, scale: number): () => void {
     const ctx = this.viewport.configureCanvas(canvas, width, height, scale / Math.sqrt(Math.max(1, this.layerManager.getLayers().length)));
@@ -82,10 +87,28 @@ export class DrawingEngine {
 
   /** Detach from canvas element. */
   detachCanvas(): void {
+    // Clear the currently owned surface before releasing it. Page activation
+    // can replace the engine scene before React commits the next page shell;
+    // leaving these pixels alive would expose the outgoing scene for one
+    // compositor frame on the incoming page.
+    if (this.ctx && this.canvas) {
+      this.ctx.save();
+      this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+      this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+      this.ctx.restore();
+    }
+    for (const context of this.layerCanvases.values()) {
+      context.save();
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, context.canvas.width, context.canvas.height);
+      context.restore();
+    }
+    this.layerCanvases.clear();
     this.canvas = null;
     this.ctx = null;
     this.canvasCssWidth = 0;
     this.canvasCssHeight = 0;
+    this.endLiveStroke();
   }
 
   /** Resize the canvas (e.g., on window resize). */
@@ -96,6 +119,8 @@ export class DrawingEngine {
     this.ctx = this.viewport.configureCanvas(this.canvas, cssWidth, cssHeight, this._scaleMultiplier);
     this.redraw();
   }
+
+  getCanvasElement(): HTMLCanvasElement | null { return this.canvas; }
 
   /** Get all strokes (for serialization). */
   getStrokes(): Stroke[] {
@@ -162,12 +187,16 @@ export class DrawingEngine {
     this.ctx.clearRect(0, 0, this.canvasCssWidth, this.canvasCssHeight);
     
     // Save context state before applying viewport transform
+    // INVARIANT: All stroke points, shape bounds, and image rectangles exist strictly in Page Space.
+    // Viewport zoom, pan offsets, and device pixel ratio (DPR) are applied via viewport.applyTransform(ctx).
     this.ctx.save();
     this.viewport.applyTransform(this.ctx);
 
     this.ctx.imageSmoothingEnabled = true;
     this.ctx.imageSmoothingQuality = 'high';
 
+    // INVARIANT: Layer render order determines Z-index. Bottom layer (0) renders first.
+    // Within each layer, entities render in deterministic order: Images -> Strokes -> Shapes.
     for (const layer of this.layerManager.getLayers()) {
       const layerCtx = this.layerCanvases.get(layer.id);
       if (layerCtx) layerCtx.clearRect(0, 0, this.canvasCssWidth, this.canvasCssHeight);
@@ -200,11 +229,12 @@ export class DrawingEngine {
 
   private renderRulerOverlay(): void {
     if (!this.ctx || !this.rulerManager.getState().enabled) return;
-    const darkMode = typeof document !== 'undefined'
-      && document.documentElement.classList.contains('dark');
+    const themeMode = typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+      ? 'dark'
+      : 'light';
     this.ctx.save();
     this.viewport.applyTransform(this.ctx);
-    this.rulerManager.render(this.ctx, this.viewport.getState().scale, darkMode);
+    this.rulerManager.render(this.ctx, this.viewport.getState().scale, themeMode);
     this.ctx.restore();
   }
 
@@ -221,17 +251,79 @@ export class DrawingEngine {
    * Used for both full redraws and live drawing previews.
    */
   private pencilSurface?: HTMLCanvasElement;
+  private renderDot(
+    ctx: CanvasRenderingContext2D,
+    point: StrokePoint,
+    tool: DrawingToolId,
+    color: string,
+    thickness: number,
+    opacity: number,
+    _inkFamily?: InkFamily,
+  ): void {
+    ctx.save();
+    ctx.globalAlpha = opacity;
+    ctx.fillStyle = color;
+    ctx.strokeStyle = color;
+
+    if (tool === 'highlighter') {
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.globalAlpha *= 0.4;
+      const size = Math.max(8, thickness * 6);
+      ctx.fillRect(point.x - size / 2, point.y - size / 2, size, size);
+    } else if (tool === 'pencil') {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha *= 0.75;
+      const radius = Math.max(0.3, thickness * (point.pressure ?? 0.5) * 0.75);
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (tool === 'marker') {
+      ctx.globalCompositeOperation = 'source-over';
+      const radius = Math.max(2, thickness * 1.5);
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.globalCompositeOperation = 'source-over';
+      const radius = Math.max(0.5, thickness * (point.pressure ?? 0.5));
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
 
   renderStroke(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
     const { points, color, thickness, opacity, tool } = stroke;
     if (points.length < 2) return;
+    if (!points || points.length === 0) return;
+    if (points.length === 1) {
+      this.renderDot(ctx, points[0], tool, color, thickness, opacity, stroke.inkFamily);
+      return;
+    }
 
     ctx.save();
     traceInkClip(ctx, stroke);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.globalAlpha = opacity;
-    this.applyStrokePattern(ctx, stroke.pattern ?? 'solid', thickness);
+    ctx.setLineDash([]);
+
+    if (stroke.inkFamily) {
+      ctx.fillStyle = stroke.color;
+      ctx.beginPath();
+      for (const polygon of buildInkFamilyGeometry(stroke)) {
+        polygon.forEach((point, i) => i === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
+        ctx.closePath();
+      }
+      ctx.fill(); ctx.restore(); return;
+    }
+    if (stroke.pattern === 'dashed'  || stroke.pattern === 'dotted') {
+      this.renderPatternedStroke(ctx, stroke);
+      ctx.restore();
+      return;
+    }
 
     switch (tool) {
       case 'pen':
@@ -278,10 +370,42 @@ export class DrawingEngine {
     ctx.restore();
   }
 
-  private applyStrokePattern(ctx: CanvasRenderingContext2D, pattern: StrokePattern, thickness: number): void {
-    if (pattern === 'dashed') ctx.setLineDash([Math.max(5, thickness * 3), Math.max(4, thickness * 2)]);
-    else if (pattern === 'dotted') ctx.setLineDash([0.01, Math.max(4, thickness * 2.2)]);
-    else ctx.setLineDash([]);
+  private renderPatternedStroke(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
+    const pattern = stroke.pattern as Exclude<StrokePattern, 'solid'>;
+    const geometry = buildStrokePatternGeometry(stroke.points, pattern, stroke.thickness);
+    const pressureAware = stroke.tool === 'pen' || stroke.tool === 'pencil';
+    const widthMultiplier = stroke.tool === 'highlighter' ? 6 : stroke.tool === 'marker' ? 3 : stroke.tool === 'pencil' ? 1.5 : 2;
+    const minimumWidth = stroke.tool === 'highlighter' ? 8 : stroke.tool === 'marker' ? 4 : 0.5;
+    const renderedWidth = (pressure: number) => Math.max(
+      minimumWidth,
+      stroke.thickness * widthMultiplier * (pressureAware ? pressure : 1),
+    );
+
+    ctx.strokeStyle = stroke.color;
+    ctx.fillStyle = stroke.color;
+    ctx.globalCompositeOperation = stroke.tool === 'highlighter' ? 'multiply' : 'source-over';
+    if (stroke.tool === 'highlighter') ctx.globalAlpha *= 0.4;
+    if (stroke.tool === 'pencil') ctx.globalAlpha *= 0.75;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    if (pattern === 'dotted') {
+      for (const point of geometry.dots) {
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, renderedWidth(point.pressure) / 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      return;
+    }
+
+    for (const dash of geometry.dashes) {
+      if (dash.length < 2) continue;
+      ctx.beginPath();
+      ctx.lineWidth = renderedWidth(dash.reduce((sum, point) => sum + point.pressure, 0) / dash.length);
+      ctx.moveTo(dash[0].x, dash[0].y);
+      for (let index = 1; index < dash.length; index += 1) ctx.lineTo(dash[index].x, dash[index].y);
+      ctx.stroke();
+    }
   }
 
   // ---- Pen: smooth pressure-variable strokes ----
@@ -410,29 +534,81 @@ export class DrawingEngine {
   // ---- Live Drawing Preview ----
 
   /**
+   * Snapshot the committed scene to an offscreen surface so live ink rendering
+   * can restore the background via a single GPU blit instead of redrawing every
+   * stroke, image, and shape on the page.
+   */
+  beginLiveStroke(): void {
+    if (!this.canvas || !this.ctx) return;
+    this.isLiveDrawing = true;
+    const targetCtx = this.layerCanvases.get(this.layerManager.getActiveLayerId()) ?? this.ctx;
+    const targetCanvas = targetCtx.canvas;
+    if (!this.liveSnapshotCanvas) {
+      this.liveSnapshotCanvas = document.createElement('canvas');
+    }
+    if (this.liveSnapshotCanvas.width !== targetCanvas.width || this.liveSnapshotCanvas.height !== targetCanvas.height) {
+      this.liveSnapshotCanvas.width = targetCanvas.width;
+      this.liveSnapshotCanvas.height = targetCanvas.height;
+    }
+    const snapCtx = this.liveSnapshotCanvas.getContext('2d');
+    if (snapCtx) {
+      snapCtx.resetTransform();
+      snapCtx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+      snapCtx.drawImage(targetCanvas, 0, 0);
+    }
+  }
+
+  /** Terminate live drawing session and release the snapshot buffer. */
+  endLiveStroke(): void {
+    this.isLiveDrawing = false;
+    this.liveSnapshotCanvas = null;
+  }
+
+  /**
    * Draw a stroke-in-progress onto the canvas without adding it to the stroke list.
-   * Call this during pointermove for live feedback.
+   * Call this during pointerdown and pointermove for immediate live feedback.
    * After pointerup, call addStroke() and redraw().
    */
-  renderLiveStroke(points: StrokePoint[], tool: DrawingToolId, color: string, thickness: number, opacity: number, pattern: StrokePattern = 'solid'): void {
+  renderLiveStroke(
+    points: StrokePoint[],
+    tool: DrawingToolId,
+    color: string,
+    thickness: number,
+    opacity: number,
+    pattern: StrokePattern = 'solid',
+    inkFamily?: InkFamily,
+    liveTip?: StrokePoint,
+  ): void {
     if (!this.ctx || !this.canvas) return;
 
-    // Redraw everything first (clears the previous live preview)
-    this.redraw();
+    const ctx = this.layerCanvases.get(this.layerManager.getActiveLayerId()) ?? this.ctx;
+
+    if (this.isLiveDrawing && this.liveSnapshotCanvas) {
+      ctx.save();
+      ctx.resetTransform();
+      ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      ctx.drawImage(this.liveSnapshotCanvas, 0, 0);
+      ctx.restore();
+    } else {
+      this.redraw();
+    }
 
     // Then draw the live stroke on top
-    const ctx = this.layerCanvases.get(this.layerManager.getActiveLayerId()) ?? this.ctx;
     ctx.save();
     this.viewport.applyTransform(ctx);
+    const strokePoints = liveTip && points.length > 0 && (points[points.length - 1].x !== liveTip.x || points[points.length - 1].y !== liveTip.y)
+      ? [...points, liveTip]
+      : points;
     this.renderStroke(ctx, {
       id: '__live__',
       type: 'stroke',
       tool,
-      points,
+      points: strokePoints,
       color,
       thickness,
       opacity,
       pattern,
+      inkFamily,
       createdAt: 0,
     });
     ctx.restore();

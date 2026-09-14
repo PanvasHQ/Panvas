@@ -12,12 +12,17 @@ export interface PagePropertySet {
   template: PageTemplateId;
   ruleLineColor: string;
   orientation: 'portrait' | 'landscape';
-  pageSize: 'A4' | 'A5' | 'Letter' | 'Custom';
+  pageSize: 'A3' | 'A4' | 'A5' | 'Letter' | 'Custom';
   margins: 'No Margin' | 'Normal' | 'Narrow' | 'Wide';
   /** User-entered values for editable labels supplied by structured paper templates. */
   templateFields?: Record<string, string>;
   /** Additional writable page space in logical page pixels. The source page/PDF is unchanged. */
   extraHeight?: number;
+  /** Writable research space surrounding the fixed-size source page. */
+  extraTop?: number;
+  extraRight?: number;
+  extraBottom?: number;
+  extraLeft?: number;
 }
 
 export const DEFAULT_PAGE_PROPERTY_SET: PagePropertySet = {

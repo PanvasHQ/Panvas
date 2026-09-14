@@ -6,7 +6,12 @@
 
 import type { HistoryCommand } from './drawingTypes.ts';
 
-export type HistoryChangeListener = (canUndo: boolean, canRedo: boolean) => void;
+export type HistoryChangeSource = 'user' | 'load';
+export type HistoryChangeListener = (
+  canUndo: boolean,
+  canRedo: boolean,
+  source: HistoryChangeSource,
+) => void;
 
 export class HistoryManager {
   private undoStack: HistoryCommand[] = [];
@@ -24,11 +29,11 @@ export class HistoryManager {
     return () => this.listeners.delete(listener);
   }
 
-  private notify(): void {
+  private notify(source: HistoryChangeSource = 'user'): void {
     const canUndo = this.undoStack.length > 0;
     const canRedo = this.redoStack.length > 0;
     for (const listener of this.listeners) {
-      listener(canUndo, canRedo);
+      listener(canUndo, canRedo, source);
     }
   }
 
@@ -104,6 +109,6 @@ export class HistoryManager {
   clear(): void {
     this.undoStack.length = 0;
     this.redoStack.length = 0;
-    this.notify();
+    this.notify('load');
   }
 }

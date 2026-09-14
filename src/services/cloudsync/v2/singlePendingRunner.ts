@@ -4,6 +4,8 @@ export class SinglePendingRunner {
   private pending = false;
 
   get hasPending(): boolean { return this.pending; }
+  cancelPending(): void { this.pending = false; }
+  async whenIdle(): Promise<void> { await this.active; }
 
   request(run: () => Promise<void>): Promise<void> {
     if (this.active) {

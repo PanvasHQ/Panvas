@@ -15,7 +15,12 @@ export interface TemplateDefinition {
   category: TemplateCategory;
   description: string;
   supportsLineColor: boolean;
-  renderSVG: (width: number, height: number, lineColor: string, isDark: boolean) => React.ReactNode;
+  renderSVG: (width: number, height: number, lineColor: string, isDark: boolean, resourceScope: string) => React.ReactNode;
+}
+
+function paintResourceId(resourceScope: string, name: string): string {
+  const safeScope = resourceScope.replace(/[^a-zA-Z0-9_-]/g, '') || 'template';
+  return `panvas-${safeScope}-${name}`;
 }
 
 export const TEMPLATE_REGISTRY: Record<PageTemplate, TemplateDefinition> = {
@@ -91,15 +96,16 @@ export const TEMPLATE_REGISTRY: Record<PageTemplate, TemplateDefinition> = {
     category: 'Grid',
     description: 'Fine 14px square grid for math calculations and diagrams',
     supportsLineColor: true,
-    renderSVG: (width, height, color) => {
+    renderSVG: (width, height, color, _isDark, resourceScope) => {
+      const patternId = paintResourceId(resourceScope, 'small-grid');
       return (
         <g opacity={0.75}>
           <defs>
-            <pattern id="pat-small-grid" width="14" height="14" patternUnits="userSpaceOnUse">
+            <pattern id={patternId} width="14" height="14" patternUnits="userSpaceOnUse">
               <path d="M 14 0 L 0 0 0 14" fill="none" stroke={color} strokeWidth="0.75" />
             </pattern>
           </defs>
-          <rect width={width} height={height} fill="url(#pat-small-grid)" />
+          <rect width={width} height={height} fill={`url(#${patternId})`} />
         </g>
       );
     },
@@ -111,15 +117,16 @@ export const TEMPLATE_REGISTRY: Record<PageTemplate, TemplateDefinition> = {
     category: 'Grid',
     description: 'Spacious 28px square grid for technical sketching and layout',
     supportsLineColor: true,
-    renderSVG: (width, height, color) => {
+    renderSVG: (width, height, color, _isDark, resourceScope) => {
+      const patternId = paintResourceId(resourceScope, 'large-grid');
       return (
         <g opacity={0.8}>
           <defs>
-            <pattern id="pat-large-grid" width="28" height="28" patternUnits="userSpaceOnUse">
+            <pattern id={patternId} width="28" height="28" patternUnits="userSpaceOnUse">
               <path d="M 28 0 L 0 0 0 28" fill="none" stroke={color} strokeWidth="1" />
             </pattern>
           </defs>
-          <rect width={width} height={height} fill="url(#pat-large-grid)" />
+          <rect width={width} height={height} fill={`url(#${patternId})`} />
         </g>
       );
     },
@@ -131,15 +138,16 @@ export const TEMPLATE_REGISTRY: Record<PageTemplate, TemplateDefinition> = {
     category: 'Grid',
     description: '16px dot matrix pattern for bullet journaling and mockups',
     supportsLineColor: true,
-    renderSVG: (width, height, color) => {
+    renderSVG: (width, height, color, _isDark, resourceScope) => {
+      const patternId = paintResourceId(resourceScope, 'dotted');
       return (
         <g opacity={0.85}>
           <defs>
-            <pattern id="pat-dotted" width="16" height="16" patternUnits="userSpaceOnUse">
+            <pattern id={patternId} width="16" height="16" patternUnits="userSpaceOnUse">
               <circle cx="8" cy="8" r="1" fill={color} />
             </pattern>
           </defs>
-          <rect width={width} height={height} fill="url(#pat-dotted)" />
+          <rect width={width} height={height} fill={`url(#${patternId})`} />
         </g>
       );
     },
@@ -151,19 +159,21 @@ export const TEMPLATE_REGISTRY: Record<PageTemplate, TemplateDefinition> = {
     category: 'Grid',
     description: 'Multi-level engineering grid with major and minor divisions',
     supportsLineColor: true,
-    renderSVG: (width, height, color) => {
+    renderSVG: (width, height, color, _isDark, resourceScope) => {
+      const minorPatternId = paintResourceId(resourceScope, 'engineering-minor');
+      const majorPatternId = paintResourceId(resourceScope, 'engineering-major');
       return (
         <g opacity={0.85}>
           <defs>
-            <pattern id="pat-eng-minor" width="8" height="8" patternUnits="userSpaceOnUse">
+            <pattern id={minorPatternId} width="8" height="8" patternUnits="userSpaceOnUse">
               <path d="M 8 0 L 0 0 0 8" fill="none" stroke={color} strokeWidth="0.4" opacity="0.6" />
             </pattern>
-            <pattern id="pat-eng-major" width="40" height="40" patternUnits="userSpaceOnUse">
-              <rect width="40" height="40" fill="url(#pat-eng-minor)" />
+            <pattern id={majorPatternId} width="40" height="40" patternUnits="userSpaceOnUse">
+              <rect width="40" height="40" fill={`url(#${minorPatternId})`} />
               <path d="M 40 0 L 0 0 0 40" fill="none" stroke={color} strokeWidth="1.2" />
             </pattern>
           </defs>
-          <rect width={width} height={height} fill="url(#pat-eng-major)" />
+          <rect width={width} height={height} fill={`url(#${majorPatternId})`} />
         </g>
       );
     },

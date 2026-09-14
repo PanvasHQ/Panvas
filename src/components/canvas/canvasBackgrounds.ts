@@ -5,14 +5,13 @@ export interface CanvasBackgroundPreset {
 
 /** Stable, portable canvas background choices used by the Panvas toolbar. */
 export const CANVAS_BACKGROUND_PRESETS: readonly CanvasBackgroundPreset[] = [
-  { label: 'Light', color: '#ffffff' },
-  { label: 'Dark', color: '#1f1f1f' },
   { label: 'Warm Paper', color: '#f7f1e3' },
-  { label: 'Slate', color: '#475569' },
-  { label: 'Blue', color: '#dbeafe' },
-  { label: 'Green', color: '#dcfce7' },
-  { label: 'Yellow', color: '#fef3c7' },
-  { label: 'Rose', color: '#ffe4e6' },
+  { label: 'White', color: '#ffffff' },
+  { label: 'Soft Gray', color: '#f1f3f5' },
+  { label: 'Soft Blue', color: '#e7f0ff' },
+  { label: 'Subtle Green', color: '#e8f5ec' },
+  { label: 'Charcoal', color: '#242424' },
+  { label: 'Black', color: '#000000' },
   { label: 'Transparent', color: 'transparent' },
 ];
 

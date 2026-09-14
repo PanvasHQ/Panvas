@@ -21,6 +21,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { useAuthStore } from '@/stores/authStore';
+import { navigateToLibraryView } from '@/services/library/libraryRouteState';
 import {
   createLocalSearchScopeKey,
   localSearchIndex,
@@ -102,10 +103,10 @@ export function CommandPalette() {
       },
       {
         id: 'cloud-sync',
-        label: 'Cloud Sync / Sign In',
+        label: 'Cloud Sync',
         category: 'Actions',
         icon: <Cloud size={15} />,
-        action: () => { closeCommandPalette(); navigate('/auth/login'); },
+        action: () => { closeCommandPalette(); navigateToLibraryView('cloud'); navigate('/app/library'); },
       },
     );
 
@@ -263,7 +264,7 @@ export function CommandPalette() {
 
   return (
     <AnimatePresence>
-      <div className="panvas-layer-modal fixed inset-0 flex items-start justify-center pt-[15vh]">
+      <div className="panvas-layer-modal fixed inset-0 flex items-start justify-center pt-[15vh] max-[599px]:items-center max-[599px]:p-3 max-[599px]:pt-3">
         {/* Backdrop */}
         <motion.div
           initial={{ opacity: 0 }}
@@ -279,7 +280,7 @@ export function CommandPalette() {
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: -10 }}
           transition={{ duration: 0.15, ease: 'easeOut' }}
-          className="relative w-full max-w-lg rounded-xl glass-panel overflow-hidden shadow-2xl"
+          className="relative w-full max-w-lg overflow-hidden rounded-xl glass-panel shadow-2xl max-[599px]:flex max-[599px]:max-h-[calc(100dvh-1.5rem)] max-[599px]:flex-col"
         >
           {/* Search Input */}
           <div className="flex items-center gap-3 px-4 py-3 border-b border-panvas-border-subtle">
@@ -301,7 +302,7 @@ export function CommandPalette() {
           </div>
 
           {/* Results */}
-          <div className="max-h-[380px] overflow-y-auto py-2">
+          <div className="max-h-[380px] overflow-y-auto py-2 max-[599px]:min-h-0 max-[599px]:max-h-none max-[599px]:flex-1">
             {filteredCommands.length === 0 ? (
               <div className="px-4 py-8 text-center text-sm text-panvas-text-tertiary">
                 No results found

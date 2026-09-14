@@ -6,12 +6,12 @@ import React, { useEffect, useRef } from 'react';
 import { useLocation } from 'wouter';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
-import { DocumentTabBar } from './DocumentTabBar';
 import { StatusBar } from './StatusBar';
 import { useUIStore } from '@/stores/uiStore';
 import { useLayoutStore } from '@/stores/layoutStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { useIsMobileViewport } from '@/hooks/useIsMobileViewport';
+import { useMobileVisualViewport } from '@/hooks/useMobileVisualViewport';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -19,10 +19,12 @@ interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   const { isSidebarOpen, sidebarWidth } = useUIStore();
-  const { notebookModeLevel, isNotebookPaneVisible, workspaceViewMode, openTabs } = useLayoutStore();
+  const { notebookModeLevel, isNotebookPaneVisible, workspaceViewMode } = useLayoutStore();
   const activePageId = useWorkspaceStore(state => state.activePageId);
   const activeCanvasId = useWorkspaceStore(state => state.activeCanvasId);
   const isMobileViewport = useIsMobileViewport();
+  const useLibraryDrawer = useIsMobileViewport(819);
+  useMobileVisualViewport(isMobileViewport);
   const [location] = useLocation();
   const hideAppChrome = notebookModeLevel > 0 || workspaceViewMode === 'present';
 
@@ -31,17 +33,33 @@ export function AppShell({ children }: AppShellProps) {
   // it, Escape closes it, and the scrim tap closes it. Desktop and tablet
   // keep the inline sidebar untouched.
   const lastDismissSignalRef = useRef(`${location}|${activePageId ?? ''}|${activeCanvasId ?? ''}`);
+  const enteredMobileViewportRef = useRef(false);
+
+  // A persistent desktop sidebar should not obscure a newly opened phone
+  // workspace. This runs only when crossing into the phone breakpoint, never
+  // when the person intentionally opens the drawer from the top bar.
+  useEffect(() => {
+    if (!useLibraryDrawer) {
+      enteredMobileViewportRef.current = false;
+      return;
+    }
+    if (enteredMobileViewportRef.current) return;
+    enteredMobileViewportRef.current = true;
+    const { isSidebarOpen: open, toggleSidebar } = useUIStore.getState();
+    if (open) toggleSidebar();
+  }, [useLibraryDrawer]);
+
   useEffect(() => {
     const signal = `${location}|${activePageId ?? ''}|${activeCanvasId ?? ''}`;
     if (lastDismissSignalRef.current === signal) return;
     lastDismissSignalRef.current = signal;
-    if (!isMobileViewport) return;
+    if (!useLibraryDrawer) return;
     const { isSidebarOpen: open, toggleSidebar } = useUIStore.getState();
     if (open) toggleSidebar();
-  }, [location, activePageId, activeCanvasId, isMobileViewport]);
+  }, [location, activePageId, activeCanvasId, useLibraryDrawer]);
 
   useEffect(() => {
-    if (!isMobileViewport || !isSidebarOpen) return undefined;
+    if (!useLibraryDrawer || !isSidebarOpen) return undefined;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       const { isSidebarOpen: open, toggleSidebar } = useUIStore.getState();
@@ -49,14 +67,13 @@ export function AppShell({ children }: AppShellProps) {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isMobileViewport, isSidebarOpen]);
+  }, [useLibraryDrawer, isSidebarOpen]);
 
   return (
-    <div className="panvas-app-shell h-screen w-screen flex flex-col overflow-hidden bg-panvas-bg-primary">
+    <div className="panvas-app-shell h-screen w-full min-w-0 flex flex-col overflow-hidden bg-panvas-bg-primary">
       {/* Top Bar */}
       <div className={hideAppChrome ? 'hidden' : ''}>
         <TopBar />
-        {openTabs.length > 0 && <DocumentTabBar />}
       </div>
 
       {/* Main Content */}
@@ -67,23 +84,23 @@ export function AppShell({ children }: AppShellProps) {
             type="button"
             onClick={() => useUIStore.getState().toggleSidebar()}
             aria-label="Close library sidebar"
-            className="fixed inset-0 z-30 bg-black/20 hidden max-[599px]:block"
+            className="fixed inset-0 z-30 bg-black/20 hidden max-[819px]:block"
           />
         )}
         {/* Main Sidebar. On phones it overlays the full-width content row
             instead of squeezing it, so document layout never changes. */}
-        <div className={(hideAppChrome || !isSidebarOpen) ? 'hidden' : 'flex-shrink-0 h-full overflow-hidden max-[599px]:absolute max-[599px]:inset-y-0 max-[599px]:left-0 max-[599px]:z-40 max-[599px]:h-full max-[599px]:shadow-2xl'} style={{ width: sidebarWidth }}>
+        <div className={(hideAppChrome || !isSidebarOpen) ? 'hidden' : 'h-full flex-shrink-0 overflow-hidden max-[1023px]:max-w-[14rem] max-[599px]:absolute max-[819px]:absolute max-[819px]:inset-y-0 max-[819px]:left-0 max-[819px]:z-40 max-[819px]:h-full max-[819px]:shadow-2xl'} style={{ width: sidebarWidth }}>
           <Sidebar />
         </div>
 
         {/* Canvas Area */}
-        <div className="flex-1 relative overflow-hidden">
+        <div className="flex-1 min-w-0 min-h-0 relative overflow-hidden">
           {children}
         </div>
       </div>
 
       {/* Status Bar */}
-      <div className={hideAppChrome ? 'hidden' : ''}>
+      <div className={hideAppChrome ? 'hidden' : 'max-[599px]:hidden'}>
         <StatusBar />
       </div>
     </div>

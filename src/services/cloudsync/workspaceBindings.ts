@@ -6,6 +6,7 @@ const LEGACY_STORAGE_KEY = 'panvas.cloudWorkspaceBindings';
 export interface BindingStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
+  removeItem?(key: string): void;
 }
 
 function defaultStorage(): BindingStorage | null {
@@ -124,6 +125,18 @@ export function moveWorkspaceBinding(
   return next;
 }
 
+/** Restore a previously loaded binding snapshot when an explicit adoption
+ * fails before its sync run starts. This is intentionally narrow and never
+ * touches remote files. */
+export function replaceWorkspaceBindings(
+  bindings: readonly CloudWorkspaceBinding[],
+  storage: BindingStorage | null = defaultStorage(),
+): CloudWorkspaceBinding[] {
+  const next = [...bindings];
+  if (storage) storage.setItem(STORAGE_KEY, JSON.stringify(next));
+  return next;
+}
+
 export function bindingsForAccount(bindings: readonly CloudWorkspaceBinding[], providerAccountId: string): CloudWorkspaceBinding[] {
   return bindings.filter(item => item.provider === 'googledrive' && item.providerAccountId === providerAccountId && item.remoteWorkspaceId === item.workspaceId);
 }
@@ -131,4 +144,28 @@ export function bindingsForAccount(bindings: readonly CloudWorkspaceBinding[], p
 export function attachedWorkspaceIds(bindings: readonly CloudWorkspaceBinding[], providerAccountId: string, localWorkspaceIds: readonly string[]): string[] {
   const local = new Set(localWorkspaceIds);
   return bindingsForAccount(bindings, providerAccountId).filter(item => local.has(item.workspaceId)).map(item => item.workspaceId);
+}
+
+/** Remove only bindings for the local roots being reset. Account history for
+ * other roots is retained so a later account switch cannot gain ownership of
+ * unrelated data by accident. */
+export function removeWorkspaceBindingsForIds(
+  workspaceIds: readonly string[],
+  storage: BindingStorage | null = defaultStorage(),
+): CloudWorkspaceBinding[] {
+  if (!storage) return [];
+  const ids = new Set(workspaceIds);
+  const readAll = (key: string): unknown[] => {
+    try {
+      const parsed = JSON.parse(storage.getItem(key) ?? '[]');
+      if (Array.isArray(parsed)) return parsed;
+      if (parsed && typeof parsed === 'object') return Object.values(parsed);
+    } catch { /* malformed binding metadata is disposable during reset */ }
+    return [];
+  };
+  const next = readAll(STORAGE_KEY).filter(item => !(item && typeof item === 'object' && ids.has((item as { workspaceId?: unknown }).workspaceId as string)))
+    .filter(valid);
+  storage.setItem(STORAGE_KEY, JSON.stringify(next));
+  if (storage.removeItem) storage.removeItem(LEGACY_STORAGE_KEY);
+  return next;
 }

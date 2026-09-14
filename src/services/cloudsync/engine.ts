@@ -26,6 +26,8 @@ export interface ScannedSyncEntity {
   bytes: Uint8Array | null;
   tombstone: boolean;
   deletedAt: number | null;
+  /** Stale ownership rows may be considered only during verified recovery. */
+  ownership?: 'current' | 'unowned-recovery' | 'foreign-recovery';
 }
 
 export interface DeviceManifestState { lastSeenRevision: number }

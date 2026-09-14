@@ -8,6 +8,7 @@ const DB_STORE = 'state';
 export interface AsyncStringStorage {
   getItem(key: string): Promise<string | null>;
   setItem(key: string, value: string): Promise<void>;
+  clear?(): Promise<void>;
 }
 
 class IndexedDbStringStorage implements AsyncStringStorage {
@@ -45,6 +46,17 @@ class IndexedDbStringStorage implements AsyncStringStorage {
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB write failed.'));
       transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB write aborted.'));
+    });
+  }
+
+  async clear(): Promise<void> {
+    const database = await this.open();
+    return new Promise((resolve, reject) => {
+      const transaction = database.transaction(DB_STORE, 'readwrite');
+      transaction.objectStore(DB_STORE).clear();
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB clear failed.'));
+      transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB clear aborted.'));
     });
   }
 }
@@ -98,5 +110,26 @@ export class LocalStorageSyncV2BaselineStore implements SyncV2BaselineStore {
 
   async saveWorkspace(workspaceId: string, records: SyncV2BaselineRecord[]): Promise<void> {
     await this.write(`${BASELINE_PREFIX}${workspaceId}`, JSON.stringify(records));
+  }
+
+  async clear(): Promise<void> {
+    if (this.durable?.clear) {
+      try { await this.durable.clear(); }
+      catch { /* Fall back to the localStorage copy below. */ }
+    }
+    const storage = this.storage as unknown as Pick<Storage, 'removeItem' | 'key' | 'length'> & { getItem: Storage['getItem'] };
+    if (typeof storage.removeItem !== 'function') return;
+    const keys: string[] = [];
+    if (typeof storage.key === 'function') {
+      for (let index = 0; index < (storage.length ?? 0); index += 1) {
+        const key = storage.key(index);
+        if (key && (key === PROFILE_KEY || key.startsWith(BASELINE_PREFIX))) keys.push(key);
+      }
+    }
+    // A minimal test storage may not implement key/length; the profile key is
+    // still safe to remove and workspace BASE keys are removed by callers that
+    // provide a complete Storage implementation.
+    keys.push(PROFILE_KEY);
+    for (const key of new Set(keys)) storage.removeItem(key);
   }
 }

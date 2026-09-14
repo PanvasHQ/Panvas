@@ -3,6 +3,8 @@ import type { CloudSyncProvider, RecordPointer, SyncEntityKind, SyncJournalEntry
 import { db } from '../../database/schema.ts';
 import type { SyncEntryError, SyncEntryErrorClass, SyncJournalStore } from './engine.ts';
 import { decodeAssetEnvelope } from './assetEnvelope.ts';
+import { applyBrowserRecord } from './browserApply.ts';
+import { cloudApplyFailure } from './errors.ts';
 
 const APPLY_PHASE: Record<SyncEntityKind, number> = {
   workspace: 0,
@@ -19,7 +21,7 @@ const APPLY_PHASE: Record<SyncEntityKind, number> = {
 };
 
 export interface RemoteRecordLocalAdapter {
-  applyRecord(input: { workspaceId: string; pointer: RecordPointer; bytes: Uint8Array | null }): Promise<void>;
+  applyRecord(input: { workspaceId: string; pointer: RecordPointer; bytes: Uint8Array | null; allowStaleOwnershipRepair?: boolean; schemaVersion?: string | number }): Promise<void>;
 }
 
 function applyFailure(error: unknown, pointer: RecordPointer, stage: 'remote-object-download' | 'remote-record-apply'): SyncEntryError {
@@ -151,18 +153,34 @@ export async function applyRemoteChanges(input: {
 }
 
 export const defaultRemoteRecordLocalAdapter: RemoteRecordLocalAdapter = {
-  async applyRecord({ workspaceId, pointer, bytes }) {
-    if (pointer.tombstone) { await applySoftDelete(workspaceId, pointer.kind, pointer.id); return; }
-    if (!bytes) throw new Error('Remote object bytes are unavailable.');
-    if (pointer.kind === 'asset') { await saveAssetLocally(bytes); return; }
-    const payload = JSON.parse(new TextDecoder().decode(bytes));
-    await savePayloadLocally(workspaceId, pointer.kind, pointer.id, payload, false);
+  async applyRecord({ workspaceId, pointer, bytes, allowStaleOwnershipRepair = false, schemaVersion }) {
+    try {
+      if (!(typeof window !== 'undefined' && window.panvas)) {
+        await applyBrowserRecord(workspaceId, pointer, bytes, { allowStaleOwnershipRepair, schemaVersion });
+        return;
+      }
+      if (pointer.tombstone) { await applySoftDelete(workspaceId, pointer.kind, pointer.id, pointer.parentId); return; }
+      if (!bytes) throw new Error('Remote object bytes are unavailable.');
+      if (pointer.kind === 'asset') { await saveAssetLocally(bytes); return; }
+      const payload = JSON.parse(new TextDecoder().decode(bytes));
+      await savePayloadLocally(workspaceId, pointer.kind, pointer.id, payload, false, pointer.parentId);
+    } catch (error) {
+      throw cloudApplyFailure(error, {
+        workspaceId,
+        entityKind: pointer.kind,
+        entityId: pointer.id,
+        parentId: pointer.parentId,
+        operation: pointer.tombstone ? 'delete' : 'apply',
+        throwingFunction: 'defaultRemoteRecordLocalAdapter',
+        schemaVersion: schemaVersion ?? pointer.encoding ?? undefined,
+      });
+    }
   },
 };
 
-async function applySoftDelete(workspaceId: string, kind: SyncEntityKind, id: string): Promise<void> {
+async function applySoftDelete(workspaceId: string, kind: SyncEntityKind, id: string, parentId?: string | null): Promise<void> {
   if (typeof window !== 'undefined' && window.panvas?.cloudsync?.applyRemoteRecord && kind !== 'asset') {
-    await window.panvas.cloudsync.applyRemoteRecord(workspaceId, { kind, id, payload: null, tombstone: true });
+    await window.panvas.cloudsync.applyRemoteRecord(workspaceId, { kind, id, parentId, payload: null, tombstone: true });
     return;
   }
   const deletedAt = Date.now();
@@ -192,9 +210,9 @@ async function saveAssetLocally(bytes: Uint8Array): Promise<void> {
   }
 }
 
-async function savePayloadLocally(workspaceId: string, kind: SyncEntityKind, id: string, payload: any, tombstone: boolean): Promise<void> {
+async function savePayloadLocally(workspaceId: string, kind: SyncEntityKind, id: string, payload: any, tombstone: boolean, parentId?: string | null): Promise<void> {
   if (typeof window !== 'undefined' && window.panvas?.cloudsync?.applyRemoteRecord) {
-    await window.panvas.cloudsync.applyRemoteRecord(workspaceId, { kind, id, payload, tombstone });
+    await window.panvas.cloudsync.applyRemoteRecord(workspaceId, { kind, id, parentId, payload, tombstone });
     return;
   }
   if (kind === 'workspace') await db.workspaces.put(payload);

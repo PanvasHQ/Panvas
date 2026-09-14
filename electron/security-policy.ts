@@ -11,6 +11,16 @@ export function isTrustedRendererUrl(url: string, devServerUrl: string | undefin
   }
 }
 
+export interface IpcSenderLike {
+  senderFrame?: { url?: string; parent?: unknown } | null;
+}
+
+/** IPC privileges belong only to the trusted top-level Panvas document. */
+export function isTrustedIpcSender(event: IpcSenderLike, devServerUrl: string | undefined, rendererDirectory: string): boolean {
+  const frame = event.senderFrame;
+  return Boolean(frame && frame.parent === null && isTrustedRendererUrl(frame.url ?? '', devServerUrl, rendererDirectory));
+}
+
 export function isAudioOnlyMediaRequest(permission: string, mediaTypes: readonly string[] | undefined, isMainFrame: boolean): boolean {
   return permission === 'media'
     && isMainFrame

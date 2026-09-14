@@ -2,7 +2,7 @@
 // Panvas — Main App Component
 // ============================================
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AppShell } from '@/components/layout/AppShell';
 import { WorkspaceContent } from '@/components/workspace/WorkspaceContent';
 import { CommandPalette } from '@/components/ui/CommandPalette';
@@ -11,35 +11,33 @@ import { Toast } from '@/components/ui/Toast';
 import { CreateDialog } from '@/components/workspace/CreateDialog';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { useAuthStore } from '@/stores/authStore';
-import { useSyncStore } from '@/stores/syncStore';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { initializeDatabase } from '@/database/schema';
-import { migrateFromDexieToFs } from '@/lib/migration';
-import { syncScheduler } from '@/services/sync/SyncScheduler';
-import { bootstrapCloudSync, getPendingCount, getLastSyncError } from '@/services/sync/SyncEngine';
+import { migrateFromDexieToFs, needsDexieToFsMigration } from '@/lib/migration';
 import { Redirect, Route, Switch, Router, useLocation } from 'wouter';
 import { useHashLocation } from 'wouter/use-hash-location';
 import { usePanvasLocation, isDesktop } from '@/lib/location';
 import { LandingPage } from '@/components/marketing/LandingPage';
 import { ComingSoonPage } from '@/components/marketing/ComingSoonPage';
 import { RoadmapPage } from '@/components/marketing/RoadmapPage';
+import { DownloadPage } from '@/components/marketing/DownloadPage';
+import { NotFoundPage } from '@/components/marketing/NotFoundPage';
 import { PrivacyPolicyPage } from '@/components/legal/PrivacyPolicyPage';
 import { TermsOfServicePage } from '@/components/legal/TermsOfServicePage';
 import { SecurityPage } from '@/components/legal/SecurityPage';
 // Auth Pages
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AuthCallbackHandler } from '@/components/auth/AuthCallbackHandler';
-import { LoginPage } from '@/components/auth/LoginPage';
-import { SignUpPage } from '@/components/auth/SignUpPage';
 import { VerifyEmailPage } from '@/components/auth/VerifyEmailPage';
-import { ForgotPasswordPage } from '@/components/auth/ForgotPasswordPage';
-import { ResetPasswordPage } from '@/components/auth/ResetPasswordPage';
 import { SettingsLayout } from '@/components/settings/SettingsLayout';
 import { LibraryWorkspace } from '@/components/library/LibraryWorkspace';
 import { KnowledgeWorkspace } from '@/components/knowledge/KnowledgeWorkspace';
 import { CLOUD_SYNC_ENABLED } from '@/config/features';
+import { useCloudSyncStore } from '@/stores/cloudSyncStore';
 import { rememberAppRoute } from '@/services/library/libraryRouteState';
+import { PANVAS_LOGO_SRC } from '@/lib/brand';
 import { scheduleDeferredLocalModelPreparation } from '@/services/recognition/modelPreparation';
+import { ViewportErrorBoundary } from '@/components/ui/ErrorBoundary';
 
 function AppRouteMemory() {
   const [location] = useLocation();
@@ -51,12 +49,21 @@ function AppRouteMemory() {
 // harness code never touches the startup bundle.
 const HandwritingBenchmarkLab = React.lazy(() => import('@/dev/HandwritingBenchmarkLab'));
 
+// These account forms are retained for existing deep links and session flows,
+// but are not part of the local-first workspace startup bundle.
+const LoginPage = React.lazy(() => import('@/components/auth/LoginPage').then(({ LoginPage }) => ({ default: LoginPage })));
+const SignUpPage = React.lazy(() => import('@/components/auth/SignUpPage').then(({ SignUpPage }) => ({ default: SignUpPage })));
+const ForgotPasswordPage = React.lazy(() => import('@/components/auth/ForgotPasswordPage').then(({ ForgotPasswordPage }) => ({ default: ForgotPasswordPage })));
+const ResetPasswordPage = React.lazy(() => import('@/components/auth/ResetPasswordPage').then(({ ResetPasswordPage }) => ({ default: ResetPasswordPage })));
+
+function LegacyAuthFallback() {
+  return <div role="status" aria-live="polite" className="min-h-screen grid place-content-center p-8 text-sm text-panvas-text-secondary">Opening account page…</div>;
+}
+
 export function App() {
   const [isReady, setIsReady] = useState(false);
   const { loadWorkspaces, loadRecentFiles, loadTrash } = useWorkspaceStore();
-  const { initAuth, user } = useAuthStore();
-  const { setStatus, setPendingChanges, setLastSyncedAt, setLastError } = useSyncStore();
-  const bootstrappedUserId = useRef<string | null>(null);
+  const { initAuth } = useAuthStore();
 
   // Register keyboard shortcuts
   useKeyboardShortcuts();
@@ -88,11 +95,8 @@ export function App() {
           console.warn('[App] Dexie init failed. This is fine if using Electron IPC.', e);
         }
         
-        // 2.5 Run Dexie to Filesystem Migration (idempotent, only runs in Electron)
-        await migrateFromDexieToFs();
-
         // 3. Load workspace data strictly scoped to this user
-        await loadWorkspaces();
+        const bootstrapSnapshot = await loadWorkspaces();
         // 3.1 Restore the persisted active document through the canonical
         // workspace-content path: it hydrates the active workspace's records
         // first, validates the stored page/canvas ids against them, and
@@ -106,15 +110,24 @@ export function App() {
 
         // 3.5 Load global settings
         const { useNotebookSettingsStore } = await import('@/stores/notebookSettingsStore');
-        await useNotebookSettingsStore.getState().loadSettings();
-
-        // 4. Start sync scheduler
-        if (CLOUD_SYNC_ENABLED) syncScheduler.start();
+        if (!bootstrapSnapshot) await useNotebookSettingsStore.getState().loadSettings();
 
         // The default-landing decision may fall back to the Library only
         // after the restore pass above has settled.
         useWorkspaceStore.getState().markInitialDocumentRestoreComplete();
         setIsReady(true);
+        // Legacy Dexie import can be substantial on long-lived profiles. It
+        // is recovery work, not a prerequisite for rendering the existing
+        // filesystem library, so it must never hold the startup splash open.
+        // Cloud Sync joins this same single-flight run before reading local
+        // workspace IDs, which prevents migration/sync races.
+        if (needsDexieToFsMigration()) {
+          window.setTimeout(() => {
+            void migrateFromDexieToFs()
+              .then(() => useWorkspaceStore.getState().loadWorkspaces())
+              .catch(error => console.warn('[App] Deferred legacy import did not complete.', error instanceof Error ? error.name : 'Error'));
+          }, 0);
+        }
         // Background local-model preparation (dormant while the neural
         // fallback is disabled): never blocks startup, only runs when no
         // native handwriting provider exists, and only at idle.
@@ -130,13 +143,13 @@ export function App() {
 
     init();
 
-    return () => {
-      syncScheduler.stop();
-    };
   }, [loadWorkspaces, loadRecentFiles, loadTrash, initAuth]);
 
   useEffect(() => {
-    const updateConnectivity = () => useSyncStore.getState().setOnline(navigator.onLine);
+    if (!CLOUD_SYNC_ENABLED || !isReady) return;
+    const cloudSync = useCloudSyncStore.getState();
+    void cloudSync.initialize();
+    const updateConnectivity = () => useCloudSyncStore.getState().setConnectivity(navigator.onLine);
     updateConnectivity();
     window.addEventListener('online', updateConnectivity);
     window.addEventListener('offline', updateConnectivity);
@@ -144,67 +157,7 @@ export function App() {
       window.removeEventListener('online', updateConnectivity);
       window.removeEventListener('offline', updateConnectivity);
     };
-  }, []);
-
-  useEffect(() => {
-    if (!CLOUD_SYNC_ENABLED || !isReady || !user?.id) {
-      if (!user?.id) bootstrappedUserId.current = null;
-      return;
-    }
-
-    if (bootstrappedUserId.current === user.id) return;
-    bootstrappedUserId.current = user.id;
-    const userId = user.id;
-
-    let cancelled = false;
-
-    async function bootstrap() {
-      try {
-        setStatus('syncing');
-        const { failed } = await bootstrapCloudSync(userId);
-        if (cancelled) return;
-
-        setStatus(failed > 0 ? 'error' : 'synced');
-        if (failed > 0) setLastError(await getLastSyncError());
-        if (failed === 0) {
-          setLastSyncedAt(Date.now());
-          setLastError(null);
-          // Catch brand new cloud users: if sync succeeded but they have 0 workspaces,
-          // create the default system workspaces and queue them for cloud upload.
-          await initializeDatabase(userId);
-        }
-
-        await loadWorkspaces();
-        await loadRecentFiles();
-        await loadTrash();
-      } catch (err) {
-        console.error('[App] Cloud sync bootstrap failed:', err);
-        if (!cancelled) {
-          setStatus('error');
-          setLastError(err instanceof Error ? err.message : String(err));
-        }
-      } finally {
-        if (!cancelled) {
-          setPendingChanges(await getPendingCount());
-        }
-      }
-    }
-
-    bootstrap();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    isReady,
-    user?.id,
-    loadWorkspaces,
-    loadRecentFiles,
-    loadTrash,
-    setStatus,
-    setPendingChanges,
-    setLastSyncedAt,
-  ]);
+  }, [isReady]);
 
   // Loading screen — Panvas brand mark, compact wordmark, one restrained
   // progress hairline. It renders only while bootstrap awaits and vanishes
@@ -213,7 +166,7 @@ export function App() {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-panvas-bg-primary">
         <div className="flex flex-col items-center gap-3 animate-fade-in">
-          <img src="./panvas_logo.png" alt="" className="w-14 h-14 rounded-2xl shadow-glass-sm" aria-hidden="true" />
+          <img src={PANVAS_LOGO_SRC} alt="" className="w-14 h-14 rounded-2xl shadow-glass-sm" aria-hidden="true" />
           <p className="text-sm font-semibold tracking-tight text-panvas-text-primary">Panvas</p>
           <div className="w-24 h-0.5 rounded-full bg-panvas-bg-tertiary overflow-hidden" aria-hidden="true">
             <div className="h-full w-2/5 rounded-full bg-panvas-text-secondary/70 animate-[slideInRight_1.4s_ease-in-out_infinite]" />
@@ -225,7 +178,7 @@ export function App() {
   }
 
   return (
-    <Router hook={usePanvasLocation}>
+      <Router hook={usePanvasLocation}>
       <AppRouteMemory />
       <Switch>
         {/* Normal Panvas builds open the workspace at the bare origin. The
@@ -236,16 +189,17 @@ export function App() {
         </Route>
         <Route path="/landing" component={LandingPage} />
         <Route path="/app/landing" component={LandingPage} />
+        <Route path="/download" component={DownloadPage} />
         <Route path="/privacy" component={PrivacyPolicyPage} />
         <Route path="/terms" component={TermsOfServicePage} />
         <Route path="/security" component={SecurityPage} />
         <Route path="/roadmap" component={RoadmapPage} />
         {/* Auth routes */}
-        <Route path="/auth/login" component={LoginPage} />
-        <Route path="/auth/signup" component={SignUpPage} />
+        <Route path="/auth/login"><React.Suspense fallback={<LegacyAuthFallback />}><LoginPage /></React.Suspense></Route>
+        <Route path="/auth/signup"><React.Suspense fallback={<LegacyAuthFallback />}><SignUpPage /></React.Suspense></Route>
         <Route path="/auth/verify-email" component={VerifyEmailPage} />
-        <Route path="/auth/forgot-password" component={ForgotPasswordPage} />
-        <Route path="/auth/reset-password" component={ResetPasswordPage} />
+        <Route path="/auth/forgot-password"><React.Suspense fallback={<LegacyAuthFallback />}><ForgotPasswordPage /></React.Suspense></Route>
+        <Route path="/auth/reset-password"><React.Suspense fallback={<LegacyAuthFallback />}><ResetPasswordPage /></React.Suspense></Route>
         <Route path="/auth/callback" component={AuthCallbackHandler} />
         <Route path="/private-beta" component={ComingSoonPage} />
         <Route path="/app/settings/:tab*">
@@ -270,7 +224,9 @@ export function App() {
         <Route path="/app/library">
           <AuthGuard>
             <AppShell>
-              <LibraryWorkspace />
+              <ViewportErrorBoundary surface="Library workspace">
+                <LibraryWorkspace />
+              </ViewportErrorBoundary>
             </AppShell>
           </AuthGuard>
         </Route>
@@ -284,6 +240,7 @@ export function App() {
         <Route>
           <LandingPage />
         </Route>
+        <Route component={NotFoundPage} />
       </Switch>
 
       {/* Overlays */}
@@ -291,6 +248,6 @@ export function App() {
       <CreateDialog />
       <ContextMenu />
       <Toast />
-    </Router>
+      </Router>
   );
 }

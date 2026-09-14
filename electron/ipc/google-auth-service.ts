@@ -7,6 +7,25 @@ import { generateRandomString, generateCodeChallenge } from '../../src/services/
 
 export { generateRandomString, generateCodeChallenge };
 
+const TOKEN_FILE_NAME = 'google_auth_tokens.enc';
+
+export function resolveGoogleTokenFilePath(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const platformPath = platform === 'win32' ? path.win32 : path.posix;
+  if (platform === 'win32') {
+    const roaming = env.APPDATA || (env.USERPROFILE ? platformPath.join(env.USERPROFILE, 'AppData', 'Roaming') : '');
+    return roaming ? platformPath.join(roaming, 'Panvas', TOKEN_FILE_NAME) : '';
+  }
+  if (platform === 'darwin') {
+    const home = env.HOME || env.USERPROFILE || '';
+    return home ? platformPath.join(home, 'Library', 'Application Support', 'Panvas', TOKEN_FILE_NAME) : '';
+  }
+  const config = env.XDG_CONFIG_HOME || ((env.HOME || env.USERPROFILE) ? platformPath.join(env.HOME || env.USERPROFILE || '', '.config') : '');
+  return config ? platformPath.join(config, 'Panvas', TOKEN_FILE_NAME) : '';
+}
+
 export interface StoredTokens {
   accessToken: string;
   refreshToken: string;
@@ -69,6 +88,9 @@ async function getElectronModule() {
   }
 }
 
+const DEFAULT_GOOGLE_CLIENT_ID = process.env.PANVAS_GOOGLE_CLIENT_ID || '';
+const DEFAULT_GOOGLE_CLIENT_SECRET = process.env.PANVAS_GOOGLE_CLIENT_SECRET || '';
+
 export class GoogleAuthService {
   private tokenFilePath: string;
   private tokenEndpoint: string;
@@ -78,6 +100,8 @@ export class GoogleAuthService {
   private fetchFn: typeof fetch;
   private defaultClientId?: string;
   private defaultClientSecret?: string;
+  private tokenOperation: Promise<void> = Promise.resolve();
+  private tokenGeneration = 0;
 
   constructor(options: GoogleAuthServiceOptions = {}) {
     this.tokenFilePath = options.tokenFilePath || '';
@@ -94,7 +118,7 @@ export class GoogleAuthService {
     if (custom !== undefined) return custom.trim();
     if (this.defaultClientId !== undefined) return this.defaultClientId.trim();
     ensureEnvLoaded();
-    return (process.env.PANVAS_GOOGLE_CLIENT_ID || '').trim();
+    return (process.env.PANVAS_GOOGLE_CLIENT_ID || DEFAULT_GOOGLE_CLIENT_ID).trim();
   }
 
   private resolveClientSecret(custom?: string): string {
@@ -102,21 +126,21 @@ export class GoogleAuthService {
     if (this.defaultClientSecret !== undefined) return this.defaultClientSecret.trim();
     ensureEnvLoaded();
     // Accept the historical short name as well; keep the secret main-process only.
-    return (process.env.PANVAS_GOOGLE_CLIENT_SECRET || process.env.PANVAS_GOOGLE_SECRET || '').trim();
+    return (process.env.PANVAS_GOOGLE_CLIENT_SECRET || process.env.PANVAS_GOOGLE_SECRET || DEFAULT_GOOGLE_CLIENT_SECRET).trim();
   }
 
   private async resolveTokenFilePath(): Promise<string> {
     if (this.tokenFilePath) return this.tokenFilePath;
     const electron = await getElectronModule();
     if (electron?.app?.getPath) {
-      this.tokenFilePath = path.join(electron.app.getPath('userData'), 'google_auth_tokens.enc');
-      return this.tokenFilePath;
+      const userDataPath = electron.app.getPath('userData');
+      if (userDataPath) {
+        this.tokenFilePath = path.join(userDataPath, TOKEN_FILE_NAME);
+        return this.tokenFilePath;
+      }
     }
-    if (process.env.APPDATA) {
-      this.tokenFilePath = path.join(process.env.APPDATA, 'Panvas', 'google_auth_tokens.enc');
-      return this.tokenFilePath;
-    }
-    return '';
+    this.tokenFilePath = resolveGoogleTokenFilePath();
+    return this.tokenFilePath;
   }
 
   /**
@@ -134,6 +158,7 @@ export class GoogleAuthService {
     const codeChallenge = generateCodeChallenge(codeVerifier);
     const state = generateRandomString(24);
 
+    const authGeneration = this.tokenGeneration;
     return new Promise((resolve, reject) => {
       let resolved = false;
 
@@ -147,10 +172,22 @@ export class GoogleAuthService {
             return;
           }
 
+          const incomingState = reqUrl.searchParams.get('state');
+          if (incomingState !== state) {
+            res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(await this.renderHtmlResponse(false, 'Invalid state or missing authorization code.'));
+            cleanup();
+            if (!resolved) {
+              resolved = true;
+              reject(new GoogleAuthDiagnosticError({ stage: 'authorization_callback', reason: 'invalid_state' }));
+            }
+            return;
+          }
+
           const errorParam = reqUrl.searchParams.get('error');
           if (errorParam) {
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end(this.renderHtmlResponse(false, "Google Drive couldn't be connected. Please return to Panvas and try again."));
+            res.end(await this.renderHtmlResponse(false, "Google Drive couldn't be connected. Please return to Panvas and try again."));
             cleanup();
             if (!resolved) {
               resolved = true;
@@ -159,12 +196,11 @@ export class GoogleAuthService {
             return;
           }
 
-          const incomingState = reqUrl.searchParams.get('state');
           const code = reqUrl.searchParams.get('code');
 
-          if (incomingState !== state || !code) {
+          if (!code) {
             res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end(this.renderHtmlResponse(false, 'Invalid state or missing authorization code.'));
+            res.end(await this.renderHtmlResponse(false, 'Invalid state or missing authorization code.'));
             cleanup();
             if (!resolved) {
               resolved = true;
@@ -189,16 +225,21 @@ export class GoogleAuthService {
             accessToken: tokens.access_token,
             refreshToken: tokens.refresh_token || '',
             expiresAt: Date.now() + tokens.expires_in * 1000,
-            accountIdentifier: userInfo.id || userInfo.email || 'google-user',
+            accountIdentifier: userInfo.id,
             displayName: userInfo.name,
             email: userInfo.email,
             connectedAt: Date.now(),
           };
 
-          await this.saveTokens(storedData);
+          await this.withTokenOperation(async () => {
+            if (this.tokenGeneration !== authGeneration) {
+              throw new GoogleAuthDiagnosticError({ stage: 'authorization', reason: 'connection_superseded' });
+            }
+            await this.saveTokens(storedData);
+          });
 
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(this.renderHtmlResponse(true, 'Google Drive connected successfully!'));
+          res.end(await this.renderHtmlResponse(true, 'Google Drive connected successfully!'));
 
           cleanup();
           if (!resolved) {
@@ -214,7 +255,7 @@ export class GoogleAuthService {
         } catch (err) {
           res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
           const publicMessage = err instanceof GoogleAuthDiagnosticError ? err.publicMessage : "Google Drive couldn't be connected. Please return to Panvas and try again.";
-          res.end(this.renderHtmlResponse(false, publicMessage));
+          res.end(await this.renderHtmlResponse(false, publicMessage));
           cleanup();
           if (!resolved) {
             resolved = true;
@@ -293,75 +334,75 @@ export class GoogleAuthService {
    * Retrieves a valid access token, automatically refreshing it if expired.
    */
   async getValidAccessToken(customClientId?: string, customClientSecret?: string): Promise<string | null> {
-    const stored = await this.readStoredTokens();
-    if (!stored) return null;
+    return this.withTokenOperation(async () => {
+      const stored = await this.readStoredTokens();
+      if (!stored) return null;
 
-    // If access token is still valid (with 60s margin), use it
-    if (Date.now() < stored.expiresAt - 60_000) {
-      return stored.accessToken;
-    }
+      // If access token is still valid (with 60s margin), use it
+      if (Date.now() < stored.expiresAt - 60_000) return stored.accessToken;
 
-    // Refresh if refresh token exists
-    if (!stored.refreshToken) {
-      return null;
-    }
+      // Refresh if refresh token exists
+      if (!stored.refreshToken) return null;
 
-    const clientId = this.resolveClientId(customClientId);
-    const clientSecret = this.resolveClientSecret(customClientSecret);
-    if (!clientId) return null;
+      const clientId = this.resolveClientId(customClientId);
+      const clientSecret = this.resolveClientSecret(customClientSecret);
+      if (!clientId) return null;
 
-    try {
-      const refreshed = await this.refreshAccessToken(clientId, stored.refreshToken, clientSecret);
-      stored.accessToken = refreshed.access_token;
-      stored.expiresAt = Date.now() + refreshed.expires_in * 1000;
-      if (refreshed.refresh_token) {
-        stored.refreshToken = refreshed.refresh_token;
+      try {
+        const refreshed = await this.refreshAccessToken(clientId, stored.refreshToken, clientSecret);
+        stored.accessToken = refreshed.access_token;
+        stored.expiresAt = Date.now() + refreshed.expires_in * 1000;
+        if (refreshed.refresh_token) stored.refreshToken = refreshed.refresh_token;
+        await this.saveTokens(stored);
+        return stored.accessToken;
+      } catch (error) {
+        if (error instanceof GoogleAuthDiagnosticError && [400, 401, 403].includes(error.status ?? 0)) return null;
+        throw error;
       }
-      await this.saveTokens(stored);
-      return stored.accessToken;
-    } catch (err) {
-      const diagnostic = err instanceof GoogleAuthDiagnosticError
-        ? { provider: 'googledrive', stage: err.stage, status: err.status, reason: err.reason, retryable: false }
-        : { provider: 'googledrive', stage: 'token_refresh', reason: (err as Error)?.name || 'unknown', retryable: false };
-      return null;
-    }
+    });
   }
 
   /** Force refresh after Drive rejects an otherwise locally unexpired token. */
   async forceRefreshAccessToken(customClientId?: string, customClientSecret?: string): Promise<string | null> {
-    const stored = await this.readStoredTokens();
-    if (!stored?.refreshToken) return null;
-    const clientId = this.resolveClientId(customClientId);
-    if (!clientId) return null;
-    try {
-      const refreshed = await this.refreshAccessToken(clientId, stored.refreshToken, this.resolveClientSecret(customClientSecret));
-      stored.accessToken = refreshed.access_token;
-      stored.expiresAt = Date.now() + refreshed.expires_in * 1000;
-      if (refreshed.refresh_token) stored.refreshToken = refreshed.refresh_token;
-      await this.saveTokens(stored);
-      return stored.accessToken;
-    } catch {
-      return null;
-    }
+    return this.withTokenOperation(async () => {
+      const stored = await this.readStoredTokens();
+      if (!stored?.refreshToken) return null;
+      const clientId = this.resolveClientId(customClientId);
+      if (!clientId) return null;
+      try {
+        const refreshed = await this.refreshAccessToken(clientId, stored.refreshToken, this.resolveClientSecret(customClientSecret));
+        stored.accessToken = refreshed.access_token;
+        stored.expiresAt = Date.now() + refreshed.expires_in * 1000;
+        if (refreshed.refresh_token) stored.refreshToken = refreshed.refresh_token;
+        await this.saveTokens(stored);
+        return stored.accessToken;
+      } catch (error) {
+        if (error instanceof GoogleAuthDiagnosticError && [400, 401, 403].includes(error.status ?? 0)) return null;
+        throw error;
+      }
+    });
   }
 
   /**
    * Disconnects Google Drive by revoking tokens and deleting encrypted storage.
    */
   async disconnect(): Promise<void> {
-    const stored = await this.readStoredTokens();
-    if (stored?.refreshToken || stored?.accessToken) {
-      try {
-        const tokenToRevoke = stored.refreshToken || stored.accessToken;
-        await this.fetchFn(`${this.revokeEndpoint}?token=${encodeURIComponent(tokenToRevoke)}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        });
-      } catch {
-        // Revocation network errors do not block local token cleanup
+    await this.withTokenOperation(async () => {
+      this.tokenGeneration += 1;
+      const stored = await this.readStoredTokens();
+      if (stored?.refreshToken || stored?.accessToken) {
+        try {
+          const tokenToRevoke = stored.refreshToken || stored.accessToken;
+          await this.fetchFn(`${this.revokeEndpoint}?token=${encodeURIComponent(tokenToRevoke)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          });
+        } catch {
+          // Revocation network errors do not block local token cleanup
+        }
       }
-    }
-    await this.deleteTokens();
+      await this.deleteTokens();
+    });
   }
 
   /**
@@ -434,19 +475,25 @@ export class GoogleAuthService {
     return response.json() as Promise<{ access_token: string; refresh_token?: string; expires_in: number }>;
   }
 
-  async fetchUserInfo(accessToken: string): Promise<{ id?: string; email?: string; name?: string }> {
+  async fetchUserInfo(accessToken: string): Promise<{ id: string; email?: string; name?: string }> {
     try {
       const response = await this.fetchFn(this.userinfoEndpoint, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
-      if (response.ok) {
-        const value = await response.json() as { user?: { permissionId?: string; emailAddress?: string; displayName?: string } };
-        return { id: value.user?.permissionId ?? value.user?.emailAddress, email: value.user?.emailAddress, name: value.user?.displayName };
+      if (!response.ok) {
+        const reason = await this.readProviderReason(response);
+        throw new GoogleAuthDiagnosticError({ stage: 'userinfo', status: response.status, reason });
       }
-    } catch {
-      // Userinfo fetch failure is non-fatal
+      const value = await response.json() as { user?: { permissionId?: string; emailAddress?: string; displayName?: string } };
+      const id = value.user?.permissionId ?? value.user?.emailAddress;
+      if (typeof id !== 'string' || !id.trim()) {
+        throw new GoogleAuthDiagnosticError({ stage: 'userinfo', reason: 'userinfo_identity_missing' });
+      }
+      return { id: id.trim(), email: value.user?.emailAddress, name: value.user?.displayName };
+    } catch (error) {
+      if (error instanceof GoogleAuthDiagnosticError) throw error;
+      throw new GoogleAuthDiagnosticError({ stage: 'userinfo', reason: 'userinfo_unavailable' });
     }
-    return {};
   }
 
   private async readProviderReason(response: Response): Promise<string> {
@@ -471,6 +518,7 @@ export class GoogleAuthService {
     } else {
       throw new GoogleAuthDiagnosticError({ stage: 'secure_storage', reason: 'secure_storage_unavailable', publicMessage: "Google Drive couldn't be connected. Please try again." });
     }
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, payload);
   }
 
@@ -499,9 +547,52 @@ export class GoogleAuthService {
     }
   }
 
-  private renderHtmlResponse(success: boolean, message: string): string {
-    const title = success ? 'Connected to Panvas' : 'Connection Error';
-    const accentColor = success ? '#0F9D58' : '#EA4335';
+  private async withTokenOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.tokenOperation;
+    let release!: () => void;
+    this.tokenOperation = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  private async resolvePanvasLogoDataUri(): Promise<string> {
+    const roots = [
+      process.env.VITE_PUBLIC,
+      process.env.APP_ROOT ? path.join(process.env.APP_ROOT, 'dist') : undefined,
+      process.env.APP_ROOT ? path.join(process.env.APP_ROOT, 'public') : undefined,
+      path.join(process.cwd(), 'dist'),
+      path.join(process.cwd(), 'public'),
+    ].filter((root): root is string => Boolean(root));
+
+    for (const root of roots) {
+      try {
+        const bytes = await fs.readFile(path.join(root, 'panvas_logo.png'));
+        return `data:image/png;base64,${bytes.toString('base64')}`;
+      } catch {
+        // The next candidate covers packaged, development, and test layouts.
+      }
+    }
+
+    // Keep the callback usable if an incomplete package omits public assets.
+    // Normal builds always resolve the canonical PNG above.
+    return 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"%3E%3Crect width="32" height="32" rx="8" fill="%2320231f"/%3E%3Cpath d="M11 22V10h5.2c3.4 0 5.4 1.7 5.4 4.5s-2 4.5-5.4 4.5H14" fill="none" stroke="%23f8f5ed" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/%3E%3C/svg%3E';
+  }
+
+  private async renderHtmlResponse(success: boolean, message: string): Promise<string> {
+    const title = success ? 'Google Drive connected' : 'Connection needs attention';
+    const accentColor = success ? '#2f6f55' : '#b64b42';
+    const safeMessage = message.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character] ?? character));
+    // The callback is self-contained for the system browser, so embed the
+    // exact canonical Panvas mark used by the app rather than a second SVG
+    // approximation that can drift from the product branding.
+    const brandMark = await this.resolvePanvasLogoDataUri();
+    const statusIcon = success
+      ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2"/></svg>'
+      : '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5m0 3h.01" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"/></svg>';
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -509,62 +600,95 @@ export class GoogleAuthService {
   <title>${title}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: #0f141c;
-      color: #f1f5f9;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f2ea;
+      color: #28251f;
       min-height: 100vh;
       margin: 0;
-      padding: 20px;
+      padding: 0 24px;
     }
+    .shell { width: 100%; max-width: 520px; margin: 0 auto; padding: 56px 0 72px; }
+    .brand { display: flex; align-items: center; gap: 10px; color: #4c463c; font-size: 13px; font-weight: 650; letter-spacing: .02em; }
+    .brand-mark { display: block; width: 28px; height: 28px; border-radius: 8px; object-fit: cover; }
+    .crumb { margin: 20px 0 12px; color: #8a8174; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
     .card {
-      background: #182232;
-      border: 1px solid #2b394e;
-      border-radius: 16px;
-      padding: 32px 28px;
-      max-width: 420px;
-      text-align: center;
-      box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+      background: #fffdf8;
+      border: 1px solid #d9d0c1;
+      border-radius: 14px;
+      padding: 28px;
+      box-shadow: 0 14px 32px rgba(58, 49, 35, .09);
     }
-    .icon {
+    .icon { 
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 56px;
-      height: 56px;
-      border-radius: 50%;
-      background: ${accentColor}20;
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: ${accentColor}18;
       color: ${accentColor};
-      font-size: 28px;
-      margin-bottom: 20px;
+      margin-bottom: 18px;
     }
+    .icon svg { width: 22px; height: 22px; }
     h1 {
-      font-size: 20px;
-      font-weight: 600;
-      margin: 0 0 10px 0;
+      font-size: 21px;
+      line-height: 1.25;
+      font-weight: 700;
+      letter-spacing: -.02em;
+      margin: 0 0 10px;
     }
     p {
       font-size: 14px;
-      color: #94a3b8;
-      margin: 0 0 20px 0;
-      line-height: 1.5;
+      color: #665f54;
+      margin: 0;
+      line-height: 1.55;
     }
+    .actions { display: flex; justify-content: flex-start; margin-top: 24px; }
+    button {
+      border: 1px solid #cfc4b3;
+      border-radius: 8px;
+      background: #28251f;
+      border-color: #28251f;
+      color: #fffdf8;
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 650;
+      padding: 9px 15px;
+    }
+    button:hover { background: #403a32; border-color: #403a32; }
+    button:focus-visible { outline: 3px solid rgba(47, 111, 85, .28); outline-offset: 2px; }
     .hint {
       font-size: 12px;
-      color: #64748b;
+      color: #8a8174;
+      margin-top: 14px;
     }
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="icon">${success ? '✓' : '✕'}</div>
-    <h1>${title}</h1>
-    <p>${message}</p>
-    <div class="hint">You can safely close this window and return to Panvas.</div>
-  </div>
+  <main class="shell">
+    <div class="brand"><img class="brand-mark" src="${brandMark}" alt="Panvas"><span>Panvas</span></div>
+    <div class="crumb">Google Drive connection</div>
+    <section class="card" aria-live="polite">
+      <div class="icon">${statusIcon}</div>
+      <h1>${title}</h1>
+      <p>${safeMessage}</p>
+      <div class="actions"><button type="button" onclick="closeCallbackTab()">Close this tab</button></div>
+      <div class="hint">Close this tab to return to the Panvas window.</div>
+    </section>
+  </main>
+  <script>
+    function closeCallbackTab() {
+      window.close();
+      window.setTimeout(function () {
+        var hint = document.querySelector('.hint');
+        if (hint) hint.textContent = 'Chrome may block script-closing. Press Ctrl+W or use the tab’s X.';
+      }, 120);
+    }
+  </script>
 </body>
 </html>`;
   }

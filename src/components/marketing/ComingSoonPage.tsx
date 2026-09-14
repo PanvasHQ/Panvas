@@ -2,6 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { Link } from 'wouter';
 import { ArrowLeft, Sparkles, Map } from 'lucide-react';
+import { PANVAS_LOGO_SRC } from '@/lib/brand';
 
 export function ComingSoonPage() {
   return (
@@ -15,7 +16,7 @@ export function ComingSoonPage() {
       {/* Top Nav */}
       <nav className="relative z-10 w-full px-6 py-6 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2.5 group cursor-pointer">
-          <img src="./panvas_logo.png" alt="Panvas" className="w-8 h-8 rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.5)] group-hover:scale-105 transition-transform" />
+          <img src={PANVAS_LOGO_SRC} alt="Panvas" className="w-8 h-8 rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.5)] group-hover:scale-105 transition-transform" />
           <span className="font-sketch text-2xl font-bold tracking-tight text-[#E8E8E8] group-hover:text-white transition-colors">
             Panvas
           </span>

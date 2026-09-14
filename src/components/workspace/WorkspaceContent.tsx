@@ -1,6 +1,5 @@
-import React, { useEffect, useRef } from 'react';
+import React, { Suspense, lazy, useEffect, useRef } from 'react';
 import { useLocation } from 'wouter';
-import { CanvasView } from '@/components/canvas/CanvasView';
 import { NotebookRenderer } from '@/components/notebook/NotebookRenderer';
 import { PdfWorkspace } from '@/components/pdf/PdfWorkspace';
 import { shouldFallBackToLibrary } from '@/lib/defaultLanding';
@@ -8,8 +7,13 @@ import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { useLayoutStore } from '@/stores/layoutStore';
 import { useUIStore } from '@/stores/uiStore';
 import { ReferencePagePane } from './ReferencePagePane';
+import { ViewportErrorBoundary } from '@/components/ui/ErrorBoundary';
+import { useIsMobileViewport } from '@/hooks/useIsMobileViewport';
+
+const CanvasView = lazy(() => import('@/components/canvas/CanvasView').then((module) => ({ default: module.CanvasView })));
 
 export function WorkspaceContent() {
+  const isMobileViewport = useIsMobileViewport();
   const {
     activePageId,
     activeCanvasId,
@@ -39,11 +43,11 @@ export function WorkspaceContent() {
 
   const primary = activePageId
     ? activePage?.type === 'pdf'
-      ? <PdfWorkspace page={activePage} />
-      : <NotebookRenderer spreadMode={paneLayout === 'two-page'} />
-    : <CanvasView />;
+      ? <ViewportErrorBoundary surface="PDF workspace" resetKey={`pdf:${activePageId}`} onNavigate={() => setLocation('/app/library')}><PdfWorkspace page={activePage} /></ViewportErrorBoundary>
+      : <ViewportErrorBoundary surface="Notebook viewport" resetKey={`notebook:${activePageId}`} onNavigate={() => setLocation('/app/library')}><NotebookRenderer spreadMode={!isMobileViewport && paneLayout === 'two-page'} /></ViewportErrorBoundary>
+    : <ViewportErrorBoundary surface="Canvas viewport" resetKey={`canvas:${activeCanvasId ?? 'empty'}`} onNavigate={() => setLocation('/app/library')}><Suspense fallback={<div className="flex h-full w-full items-center justify-center bg-panvas-bg-primary text-sm text-panvas-text-tertiary">Loading canvas…</div>}><CanvasView /></Suspense></ViewportErrorBoundary>;
 
-  const split = activePageId && (paneLayout === 'vertical-split' || paneLayout === 'horizontal-split');
+  const split = !isMobileViewport && activePageId && (paneLayout === 'vertical-split' || paneLayout === 'horizontal-split');
   const isHorizontal = paneLayout === 'horizontal-split';
 
   // The Page & View drawer belongs to the primary document. Leaving it open
@@ -95,7 +99,7 @@ export function WorkspaceContent() {
           onPointerDown={beginResize}
           className={`${isHorizontal ? 'h-1.5 w-full cursor-row-resize' : 'h-full w-1.5 cursor-col-resize'} panvas-layer-sheet shrink-0 bg-panvas-border-default transition-colors hover:bg-panvas-accent-primary`}
         />
-        <div className="min-h-0 min-w-0 flex-1 overflow-hidden"><ReferencePagePane /></div>
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden"><ViewportErrorBoundary surface="Reference pane" resetKey={`${activePageId ?? 'none'}:${activeCanvasId ?? 'none'}`}><ReferencePagePane /></ViewportErrorBoundary></div>
       </>}
     </div>
   );

@@ -107,16 +107,20 @@ export function LatexBlock({ block }: LatexBlockProps) {
         </div>
         <div className="ml-auto flex items-center gap-0.5">
           <button
+            type="button"
             onClick={() => setIsEditing(!isEditing)}
             className="btn-icon p-1"
             title={isEditing ? 'Preview' : 'Edit'}
+            aria-label={isEditing ? 'Preview LaTeX block' : 'Edit LaTeX block'}
           >
             {isEditing ? <Eye size={12} /> : <Pencil size={12} />}
           </button>
           <button
+            type="button"
             onClick={() => deleteBlock(block.id)}
             className="btn-icon p-1 hover:text-panvas-accent-rose"
-            title="Delete"
+            title="Delete LaTeX block"
+            aria-label="Delete LaTeX block"
           >
             <Trash2 size={12} />
           </button>

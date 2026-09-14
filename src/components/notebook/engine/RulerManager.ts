@@ -259,8 +259,10 @@ export class RulerManager {
   }
 
 
-  render(ctx: CanvasRenderingContext2D, scale: number, darkMode: boolean): void {
+  render(ctx: CanvasRenderingContext2D, scale: number, themeMode: 'light' | 'dark' = 'light'): void {
     if (!this.state.enabled) return;
+
+    const darkMode = themeMode === 'dark';
 
     const halfWidth = this.state.width / 2;
     const halfHeight = this.state.height / 2;

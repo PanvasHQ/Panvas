@@ -168,6 +168,95 @@ test('page utility export menu is explicit-click, keyboard dismissible, and touc
   assert.doesNotMatch(source, /group-hover:visible|group-focus-within:visible/);
 });
 
+test('template previews stay faithful while remaining legible at thumbnail size', async () => {
+  const [preview, gallery, createDialog] = await Promise.all([
+    readSource('src/components/notebook/templates/TemplatePreview.tsx'),
+    readSource('src/components/notebook/templates/TemplateGalleryModal.tsx'),
+    readSource('src/components/workspace/CreateDialog.tsx'),
+  ]);
+  assert.match(preview, /boostPreviewNode/);
+  assert.match(preview, /resolveNotebookLineColor\(properties\.ruleLineColor\)/);
+  assert.match(preview, /definition\.renderSVG/);
+  assert.match(gallery, /max-w-4xl/);
+  assert.match(gallery, /lg:grid-cols-4/);
+  assert.match(gallery, /line-clamp-2/);
+  assert.match(createDialog, /overflow-x-auto/);
+  assert.match(createDialog, /TemplatePreview template=\{item\.id\}/);
+});
+
+test('line color uses an explicit Panvas palette and updates through page properties', async () => {
+  const [panel, renderer] = await Promise.all([
+    readSource('src/components/notebook/NotebookToolPropertiesPanel.tsx'),
+    readSource('src/components/notebook/NotebookRenderer.tsx'),
+  ]);
+  assert.match(panel, /Choose line color/);
+  assert.match(panel, /Preset line colors/);
+  assert.match(panel, /handleUpdate\(\{ ruleLineColor: swatch\.color \}\)/);
+  assert.match(panel, /Custom line color/);
+  assert.match(panel, /aria-expanded=\{isLineColorOpen\}/);
+  assert.match(renderer, /const isLineColorChange = updates\.ruleLineColor !== undefined/);
+  assert.match(renderer, /description: isNoteSpaceChange \? 'Change research space' : 'Change line color'/);
+  assert.doesNotMatch(renderer, /const livePageId = focusedPageIdRef\.current \|\| activePageId/);
+  assert.match(renderer, /resolvePageRenderProperties\(notebook, sectionPage, cachedProperties\)/);
+  assert.match(renderer, /updateSectionDataCache\(previous =>/);
+  assert.match(renderer, /properties: \{ \.\.\.properties \}/);
+});
+
+test('PDF-backed notebook pages render only their source PDF and annotation layers', async () => {
+  const [pageView, inactivePreview, pdfBlock] = await Promise.all([
+    readSource('src/components/notebook/NotebookPageView.tsx'),
+    readSource('src/components/notebook/InactivePagePreview.tsx'),
+    readSource('src/components/canvas/PdfBlock.tsx'),
+  ]);
+  assert.doesNotMatch(pageView, /Click to open/);
+  assert.doesNotMatch(inactivePreview, /Click to open/);
+  assert.match(pdfBlock, /PDF Canvas/);
+  assert.match(pdfBlock, /pdfDataId/);
+});
+
+test('cloud entry points use the canonical Google Drive Cloud Sync workspace', async () => {
+  const [topbar, indicator, guard, palette, panel] = await Promise.all([
+    readSource('src/components/layout/TopBar.tsx'),
+    readSource('src/components/ui/SyncIndicator.tsx'),
+    readSource('src/components/auth/AuthGuard.tsx'),
+    readSource('src/components/ui/CommandPalette.tsx'),
+    readSource('src/components/library/CloudSyncPanel.tsx'),
+  ]);
+  assert.match(topbar, /SyncIndicator onOpenCloudSync={openCloudSync}/);
+  assert.match(topbar, /navigateToLibraryView\('cloud'\)/);
+  assert.match(indicator, /aria-label=\{onOpenCloudSync \? 'Open Cloud Sync'/);
+  assert.match(guard, /navigateToLibraryView\('cloud'\)/);
+  assert.doesNotMatch(guard, /navigate\('\/auth\/(login|signup)'\)/);
+  assert.match(palette, /label: 'Cloud Sync'/);
+  assert.doesNotMatch(palette, /navigate\('\/auth\/login'\)/);
+  assert.match(panel, /Connect Google Drive/);
+  assert.doesNotMatch(panel, /GitHub|email\/password|Sign in with Google/);
+});
+
+test('recognition language UI exposes the supported English model and migrates legacy values', async () => {
+  const [toolbar, preferences] = await Promise.all([
+    readSource('src/components/notebook/NotebookFloatingToolbar.tsx'),
+    readSource('src/services/beautification/handwritingBeautification.ts'),
+  ]);
+  assert.match(toolbar, /SUPPORTED_HANDWRITING_RECOGNITION_LANGUAGES/);
+  assert.doesNotMatch(toolbar, /Hindi|Japanese|Chinese \(Simplified\)/);
+  assert.match(preferences, /normalizeHandwritingRecognitionLanguage/);
+  assert.match(preferences, /return 'en-US'/);
+});
+
+test('research space stays collapsed until requested and image controls avoid the header safe area', async () => {
+  const [space, image] = await Promise.all([
+    readSource('src/components/notebook/NoteSpaceControl.tsx'),
+    readSource('src/components/notebook/FloatingImageControls.tsx'),
+  ]);
+  assert.match(space, /const \[expanded, setExpanded\] = useState\(false\)/);
+  assert.match(space, /aria-expanded=\{expanded\}/);
+  assert.match(space, /expanded &&/);
+  assert.match(image, /const top = rawTop < 76/);
+  assert.match(image, /aria-label="Crop image"/);
+  assert.match(image, /Image opacity/);
+});
+
 test('note printing uses canonical PDF generation and never prints the live workspace', async () => {
   const commands = await readSource('src/services/pdf/notebookExportCommands.ts');
   assert.match(commands, /exportNotebookPdf/);

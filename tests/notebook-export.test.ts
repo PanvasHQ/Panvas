@@ -190,3 +190,50 @@ test('PDF page operations rotate, reorder, and extract a valid source page end-t
   assert.equal(loaded.getPage(0).getWidth(), 400);
   assert.equal(loaded.getPage(0).getHeight(), 500);
 });
+
+
+test('extended notebook pages retain the original scale instead of clipping lower notes', async () => {
+  const original = resolveNotebookPageGeometry(baseProperties)!;
+  const extended = resolveNotebookPageGeometry({ ...baseProperties, extraHeight: 560 })!;
+  assert.equal(extended.logicalHeight, original.logicalHeight + 560);
+  assert.ok(Math.abs(extended.scaleY - original.scaleY) < 1e-12);
+  const output = await exportNotebookPdf({ pages: [pageInput('extended', { extraHeight: 560 })] });
+  assert.equal(output.success, true);
+  assert.ok(Math.abs((await PDFDocument.load(output.bytes!)).getPage(0).getHeight() - extended.pdfHeight) < 1e-8);
+});
+
+test('four-sided notebook export enlarges the sheet while retaining a fixed A3 source frame', async () => {
+  const base = resolveNotebookPageGeometry({ ...baseProperties, pageSize: 'A3' })!;
+  const surrounded = resolveNotebookPageGeometry({ ...baseProperties, pageSize: 'A3', extraTop: 120, extraRight: 80, extraBottom: 240, extraLeft: 60 })!;
+  assert.deepEqual({ width: surrounded.sourceWidth, height: surrounded.sourceHeight }, { width: 1123, height: 1587 });
+  assert.deepEqual({ x: surrounded.sourceX, y: surrounded.sourceY }, { x: 60, y: 120 });
+  assert.ok(Math.abs(surrounded.scaleX - base.scaleX) < 1e-12);
+  assert.ok(Math.abs(surrounded.scaleY - base.scaleY) < 1e-12);
+  const output = await exportNotebookPdf({ pages: [pageInput('surrounded', { pageSize: 'A3', extraTop: 120, extraRight: 80, extraBottom: 240, extraLeft: 60 })] });
+  const exportedPage = (await PDFDocument.load(output.bytes!)).getPage(0);
+  assert.ok(Math.abs(exportedPage.getWidth() - surrounded.pdfWidth) < 1e-8);
+  assert.ok(Math.abs(exportedPage.getHeight() - surrounded.pdfHeight) < 1e-8);
+});
+
+test('PDF extension export includes cropped image, nib, styled line and sticky without mutating data', async () => {
+  const { renderPdfAnnotations } = await import('../src/services/pdf/renderPdfAnnotations.ts');
+  const { createStickyPreset } = await import('../src/components/notebook/stickyNotes.ts');
+  const source = await PDFDocument.create(); source.addPage([400, 500]);
+  const drawing = createEmptyDrawingData(); drawing.properties.extraHeight = 400;
+  drawing.objects = [
+    { id: 'image', type: 'image', createdAt: 0, x: 20, y: 530, width: 80, height: 60, rotation: 45, opacity: 0.35, fileId: 'original', crop: { x: 0.1, y: 0.2, width: 0.7, height: 0.6 } },
+    { id: 'nib', type: 'stroke', createdAt: 0, tool: 'pen', inkFamily: 'fountain', pattern: 'dashed', color: '#2468ac', thickness: 3, opacity: 0.7, points: [{ x: 50, y: 620, pressure: 0.5, t: 1 }, { x: 150, y: 730, pressure: 0.9, t: 2 }] },
+    { id: 'line', type: 'shape', createdAt: 0, shapeType: 'arrow', lineStyle: 'wavy', x: 50, y: 750, width: 200, height: 50, rotation: 20, color: '#111111', fill: null, strokeWidth: 2 },
+    createStickyPreset('lined', 'sticky', 170, 540),
+  ];
+  const before = JSON.stringify(drawing);
+  const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+  for (const rotation of [0, 90, 180, 270] as const) {
+    const output = await renderPdfAnnotations(await source.save(), [drawing], { version: 1, pageOrder: [1], rotations: { 1: rotation } }, async () => ({ mimeType: 'image/png', data: png }));
+    assert.equal(output.exportedObjects, 4); assert.equal(output.unsupportedObjects, 0);
+    const loaded = await PDFDocument.load(output.bytes);
+    assert.equal(loaded.getPage(0).getHeight(), 900);
+    assert.equal(loaded.getPage(0).getRotation().angle, rotation);
+  }
+  assert.equal(JSON.stringify(drawing), before);
+});

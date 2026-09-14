@@ -23,18 +23,22 @@ import {
   type PageAudioOwner,
 } from '@/services/audio/audioLifecycle';
 import { pageAudioPersistence } from '@/services/audio/pageAudioPersistenceInstance';
-import { createVoiceNoteObject } from '@/services/audio/voiceNoteObjects';
+import { createVoiceNoteObject, clampVoiceNoteRect } from '@/services/audio/voiceNoteObjects';
+import { resolvePageSurfaceGeometry } from '@/lib/pageProperties';
+import { changeVoiceNote } from '@/services/audio/voiceNoteCommands';
 
 interface NotebookAudioControlProps {
   engine: NotebookEngine;
   owner?: PageAudioOwner;
   canRecord?: boolean;
   onPageDataPersisted?: (pageId: string, data: DrawingData) => void;
+  onDelete?: (note: AudioNote) => void;
+  onRename?: (note: AudioNote, title: string) => void;
 }
 
 const initialPlayback: AudioPlaybackState = { activeNoteId: null, status: 'idle', elapsedMs: 0, durationMs: 0 };
 
-export function NotebookAudioControl({ engine, owner, canRecord = true, onPageDataPersisted }: NotebookAudioControlProps) {
+export function NotebookAudioControl({ engine, owner, canRecord = true, onPageDataPersisted, onDelete, onRename }: NotebookAudioControlProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [recordingState, setRecordingState] = useState<'idle' | 'recording' | 'finalizing'>('idle');
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
@@ -99,10 +103,26 @@ export function NotebookAudioControl({ engine, owner, canRecord = true, onPageDa
   const persistBlob = async (target: PageAudioOwner, blob: Blob, fileName: string, durationMs?: number) => {
     if (!/^audio\//i.test(blob.type)) throw new Error('Unsupported audio format.');
     const stored = await canvasRepository.storeAudio(userId, target.pageId, fileName, blob.type, await blob.arrayBuffer());
-    const note: AudioNote = { id: generateId('audio'), fileId: stored.id, fileName, mimeType: blob.type, durationMs, createdAt: Date.now() };
+    const note: AudioNote = { id: generateId('audio'), fileId: stored.id, fileName, title: 'Voice note', mimeType: blob.type, durationMs, createdAt: Date.now() };
     try {
-      const data = await pageAudioPersistence.appendVoiceNote(target, note, createVoiceNoteObject(note, engine.audio.getAll().length));
+      const object = createVoiceNoteObject(note, engine.audio.getAll().length);
+      if (samePageAudioOwner(ownerRef.current, target)) {
+        const canvas = engine.drawing.getCanvasElement();
+        const geometry = resolvePageSurfaceGeometry(engine.getProperties());
+        if (canvas) {
+          const rect = canvas.getBoundingClientRect();
+          const viewport = canvas.closest('.notebook-viewport')?.getBoundingClientRect();
+          const left = Math.max(rect.left, viewport?.left ?? 0);
+          const top = Math.max(rect.top, (viewport?.top ?? 0) + 120);
+          const right = Math.min(rect.right, viewport?.right ?? window.innerWidth);
+          const bottom = Math.min(rect.bottom, viewport?.bottom ?? window.innerHeight);
+          const point = engine.viewport.canvasToPage(((left + right) / 2 - rect.left) * canvas.clientWidth / rect.width, ((top + bottom) / 2 - rect.top) * canvas.clientHeight / rect.height);
+          Object.assign(object, clampVoiceNoteRect({ x: point.x - object.width / 2, y: point.y - (object.height ?? 132) / 2, width: object.width, height: object.height ?? 132 }, { x: -geometry.source.left, y: -geometry.source.top, width: geometry.width, height: geometry.height }));
+        }
+      }
+      const data = await pageAudioPersistence.appendVoiceNote(target, note, object);
       applyPersistedData(target, data);
+      if (samePageAudioOwner(ownerRef.current, target)) engine.selection.selectElement(object.id, 'text');
     } catch (error) {
       await canvasRepository.deleteAudio(stored.id).catch(() => undefined);
       throw error;
@@ -182,30 +202,20 @@ export function NotebookAudioControl({ engine, owner, canRecord = true, onPageDa
     }
   };
 
-  const remove = async (note: AudioNote) => {
+  const mutateVoice = (note: AudioNote, change: { delete: true } | { title: string }) => {
     if (!owner) return;
     const target = { ...owner };
-    try {
-      const data = await pageAudioPersistence.removeVoiceNote(target, note.id);
-      applyPersistedData(target, data);
-      if (playback.activeNoteId === note.id) playerRef.current?.clear();
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Audio metadata could not be removed.', 'error');
-      return;
-    }
-    await canvasRepository.deleteAudio(note.fileId).catch(() => showToast('Audio metadata was removed, but the binary cleanup failed.', 'error'));
+    changeVoiceNote(engine, note.id, change, state => {
+      void pageAudioPersistence.replaceVoiceState(target, state.notes, state.objects).catch(() => showToast('Voice note changes could not be saved.', 'error'));
+    });
   };
-
+  const remove = async (note: AudioNote) => {
+    playerRef.current?.clear();
+    if (onDelete) onDelete(note); else mutateVoice(note, { delete: true });
+  };
   const rename = async (note: AudioNote) => {
-    if (!owner) return;
-    const target = { ...owner };
-    try {
-      const data = await pageAudioPersistence.rename(target, note.id, titleDraft);
-      applyPersistedData(target, data);
-      setRenamingId(null);
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Voice note could not be renamed.', 'error');
-    }
+    if (onRename) onRename(note, titleDraft); else mutateVoice(note, { title: titleDraft });
+    setRenamingId(null);
   };
 
   const notes = engine.audio.getAll();
@@ -232,7 +242,7 @@ export function NotebookAudioControl({ engine, owner, canRecord = true, onPageDa
             const active = playback.activeNoteId === note.id;
             const durationMs = active && playback.durationMs > 0 ? playback.durationMs : note.durationMs ?? 0;
             const elapsedMs = active ? playback.elapsedMs : 0;
-            const title = audioNoteTitle(note);
+            const title = note.title || 'Voice note';
             return <div key={note.id} className="rounded-lg border border-panvas-border-subtle bg-panvas-bg-primary p-2.5">
               <div className="mb-2 flex items-start justify-between gap-2"><div className="min-w-0 flex-1">{renamingId === note.id ? <div className="flex gap-1"><input autoFocus value={titleDraft} onChange={event => setTitleDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void rename(note); if (event.key === 'Escape') setRenamingId(null); }} className="min-w-0 flex-1 rounded border border-panvas-border-strong bg-panvas-bg-elevated px-1.5 text-xs text-panvas-text-primary" aria-label="Voice note name"/><button type="button" onClick={() => void rename(note)} className="focus-ring text-panvas-text-secondary hover:text-panvas-text-primary" aria-label="Save voice note name"><Check size={13}/></button><button type="button" onClick={() => setRenamingId(null)} className="focus-ring text-panvas-text-secondary hover:text-panvas-text-primary" aria-label="Cancel rename"><X size={13}/></button></div> : <div className="truncate text-xs font-medium text-panvas-text-primary" title={title}>{title}</div>}<div className="mt-0.5 flex items-center gap-1 text-2xs text-panvas-text-tertiary"><CalendarClock size={10} />{new Date(note.createdAt).toLocaleString()} · {formatAudioTime(durationMs)}</div></div>{canRecord && <div className="flex shrink-0 gap-1"><button type="button" onClick={() => { setTitleDraft(note.title ?? ''); setRenamingId(note.id); }} className="text-panvas-text-tertiary hover:text-panvas-text-primary focus-ring" title="Rename voice note" aria-label={`Rename ${title}`}><Pencil size={13}/></button><button type="button" onClick={() => void remove(note)} className="text-panvas-text-tertiary hover:text-panvas-text-error focus-ring" title="Delete voice note" aria-label={`Delete ${title}`}><Trash2 size={13} /></button></div>}</div>
               <div className="flex items-center gap-2">

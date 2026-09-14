@@ -1,22 +1,7 @@
-import { app, ipcMain, type IpcMainInvokeEvent } from 'electron';
-import path from 'path';
-import { pathToFileURL } from 'url';
+import { ipcMain } from 'electron';
 import { KnowledgeService } from './knowledge-service.js';
 import type { FindRelatedInput, KnowledgeReferenceInput, KnowledgeSearchInput } from '../../src/types/knowledge';
-
-function requireTrustedSender(event: IpcMainInvokeEvent): void {
-  const senderUrl = event.senderFrame?.url;
-  let trusted = false;
-  try {
-    const sender = new URL(senderUrl ?? '');
-    trusted = process.env.VITE_DEV_SERVER_URL
-      ? sender.origin === new URL(process.env.VITE_DEV_SERVER_URL).origin
-      : sender.href.split('#')[0] === pathToFileURL(path.join(app.getAppPath(), 'dist', 'index.html')).href;
-  } catch {
-    trusted = false;
-  }
-  if (!trusted) throw new Error('Untrusted IPC sender.');
-}
+import { requireTrustedSender } from './security.js';
 
 function registerReadOnlyHandler(channel: string, handler: (input?: unknown) => unknown): void {
   ipcMain.handle(channel, (event, input?: unknown) => {

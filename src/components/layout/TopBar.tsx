@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ChevronRight,
-  CloudOff,
   Minus,
   Moon,
   PanelLeftClose,
@@ -19,6 +18,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { UserAvatar } from '@/components/ui/UserAvatar';
 import { SyncIndicator } from '@/components/ui/SyncIndicator';
 import { navigateToLibraryView } from '@/services/library/libraryRouteState';
+import { PANVAS_LOGO_SRC } from '@/lib/brand';
 
 const noDragStyle = { WebkitAppRegion: 'no-drag' } as React.CSSProperties;
 const isElectronShell = typeof window !== 'undefined' && Boolean(window.panvas);
@@ -28,7 +28,7 @@ const ELECTRON_CAPTION_SAFE_WIDTH = 144;
 
 export function TopBar() {
   const [, navigate] = useLocation();
-  const { isSidebarOpen, toggleSidebar, openCommandPalette, theme, setTheme } = useUIStore();
+  const { isSidebarOpen, toggleSidebar, openCommandPalette, theme, setTheme, requestCloudSyncReview } = useUIStore();
   const {
     activeCanvasId, activePageId, activeWorkspaceId,
     canvasFiles, workspaces, folders, notebooks, notebookSections, notebookPages,
@@ -99,18 +99,30 @@ export function TopBar() {
       }
     }
   }
-  const ThemeIcon = theme === 'dark' ? Moon : theme === 'light' ? Sun : PenTool;
+  // Public cycle matches Appearance; legacy choices migrate before first paint.
+  const THEME_CYCLE = ['light', 'ink', 'dark'] as const;
+  const ThemeIcon = theme === 'dark' ? Moon : theme === 'ink' ? PenTool : Sun;
+
+  const nextThemeInCycle = () => {
+    const index = THEME_CYCLE.indexOf(theme as typeof THEME_CYCLE[number]);
+    return THEME_CYCLE[(index + 1) % THEME_CYCLE.length];
+  };
 
   const cycleTheme = () => {
-    if (theme === 'dark') setTheme('light');
-    else if (theme === 'light') setTheme('ink');
-    else setTheme('dark');
+    setTheme(nextThemeInCycle());
   };
 
   const handleSignOut = async () => {
     setIsAuthMenuOpen(false);
     await signOut();
     navigate('/');
+  };
+
+  const openCloudSync = () => {
+    setIsAuthMenuOpen(false);
+    requestCloudSyncReview();
+    navigateToLibraryView('cloud');
+    navigate('/app/library');
   };
 
   return (
@@ -136,7 +148,7 @@ export function TopBar() {
           className="flex items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-panvas-bg-hover focus-ring flex-shrink-0"
           aria-label="Open Panvas library"
         >
-          <img src="./panvas_logo.png" alt="" className="h-6 w-6 rounded-md" />
+          <img src={PANVAS_LOGO_SRC} alt="" className="h-6 w-6 rounded-md" />
           <span className="hidden text-sm font-semibold tracking-tight sm:inline">Panvas</span>
         </button>
 
@@ -196,22 +208,22 @@ export function TopBar() {
 
       {/* RIGHT ZONE: App controls + Native Caption Safe Spacer */}
       <div className="flex min-w-0 flex-1 items-center justify-end gap-1.5" style={noDragStyle}>
-        <div className="hidden items-center pl-1 sm:flex" style={noDragStyle}>
-          <SyncIndicator />
+        <div className="flex items-center pl-1" style={noDragStyle}>
+          <SyncIndicator onOpenCloudSync={openCloudSync} />
         </div>
 
-        <IconButton label={`Switch to ${theme === 'dark' ? 'light' : theme === 'light' ? 'ink' : 'dark'} theme`} onClick={cycleTheme}>
+        <IconButton label={`Switch to ${nextThemeInCycle()} theme`} onClick={cycleTheme}>
           <ThemeIcon size={16} />
         </IconButton>
 
-        <div className="relative ml-0.5" ref={authMenuRef}>
+        {isAuthenticated && <div className="relative ml-0.5" ref={authMenuRef}>
           <button
-            onClick={() => isAuthenticated ? setIsAuthMenuOpen(open => !open) : navigate('/auth/login')}
+            onClick={() => setIsAuthMenuOpen(open => !open)}
             className="rounded-full focus-ring flex items-center justify-center"
-            aria-label={isAuthenticated ? 'Open account menu' : 'Sign in'}
+            aria-label="Open account menu"
             aria-expanded={isAuthMenuOpen}
           >
-            {isAuthenticated ? <UserAvatar size="sm" /> : <span className="flex h-7 w-7 items-center justify-center rounded-full border border-panvas-border-default text-panvas-text-tertiary hover:text-panvas-text-primary hover:bg-panvas-bg-hover transition-colors"><CloudOff size={14} /></span>}
+            <UserAvatar size="sm" />
           </button>
 
           {isAuthMenuOpen && isAuthenticated && (
@@ -226,7 +238,7 @@ export function TopBar() {
               <AccountMenuItem danger onClick={handleSignOut}>Sign out</AccountMenuItem>
             </div>
           )}
-        </div>
+        </div>}
 
         {/* Native window caption reserved safe area for Electron on Windows */}
         {isElectronOnWindows && (

@@ -97,6 +97,7 @@ export async function refreshBrowserGoogleToken(): Promise<string | null> {
     await preloadGis();
     const tokenResponse = await requestBrowserGoogleAccessToken(clientId);
     const account = await fetchAccount(tokenResponse.access_token);
+    if (current?.connection !== previous) return null;
     const sameAccount = account.id === previous.accountIdentifier
       || Boolean(previous.email && account.email && previous.email.toLowerCase() === account.email.toLowerCase());
     if (!sameAccount) return null;

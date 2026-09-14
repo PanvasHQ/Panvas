@@ -1,5 +1,8 @@
 # Tech stack
 
+> [!NOTE]
+> **Historical Document**: This document reflects early planning/development phases (August-September 2026). For the canonical v0.1.0 architecture and documentation, see [README.md](../README.md) and [docs/ARCHITECTURE.md](ARCHITECTURE.md).
+
 - **React 18 + TypeScript 5**: UI/runtime, strict compiler configuration.
 - **Vite 6**: dev server (port 3000), builds, `@` alias.
 - **Tailwind CSS 3 + PostCSS**: token-driven styling; CSS variables in `src/styles/index.css`.

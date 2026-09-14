@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { createServer } from 'vite';
+import { writeQueue } from '../electron/ipc/write-queue.ts';
+import { mergeCanvasAppStateForPersistence } from '../src/services/canvas/canvasSceneState.ts';
 import { buildCanonicalCanvasPayload, isValidCanvasScenePayload, selectCanonicalCanvasScene } from '../src/repositories/canvasSceneStorage.ts';
 import { validateEntityName, InvalidEntityNameError } from '../src/lib/entityName.ts';
 import type { CanvasData, CustomBlock } from '../src/types/canvas';
@@ -16,6 +21,92 @@ function scene(id: string, updatedAt: number, elements: unknown[] = [{ id: 'el-1
 function block(id: string, content = '# note'): CustomBlock {
   return { id, canvasFileId: 'canvas-1', type: 'markdown', x: 0, y: 0, width: 320, height: 120, content, createdAt: 1, updatedAt: 1, userId: null };
 }
+
+test('real Canvas repository saves Electron object/null loads, settings and images through atomic storage and recovers status', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'panvas-canvas-save-'));
+  const originalWindow = (globalThis as any).window;
+  let rejectWrite = false;
+  let rejectRead = false;
+  let writes = 0;
+  const contentPath = path.join(directory, 'canvas-1.json');
+  (globalThis as any).window = { panvas: { canvas: {
+    load: async () => {
+      if (rejectRead) throw new Error('Test read failure');
+      try { return JSON.parse(await readFile(contentPath, 'utf8')); }
+      catch (error: any) { if (error.code === 'ENOENT') return null; throw error; }
+    },
+    save: async (_workspace: string, _id: string, payload: unknown) => {
+      if (rejectWrite) throw new Error('Test write failure');
+      const cloned = structuredClone(payload);
+      const json = JSON.stringify(cloned);
+      assert.ok(Buffer.byteLength(json, 'utf8') < 10 * 1024 * 1024);
+      await writeQueue.enqueue(contentPath, json);
+      writes++;
+    },
+  } } };
+  const stubs: Record<string, string> = {
+    '/src/database/workspaceDB.ts': 'export {};',
+    '/src/database/canvasDB.ts': 'export async function getBlocksByCanvas() { return []; }',
+    '/src/database/schema.ts': 'export const db = {};',
+    '/src/services/cloudsync/recordLocalChange.ts': 'export function recordLocalChangeDetached() {}',
+    '/src/stores/authStore.ts': 'export const useAuthStore = { getState: () => ({ user: null }) };',
+    '/src/stores/syncStore.ts': 'export const useSyncStore = { getState: () => ({ incrementPending() {} }) };',
+  };
+  const server = await createServer({
+    configFile: false, envDir: directory, appType: 'custom', logLevel: 'silent',
+    server: { middlewareMode: true }, optimizeDeps: { noDiscovery: true },
+    resolve: { alias: { '@': path.resolve('src') } },
+    plugins: [{ name: 'canvas-boundary-test', enforce: 'pre', load(id) {
+      const key = Object.keys(stubs).find((suffix) => id.replaceAll('\\', '/').endsWith(suffix));
+      return key ? stubs[key] : null;
+    } }],
+  });
+  try {
+    const { canvasRepository } = await server.ssrLoadModule('/src/repositories/CanvasRepository.ts');
+    const appState = mergeCanvasAppStateForPersistence({}, {
+      viewBackgroundColor: '#f7f1e3', theme: 'light', gridSize: 20,
+      objectsSnapModeEnabled: true, isBindingEnabled: false, zoom: { value: 1.2 },
+      scrollX: 12, scrollY: -30, currentItemStrokeColor: '#123456',
+      currentItemBackgroundColor: 'transparent', currentItemOpacity: 65,
+      currentItemFillStyle: 'hachure', currentItemStrokeWidth: 2,
+      currentItemStartArrowhead: null, currentItemEndArrowhead: 'arrow',
+    });
+    const files = { image1: { id: 'image1', mimeType: 'image/png', dataURL: 'data:image/png;base64,aGVsbG8=', created: 1 } };
+    const data = { canvasFileId: 'canvas-1', elements: [{ id: 'image-element', type: 'image', fileId: 'image1' }], appState, files };
+    await canvasRepository.saveData(null, data, 'workspace-1');
+    const first = JSON.parse(await readFile(contentPath, 'utf8'));
+    assert.deepEqual(first.appState, appState);
+    assert.deepEqual(first.files, files);
+    assert.equal(first.version, 1);
+    await canvasRepository.saveData(null, { canvasFileId: 'canvas-1', elements: [{ id: 'shape-2' }] }, 'workspace-1');
+    const second = JSON.parse(await readFile(contentPath, 'utf8'));
+    assert.equal(second.version, 2);
+    assert.deepEqual(second.appState, appState);
+    assert.deepEqual(second.files, files);
+
+    rejectRead = true;
+    await assert.rejects(canvasRepository.saveData(null, data, 'workspace-1'), /Test read failure/);
+    assert.equal(writes, 2, 'failed read must not overwrite the existing scene');
+    rejectRead = false;
+
+    const { useCanvasStore } = await server.ssrLoadModule('/src/stores/canvasStore.ts');
+    const statuses: string[] = [];
+    const unsubscribe = useCanvasStore.subscribe((state: any) => statuses.push(state.saveStatus));
+    try {
+      rejectWrite = true;
+      await assert.rejects(useCanvasStore.getState().saveCanvasData(data, 'workspace-1'), /Test write failure/);
+      assert.equal(useCanvasStore.getState().saveStatus, 'error');
+      rejectWrite = false;
+      await useCanvasStore.getState().saveCanvasData(data, 'workspace-1');
+      assert.equal(useCanvasStore.getState().saveStatus, 'saved');
+      assert.deepEqual(statuses, ['saving', 'error', 'saving', 'saved']);
+    } finally { unsubscribe(); }
+  } finally {
+    await server.close();
+    (globalThis as any).window = originalWindow;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 // ---- Adapter selection (behavioral via the pure decision + source contract) ----
 

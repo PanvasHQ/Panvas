@@ -22,6 +22,12 @@ interface PdfThumbnailSidebarProps {
 export function PdfThumbnailSidebar({ pdfDocument, numPages, currentPage, onPageChange, isSidebarOpen, setIsSidebarOpen, engine, pageOrder, rotations = {}, onRotatePage, onExtractPage, onMovePage }: PdfThumbnailSidebarProps) { 
   const [activeTab, setActiveTab] = useState<'Thumbnails' | 'Outline'>('Thumbnails'); 
   const [outline, setOutline] = useState<any[] | null>(null);
+  const thumbnailRefs = useRef(new Map<number, HTMLDivElement>());
+
+  useEffect(() => {
+    if (activeTab !== 'Thumbnails') return;
+    thumbnailRefs.current.get(currentPage)?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+  }, [activeTab, currentPage]);
 
   useEffect(() => {
     if (pdfDocument) {
@@ -77,7 +83,7 @@ export function PdfThumbnailSidebar({ pdfDocument, numPages, currentPage, onPage
         <div className="space-y-3 px-4 pb-4 overflow-y-auto flex-1">
           {(pageOrder?.length === numPages ? pageOrder : Array.from({ length: numPages }, (_, index) => index + 1)).map((pageNum, index, order) => {
             return (
-              <div key={pageNum} className={`group rounded-lg p-1.5 transition-colors ${currentPage === pageNum ? 'bg-panvas-bg-active' : 'hover:bg-panvas-bg-hover'}`}>
+              <div ref={element => { if (element) thumbnailRefs.current.set(pageNum, element); else thumbnailRefs.current.delete(pageNum); }} key={pageNum} className={`group rounded-lg p-1.5 transition-colors ${currentPage === pageNum ? 'bg-panvas-bg-active' : 'hover:bg-panvas-bg-hover'}`}>
                 <button type="button" onClick={() => onPageChange(pageNum)} aria-pressed={currentPage === pageNum} className="w-full text-left focus-ring rounded-md">
                   <Thumbnail page={pageNum} pdfDocument={pdfDocument} rotation={rotations[pageNum] ?? 0} />
                   <span className={`mt-1.5 block text-center text-2xs ${currentPage === pageNum ? 'font-medium text-panvas-text-primary' : 'text-panvas-text-tertiary'}`}>Page {index + 1}</span>

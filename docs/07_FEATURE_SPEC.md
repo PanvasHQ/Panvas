@@ -1,5 +1,8 @@
 # Feature specification
 
+> [!NOTE]
+> **Historical Document**: This document reflects early planning/development phases (August-September 2026). For the canonical v0.1.0 architecture and documentation, see [README.md](../README.md) and [docs/ARCHITECTURE.md](ARCHITECTURE.md).
+
 | Feature | Current state | Expected eventual behavior |
 |---|---|---|
 | Workspace/folders | ✅ Dexie entities/actions | Recursive folders, file ownership, pin/recent/trash, filesystem-backed metadata. |

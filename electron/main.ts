@@ -1,6 +1,7 @@
 import path from 'path';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'url';
-import { app, BrowserWindow, screen, shell, type WebContents } from 'electron';
+import { app, BrowserWindow, ipcMain, screen, shell, type WebContents } from 'electron';
 import { isAudioOnlyMediaCheck, isAudioOnlyMediaRequest, isTrustedRendererUrl } from './security-policy.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -24,8 +25,12 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
   ? path.join(process.env.APP_ROOT, 'public')
   : RENDERER_DIST;
 
-// Use the existing png logo for the app icon
-const appIconPath = path.join(process.env.VITE_PUBLIC, 'panvas_logo.png');
+// Prefer the packaged multi-resolution ICO, while retaining the existing PNG
+// during development and for environments where the build asset is absent.
+const packagedIconPath = path.join(process.env.APP_ROOT, 'build', 'icon.ico');
+const appIconPath = existsSync(packagedIconPath)
+  ? packagedIconPath
+  : path.join(process.env.VITE_PUBLIC, 'panvas_logo.png');
 
 let win: BrowserWindow | null;
 
@@ -136,23 +141,43 @@ app.on('activate', () => {
   }
 });
 
-app.on('before-quit', () => {
-  destroyDiscordRpc();
-});
-
 import { registerDomainHandlers } from './ipc/domain-handlers.js';
 import { registerKnowledgeHandlers } from './ipc/knowledge-handlers.js';
 import { registerRecognitionHandlers } from './ipc/recognition-handlers.js';
 import { registerCloudSyncHandlers } from './ipc/cloudsync-handlers.js';
 import { registerCloudSyncDiagnosticHandler } from './ipc/cloudsync-diagnostic-handler.js';
 import { initDiscordRpc, destroyDiscordRpc } from './discord-rpc.js';
+import { writeQueue } from './ipc/write-queue.js';
+import { GracefulShutdownController } from './graceful-shutdown.js';
+
+const gracefulShutdown = new GracefulShutdownController({
+  begin: () => writeQueue.beginShutdown(),
+  flush: () => writeQueue.flush(),
+  quit: () => app.quit(),
+  onFailure: (error) => console.error('[Shutdown] Pending writes did not flush cleanly.', error),
+  timeoutMs: 15_000,
+});
+
+let discordRpcDestroyed = false;
+app.on('before-quit', () => {
+  if (!discordRpcDestroyed) {
+    discordRpcDestroyed = true;
+    destroyDiscordRpc();
+  }
+});
+
+app.on('before-quit', (event) => {
+  gracefulShutdown.handleBeforeQuit(event);
+});
 
 app.whenReady().then(() => {
   registerDomainHandlers();
   registerKnowledgeHandlers();
   registerRecognitionHandlers();
-  registerCloudSyncHandlers();
-  registerCloudSyncDiagnosticHandler();
-  initDiscordRpc();
+  registerCloudSyncHandlers(ipcMain);
+  registerCloudSyncDiagnosticHandler(ipcMain);
+  initDiscordRpc({
+    debugLogs: !app.isPackaged,
+  });
   createWindow();
 });

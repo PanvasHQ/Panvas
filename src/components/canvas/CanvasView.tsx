@@ -10,11 +10,11 @@ import { CanvasOverlay } from './CanvasOverlay';
 import { CanvasToolbar } from './CanvasToolbar';
 import { CanvasLibraryDrawer } from './CanvasLibraryDrawer';
 import { WelcomeScreen as PanvasWelcomeScreen } from './WelcomeScreen';
-import { DefaultSidebar, convertToExcalidrawElements, loadFromBlob } from '@excalidraw/excalidraw';
 import { useAutosave } from '@/hooks/useAutosave';
 import { UniversalDropRouter } from '@/services/drop/UniversalDropRouter';
 import { canvasRepository } from '@/repositories/CanvasRepository';
 import { useAuthStore } from '@/stores/authStore';
+import { PANVAS_LOGO_SRC } from '@/lib/brand';
 import {
   deleteCanvasLibrary,
   getCanvasLibraries,
@@ -30,6 +30,19 @@ import {
 } from './canvasGestureRecognition';
 import { normalizeCanvasColor } from './canvasBackgrounds';
 import type { StrokePoint } from '../notebook/engine/drawingTypes';
+import {
+  CANVAS_EDITOR_THEME_KEY,
+  canvasDownloadName,
+  createCanvasInitialAppState,
+  isSafeCanvasEmbedUrl,
+  isTrustedExcalidrawLibraryUrl,
+  mergeCanvasAppStateForPersistence,
+  readCanvasEditorThemeMode,
+  resolveCanvasDocumentBackground,
+  resolveCanvasEditorTheme,
+  PANVAS_CANVAS_DEFAULT_BACKGROUND,
+  type CanvasEditorThemeMode,
+} from '@/services/canvas/canvasSceneState';
 
 type LibraryItems = readonly any[];
 type CanvasPointerPayload = {
@@ -40,13 +53,20 @@ type CanvasPointerPayload = {
 
 // Lazy-loaded Excalidraw
 let ExcalidrawComponent: React.ComponentType<any> | null = null;
-let MainMenuComponent: any = null;
 let WelcomeScreenComponent: any = null;
+let DefaultSidebarComponent: any = null;
+let ExcalidrawModule: any = null;
 let excalidrawLoaded = false;
 
 const EXCALIDRAW_UI_OPTIONS = {
   canvasActions: {
     loadScene: false,
+    saveToActiveFile: false,
+    export: false,
+    saveAsImage: false,
+    clearCanvas: false,
+    toggleTheme: false,
+    changeViewBackgroundColor: false,
   },
 };
 
@@ -70,10 +90,21 @@ export function CanvasView() {
   // so useTunnels() then threw "Cannot destructure property 'jotaiScope' of ... as it is null".
   // Keep the extra arrow so the component is stored as a VALUE.
   const [Excalidraw, setExcalidraw] = useState<React.ComponentType<any> | null>(() => ExcalidrawComponent);
-  const [MainMenu, setMainMenu] = useState<any>(() => MainMenuComponent);
   const [ExcalidrawWelcomeScreen, setExcalidrawWelcomeScreen] = useState<any>(() => WelcomeScreenComponent);
+  const [DefaultSidebar, setDefaultSidebar] = useState<any>(() => DefaultSidebarComponent);
   const [isLoading, setIsLoading] = useState(true);
   const [isCanvasDataReady, setIsCanvasDataReady] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  // The resolved app theme keeps the canvas editor in step. The editor's own
+  // local mode may still follow the OS, while public app appearance exposes
+  // only Light, Ink, and Dark.
+  const panvasTheme = useUIStore((state) => state.theme);
+  const [editorThemeMode, setEditorThemeMode] = useState<CanvasEditorThemeMode>(() => {
+    try { return readCanvasEditorThemeMode(window.localStorage.getItem(CANVAS_EDITOR_THEME_KEY)); }
+    catch { return 'system'; }
+  });
   const [libraryManagerOpen, setLibraryManagerOpen] = useState(false);
   const [libraryRecords, setLibraryRecords] = useState<CanvasLibraryRecord[]>([]);
   const [librariesLoading, setLibrariesLoading] = useState(false);
@@ -93,28 +124,37 @@ export function CanvasView() {
     points: StrokePoint[];
     existingElementIds: Set<string>;
   }>({ active: false, points: [], existingElementIds: new Set() });
+  const documentBackgroundColorRef = useRef(PANVAS_CANVAS_DEFAULT_BACKGROUND);
+
+  useEffect(() => {
+    documentBackgroundColorRef.current = resolveCanvasDocumentBackground(currentData?.appState ?? {});
+  }, [activeCanvasId, currentData?.appState?.viewBackgroundColor]);
 
   // Load Excalidraw dynamically
   useEffect(() => {
-    if (excalidrawLoaded && ExcalidrawComponent && MainMenuComponent && WelcomeScreenComponent) {
+    if (excalidrawLoaded && ExcalidrawComponent && WelcomeScreenComponent && DefaultSidebarComponent) {
       setExcalidraw(() => ExcalidrawComponent);
-      setMainMenu(() => MainMenuComponent);
       setExcalidrawWelcomeScreen(() => WelcomeScreenComponent);
+      setDefaultSidebar(() => DefaultSidebarComponent);
       setIsLoading(false);
       return;
     }
 
     import('@excalidraw/excalidraw').then((mod) => {
+      ExcalidrawModule = mod;
       ExcalidrawComponent = mod.Excalidraw;
-      MainMenuComponent = mod.MainMenu;
       WelcomeScreenComponent = mod.WelcomeScreen;
+      DefaultSidebarComponent = mod.DefaultSidebar;
       excalidrawLoaded = true;
       setExcalidraw(() => mod.Excalidraw);
-      setMainMenu(() => mod.MainMenu);
       setExcalidrawWelcomeScreen(() => mod.WelcomeScreen);
+      setDefaultSidebar(() => mod.DefaultSidebar);
+      setIsLoading(false);
+    }).catch(() => {
+      setLoadError('The canvas editor could not be loaded.');
       setIsLoading(false);
     });
-  }, []);
+  }, [loadAttempt]);
 
   // Load canvas data when active canvas changes
   useEffect(() => {
@@ -123,8 +163,11 @@ export function CanvasView() {
     if (activeCanvasId) {
       isInitialLoad.current = true;
       setIsCanvasDataReady(false);
+      setLoadError(null);
 
-      loadCanvasData(activeCanvasId, activeWorkspaceId ?? undefined).finally(() => {
+      loadCanvasData(activeCanvasId, activeWorkspaceId ?? undefined).catch(() => {
+        if (!cancelled) setLoadError('This canvas could not be opened. Your stored file was not changed.');
+      }).finally(() => {
         if (!cancelled) {
           setIsCanvasDataReady(true);
         }
@@ -136,7 +179,7 @@ export function CanvasView() {
     return () => {
       cancelled = true;
     };
-  }, [activeCanvasId, activeWorkspaceId, loadCanvasData]);
+  }, [activeCanvasId, activeWorkspaceId, loadAttempt, loadCanvasData]);
 
   useEffect(() => {
     if (!isCanvasDataReady) return;
@@ -164,11 +207,12 @@ export function CanvasView() {
 
     const handleMessage = async (event: MessageEvent) => {
       const data = event.data;
-      if (data && data.type === 'excalidraw-library') {
+      if (event.origin === 'https://libraries.excalidraw.com' && data && data.type === 'excalidraw-library') {
         try {
           let libraryItemsToImport: any[] | null = null;
-          if (data.libraryUrl) {
-            const res = await fetch(data.libraryUrl);
+          if (typeof data.libraryUrl === 'string' && isTrustedExcalidrawLibraryUrl(data.libraryUrl)) {
+            const res = await fetch(data.libraryUrl, { credentials: 'omit' });
+            if (!res.ok) throw new Error('Library download failed');
             const library = await res.json();
             libraryItemsToImport = Array.isArray(library) ? library : library.libraryItems || library.library;
           } else if (data.library) {
@@ -197,9 +241,9 @@ export function CanvasView() {
       if (hash.includes('addLibrary=')) {
         const urlParams = new URLSearchParams(hash.replace('#', '?'));
         const libraryUrl = urlParams.get('addLibrary');
-        if (libraryUrl) {
-          fetch(decodeURIComponent(libraryUrl))
-            .then(res => res.json())
+        if (libraryUrl && isTrustedExcalidrawLibraryUrl(libraryUrl)) {
+          fetch(libraryUrl, { credentials: 'omit' })
+            .then(res => { if (!res.ok) throw new Error('Library download failed'); return res.json(); })
             .then(library => {
               const libraryItems = Array.isArray(library) ? library : library.libraryItems || library.library;
               if (libraryItems) {
@@ -306,7 +350,78 @@ export function CanvasView() {
     useUIStore.getState().showToast(`Removed ${record.name}`, 'success');
   }, [activeWorkspaceId, excalidrawAPI, libraryRecords]);
 
-  const { triggerAutosave } = useAutosave(activeCanvasId);
+  const { triggerAutosave, saveNow } = useAutosave(activeCanvasId, activeWorkspaceId);
+
+  useEffect(() => {
+    const updateFullscreen = () => setIsFullscreen(document.fullscreenElement === canvasContainerRef.current?.parentElement);
+    document.addEventListener('fullscreenchange', updateFullscreen);
+    return () => document.removeEventListener('fullscreenchange', updateFullscreen);
+  }, []);
+
+  const handleEditorThemeModeChange = useCallback((mode: CanvasEditorThemeMode) => {
+    setEditorThemeMode(mode);
+    try { window.localStorage.setItem(CANVAS_EDITOR_THEME_KEY, mode); } catch { /* best effort */ }
+  }, []);
+
+  const handleSaveNow = useCallback(async () => {
+    const api = useCanvasStore.getState().excalidrawAPI as any;
+    if (!api) return;
+    await saveNow(api.getSceneElements(), api.getAppState(), api.getFiles());
+    useUIStore.getState().showToast('Canvas saved', 'success');
+  }, [saveNow]);
+
+  const handleImportScene = useCallback(async (file: File) => {
+    const api = useCanvasStore.getState().excalidrawAPI as any;
+    if (!api || !ExcalidrawModule?.loadFromBlob) return;
+    try {
+      const scene = await ExcalidrawModule.loadFromBlob(file, api.getAppState(), api.getSceneElements());
+      const files = scene.files ?? {};
+      api.addFiles?.(Object.values(files));
+      api.updateScene({ elements: scene.elements ?? [], appState: scene.appState ?? {}, commitToHistory: true });
+      await saveNow(scene.elements ?? [], scene.appState ?? {}, files);
+      useUIStore.getState().showToast('Canvas imported and saved', 'success');
+    } catch {
+      useUIStore.getState().showToast('That Excalidraw file could not be imported', 'error');
+    }
+  }, [saveNow]);
+
+  const handleExport = useCallback(async (kind: 'excalidraw' | 'png' | 'svg' | 'clipboard') => {
+    const api = useCanvasStore.getState().excalidrawAPI as any;
+    if (!api || !ExcalidrawModule) return;
+    const elements = api.getSceneElements();
+    const appState = api.getAppState();
+    const files = api.getFiles();
+    const download = (blob: Blob, extension: string) => {
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = canvasDownloadName('panvas-canvas', extension);
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    };
+    try {
+      if (kind === 'clipboard') {
+        await ExcalidrawModule.exportToClipboard({ elements, appState, files, type: 'png' });
+        useUIStore.getState().showToast('Canvas copied as PNG', 'success');
+      } else if (kind === 'excalidraw') {
+        download(new Blob([ExcalidrawModule.serializeAsJSON(elements, appState, files, 'local')], { type: 'application/json' }), 'excalidraw');
+      } else if (kind === 'svg') {
+        const svg = await ExcalidrawModule.exportToSvg({ elements, appState, files });
+        download(new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' }), 'svg');
+      } else {
+        download(await ExcalidrawModule.exportToBlob({ elements, appState, files, mimeType: 'image/png' }), 'png');
+      }
+    } catch {
+      useUIStore.getState().showToast('Canvas export failed', 'error');
+    }
+  }, []);
+
+  const handleToggleFullscreen = useCallback(async () => {
+    const host = canvasContainerRef.current?.parentElement;
+    if (!host) return;
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await host.requestFullscreen();
+  }, []);
 
   const handleToggleDrawToShape = useCallback(() => {
     setDrawToShapeEnabled((enabled) => {
@@ -325,6 +440,8 @@ export function CanvasView() {
     const normalizedColor = normalizeCanvasColor(color);
     if (!api || !activeCanvasId || !normalizedColor) return;
 
+    documentBackgroundColorRef.current = normalizedColor;
+
     api.updateScene({ appState: { viewBackgroundColor: normalizedColor }, commitToHistory: false });
     const state = api.getAppState?.() ?? {};
     const activeBackgroundColor = normalizeCanvasColor(state.viewBackgroundColor ?? '') ?? normalizedColor;
@@ -332,13 +449,7 @@ export function CanvasView() {
     await useCanvasStore.getState().saveCanvasData({
       canvasFileId: activeCanvasId,
       elements: api.getSceneElements?.() ?? [],
-      appState: {
-        ...persistedAppState,
-        viewBackgroundColor: activeBackgroundColor,
-        zoom: state.zoom,
-        scrollX: state.scrollX,
-        scrollY: state.scrollY,
-      },
+      appState: mergeCanvasAppStateForPersistence(persistedAppState, { ...state, viewBackgroundColor: activeBackgroundColor }),
       files: api.getFiles?.() ?? {},
     }, activeWorkspaceId ?? undefined);
   }, [activeCanvasId, activeWorkspaceId]);
@@ -368,7 +479,7 @@ export function CanvasView() {
       opacity: appState.currentItemOpacity ?? 100,
     };
     const skeleton = createExcalidrawShapeSkeleton(recognition, style);
-    const [replacement] = convertToExcalidrawElements([skeleton as any]);
+    const [replacement] = ExcalidrawModule?.convertToExcalidrawElements?.([skeleton as any]) ?? [];
     if (!replacement) return;
 
     api.updateScene({
@@ -448,9 +559,19 @@ export function CanvasView() {
         return;
       }
       
-      triggerAutosave(elements, appState, files);
+      const emittedBackground = resolveCanvasDocumentBackground(appState ?? {});
+      const stableBackground = documentBackgroundColorRef.current || emittedBackground;
+      const nextAppState = emittedBackground === stableBackground
+        ? appState
+        : { ...appState, viewBackgroundColor: stableBackground };
+      // Excalidraw can emit a transient theme-derived snapshot while its
+      // editor theme changes. Restore the document swatch before persisting.
+      if (nextAppState !== appState && excalidrawAPI) {
+        excalidrawAPI.updateScene({ appState: { viewBackgroundColor: stableBackground }, commitToHistory: false });
+      }
+      triggerAutosave(elements, nextAppState, files);
     },
-    [triggerAutosave]
+    [excalidrawAPI, triggerAutosave]
   );
 
   // PDF and Image drag-and-drop handler
@@ -483,22 +604,17 @@ export function CanvasView() {
     }
   }, [activeCanvasId, addBlock, updateBlock]);
 
+  const resolvedEditorTheme = resolveCanvasEditorTheme(editorThemeMode, panvasTheme);
   const initialExcalidrawData = React.useMemo(() => {
     if (currentData) {
-      const { isLibraryOpen, isLibraryMenuDocked, ...restAppState } = currentData.appState || {};
       return {
         elements: currentData.elements,
-        appState: {
-          ...restAppState,
-          theme: 'dark',
-        },
+        appState: createCanvasInitialAppState(currentData.appState || {}, resolvedEditorTheme),
         files: currentData.files,
       };
     }
-    return {
-      appState: { theme: 'dark' },
-    };
-  }, [currentData]);
+    return { appState: createCanvasInitialAppState({}, resolvedEditorTheme) };
+  }, [currentData, resolvedEditorTheme]);
 
   // No canvas selected → show welcome
   if (!activeCanvasId) {
@@ -506,18 +622,18 @@ export function CanvasView() {
   }
 
   // Loading states
-  if (isLoading || !isCanvasDataReady) {
+  if (isLoading || (!isCanvasDataReady && !loadError)) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-panvas-bg-primary">
         <div className="flex flex-col items-center gap-3">
-          <img src="./panvas_logo.png" alt="Panvas" className="w-12 h-12 rounded-xl shadow-glass-sm animate-pulse-subtle" />
+          <img src={PANVAS_LOGO_SRC} alt="Panvas" className="w-12 h-12 rounded-xl shadow-glass-sm animate-pulse-subtle" />
           <span className="text-sm text-panvas-text-tertiary mt-2">Loading canvas...</span>
         </div>
       </div>
     );
   }
 
-  if (!Excalidraw) return null;
+  if (loadError || !Excalidraw) return <div className="flex h-full w-full items-center justify-center bg-panvas-bg-primary p-6"><div className="max-w-md rounded-2xl border border-panvas-border-strong bg-panvas-bg-elevated p-6 text-center shadow-glass"><h2 className="text-base font-semibold text-panvas-text-primary">Canvas unavailable</h2><p className="mt-2 text-sm text-panvas-text-secondary">{loadError ?? 'The editor did not finish loading.'}</p><button type="button" onClick={() => { setLoadError(null); setIsCanvasDataReady(false); setLoadAttempt((value) => value + 1); }} className="mt-4 rounded-lg bg-panvas-accent-blue px-4 py-2 text-sm font-medium text-white">Try again</button></div></div>;
 
 
 
@@ -542,11 +658,14 @@ export function CanvasView() {
           onToggleLibraryManager={() => setLibraryManagerOpen((open) => !open)}
           drawToShapeEnabled={drawToShapeEnabled}
           onToggleDrawToShape={handleToggleDrawToShape}
-          onLassoSelect={() => {
-            const api = useCanvasStore.getState().excalidrawAPI as any;
-            api?.setActiveTool?.({ type: 'selection', locked: false });
-          }}
           onBackgroundColorChange={handleBackgroundColorChange}
+          editorThemeMode={editorThemeMode}
+          onEditorThemeModeChange={handleEditorThemeModeChange}
+          onSaveNow={handleSaveNow}
+          onImportScene={handleImportScene}
+          onExport={handleExport}
+          onToggleFullscreen={handleToggleFullscreen}
+          isFullscreen={isFullscreen}
         />
       )}
       {/* Excalidraw Canvas */}
@@ -558,29 +677,11 @@ export function CanvasView() {
           onChange={handleChange}
           onPointerUpdate={handlePointerUpdate}
           onLibraryChange={handleLibraryChange}
-          theme="dark"
+          theme={resolvedEditorTheme}
+          validateEmbeddable={isSafeCanvasEmbedUrl}
           UIOptions={EXCALIDRAW_UI_OPTIONS}
         >
-          <DefaultSidebar />
-          {MainMenu && (
-            <MainMenu>
-              <MainMenu.DefaultItems.LoadScene />
-              <MainMenu.DefaultItems.SaveToActiveFile />
-              <MainMenu.DefaultItems.Export />
-              <MainMenu.DefaultItems.SaveAsImage />
-              <MainMenu.DefaultItems.ClearCanvas />
-              <MainMenu.Separator />
-              <MainMenu.DefaultItems.ToggleTheme />
-              <MainMenu.DefaultItems.ChangeCanvasBackground />
-              <MainMenu.Separator />
-              <MainMenu.ItemLink href="https://panvas.app/docs" shortcut="?">
-                Panvas Documentation
-              </MainMenu.ItemLink>
-              <MainMenu.ItemLink href="https://github.com/sksum/panvas/issues">
-                Report Bug
-              </MainMenu.ItemLink>
-            </MainMenu>
-          )}
+          {DefaultSidebar && <DefaultSidebar />}
           {ExcalidrawWelcomeScreen && (
             <ExcalidrawWelcomeScreen>
               <ExcalidrawWelcomeScreen.Hints.MenuHint />
@@ -590,7 +691,7 @@ export function CanvasView() {
                 <div className="flex flex-col items-center gap-4 w-full max-w-sm px-6 pb-24">
                   <div className="w-20 h-20 mb-2 relative flex items-center justify-center">
                     <div className="absolute inset-0 bg-gradient-to-tr from-panvas-accent-purple/20 to-panvas-accent-blue/20 rounded-2xl blur-xl"></div>
-                    <img src="./panvas_logo.png" alt="Panvas" className="w-full h-full rounded-2xl shadow-glass-lg relative z-10 select-none pointer-events-none" />
+                    <img src={PANVAS_LOGO_SRC} alt="Panvas" className="w-full h-full rounded-2xl shadow-glass-lg relative z-10 select-none pointer-events-none" />
                   </div>
                   <div className="text-2xl font-semibold tracking-tight text-panvas-text-primary text-center mb-6 select-none">
                     Welcome to Panvas
@@ -629,17 +730,13 @@ export function CanvasView() {
                       onClick={() => {
                         const input = document.createElement('input');
                         input.type = 'file';
-                        input.accept = '.excalidraw,.png,.jpg,.jpeg,.svg';
+                        input.accept = '.excalidraw,application/json';
                         input.onchange = async (e: any) => {
                           const file = e.target.files?.[0];
                           if (!file) return;
                           
                           try {
-                            const scene = await loadFromBlob(file, null, null);
-                            if (excalidrawAPI) {
-                              excalidrawAPI.updateScene(scene);
-                              useUIStore.getState().showToast('Imported successfully', 'success');
-                            }
+                            await handleImportScene(file);
                           } catch (err) {
                             console.error('Failed to load file', err);
                             useUIStore.getState().showToast('Failed to load file', 'error');

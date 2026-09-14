@@ -33,7 +33,7 @@ export async function exportAnnotatedPdf(input: AnnotatedPdfExportInput): Promis
     notebookRepository.loadDrawingData(input.workspaceId, input.notebookId, `${input.pageId}_pdf_${index + 1}`)
       .then(value => value as DrawingData | null),
   ));
-  const rendered = await renderPdfAnnotations(originalBytes, drawings, input.pageState);
+  const rendered = await renderPdfAnnotations(originalBytes, drawings, input.pageState, async fileId => { const image = await canvasRepository.getImage(fileId); return image ? { mimeType: image.mimeType, data: image.data } : undefined; });
   const baseName = input.fileName.replace(/\.pdf$/i, '') || 'document';
   return { ...rendered, fileName: `${baseName}-annotated.pdf` };
 }

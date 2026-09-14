@@ -7,7 +7,6 @@ import { create } from 'zustand';
 import type { CanvasData, CustomBlock, BlockType } from '@/types/canvas';
 import { canvasRepository } from '@/repositories/CanvasRepository';
 import { useAuthStore } from './authStore';
-import { useSyncStore } from './syncStore';
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
@@ -70,7 +69,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     try {
       const userId = useAuthStore.getState().user?.id ?? null;
       await canvasRepository.saveData(userId, data, workspaceId);
-      useSyncStore.getState().incrementPending();
       
       const current = get().currentData;
       set({ 
@@ -92,6 +90,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     } catch (err) {
       console.error('[CanvasStore] Save failed:', err);
       set({ saveStatus: 'error' });
+      throw err;
     }
   },
 
@@ -119,7 +118,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       height: type === 'pdf' ? 650 : type === 'markdown' ? 250 : 120,
       content: content || defaultContent,
     });
-    useSyncStore.getState().incrementPending();
 
     set({ customBlocks: [...get().customBlocks, block] });
     return block;
@@ -127,7 +125,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   updateBlock: async (id: string, updates: Partial<CustomBlock>) => {
     await canvasRepository.updateBlock(id, updates);
-    useSyncStore.getState().incrementPending();
     set({
       customBlocks: get().customBlocks.map(b =>
         b.id === id ? { ...b, ...updates, updatedAt: Date.now() } : b
@@ -137,7 +134,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   deleteBlock: async (id: string) => {
     await canvasRepository.deleteBlock(id);
-    useSyncStore.getState().incrementPending();
     set({ customBlocks: get().customBlocks.filter(b => b.id !== id) });
   },
 

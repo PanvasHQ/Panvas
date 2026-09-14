@@ -30,3 +30,34 @@ test('filter reset isolates consecutive strokes', () => {
   filter.reset();
   assert.deepEqual(filter.push({ x: 10, y: 20, pressure: .2, t: 0 }, 100), { x: 10, y: 20, pressure: .2, t: 0 });
 });
+
+
+test('nib strategies distinguish direction, pressure, taper and flat felt geometry', async () => {
+  const { buildInkFamilyGeometry, inkSampleWidths, INK_FAMILIES } = await import('../src/components/notebook/engine/inkFamilyGeometry.ts');
+  const base = { id: 'nib', type: 'stroke' as const, tool: 'pen' as const, createdAt: 0, color: '#000000', opacity: 1, thickness: 4, points: Array.from({ length: 21 }, (_, i) => ({ x: i * 5, y: 0, pressure: 0.5, t: i })) };
+  const fountain = { ...base, inkFamily: 'fountain' as const };
+  const horizontal = inkSampleWidths(fountain)[10];
+  const vertical = inkSampleWidths({ ...fountain, points: base.points.map(p => ({ ...p, x: 0, y: p.x })) })[10];
+  assert.ok(vertical > horizontal * 3);
+  const brush = inkSampleWidths({ ...base, inkFamily: 'brush' });
+  assert.ok(brush[10] > brush[0] * 3 && brush[10] > brush[20] * 3);
+  assert.deepEqual(inkSampleWidths({ ...base, inkFamily: 'felt' }), inkSampleWidths({ ...base, inkFamily: 'felt', points: base.points.map(p => ({ ...p, pressure: 0.1 })) }));
+  for (const inkFamily of INK_FAMILIES) for (const pattern of ['solid', 'dashed', 'dotted'] as const) {
+    const stroke = { ...base, inkFamily, pattern };
+    const geometry = buildInkFamilyGeometry(stroke);
+    assert.ok(geometry.length);
+    assert.ok(geometry.flat().every(p => Number.isFinite(p.x) && Number.isFinite(p.y)));
+    assert.deepEqual(buildInkFamilyGeometry(JSON.parse(JSON.stringify(stroke))), geometry);
+  }
+  assert.deepEqual(buildInkFamilyGeometry(base), []);
+});
+
+
+test('patterned nib hit/eraser width includes the actual rendered marks', async () => {
+  const { buildInkFamilyGeometry } = await import('../src/components/notebook/engine/inkFamilyGeometry.ts');
+  const { getStrokeRenderHalfWidth } = await import('../src/components/notebook/engine/strokeGeometry.ts');
+  const stroke = { id: 'wide-dot', type: 'stroke' as const, tool: 'pen' as const, createdAt: 0, color: '#000000', opacity: 1, thickness: 10, inkFamily: 'fountain' as const, pattern: 'dotted' as const, points: [{ x: 0, y: 0, pressure: 1, t: 0 }, { x: 100, y: 0, pressure: 1, t: 1 }] };
+  const firstDot = buildInkFamilyGeometry(stroke)[0];
+  const visibleRadius = Math.max(...firstDot.map(p => Math.hypot(p.x, p.y)));
+  assert.ok(getStrokeRenderHalfWidth(stroke) + 1e-8 >= visibleRadius);
+});

@@ -144,9 +144,23 @@
   .panvas-excalidraw-wrapper .App-toolbar {
     display: none !important; /* Hides top toolbar */
   }
-  /* We keep the properties panel and library open if we want, or we can hide them all: */
-  .panvas-excalidraw-wrapper .layer-ui__wrapper .App-menu_top {
+  /* Panvas owns navigation and tools. Excalidraw still owns the contextual
+     appearance panel because it is the authoritative editor for selected objects. */
+  .panvas-excalidraw-wrapper .App-menu_top .shapes-section,
+  .panvas-excalidraw-wrapper .App-menu_top__left > :first-child,
+  .panvas-excalidraw-wrapper .layer-ui__wrapper__top-right {
     display: none !important;
+  }
+
+  .panvas-excalidraw-wrapper .App-menu_top {
+    pointer-events: none;
+    padding-top: 4.5rem;
+  }
+
+  .panvas-excalidraw-wrapper .selected-shape-actions {
+    pointer-events: auto;
+    max-height: calc(100vh - 8rem);
+    overflow: auto;
   }
 
   *,
@@ -1063,4 +1077,105 @@
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Phone composition: a document header, uninterrupted paper, and a tool dock.
+   The document alone scales; UI remains at native touch size. */
+.panvas-mobile-document-header {
+  display: flex; align-items: center; gap: 4px; flex-shrink: 0;
+  min-height: 44px; padding: 0 8px; z-index: 40;
+  color: rgb(var(--text-primary)); background: rgb(var(--bg-primary));
+  border-bottom: 1px solid rgb(var(--border-subtle));
+}
+.panvas-mobile-document-header button { min-height: 44px; }
+.panvas-mobile-tool-dock {
+  flex-shrink: 0; position: relative; z-index: 40;
+  padding: 4px 4px max(4px, env(safe-area-inset-bottom));
+  border-top: 1px solid rgb(var(--border-default));
+  background: rgb(var(--bg-elevated));
+}
+.panvas-sheet-close {
+  display: block; margin-left: auto; padding: 10px 16px; min-height: 44px;
+  color: rgb(var(--text-primary)); font-size: 14px; font-weight: 600;
+}
+@media (max-width: 599px) {
+  .panvas-app-shell { height: var(--panvas-visual-height, 100dvh); max-width: 100%; }
+  .panvas-topbar { height: 48px; padding-inline: 8px; }
+  .panvas-topbar button { min-height: 44px; min-width: 40px; }
+  .panvas-document-tabs { display: none; }
+  .panvas-mobile-tool-dock .panvas-toolbar-surface {
+    width: 100%; justify-content: space-between; padding: 0; gap: 0;
+    border: 0; border-radius: 0; background: transparent; box-shadow: none;
+  }
+  .panvas-mobile-tool-dock .panvas-toolbar-surface > button {
+    height: 44px; width: 44px; min-width: 0; flex: 1 1 0;
+  }
+  .panvas-mobile-tool-dock .panvas-floating-toolbar > .absolute {
+    top: auto; bottom: calc(100% + 8px); margin-top: 0;
+    max-width: calc(100vw - 16px); white-space: normal;
+  }
+  .panvas-mobile-document-header .panvas-page-utilities {
+    border: 0; box-shadow: none; background: transparent;
+  }
+  .panvas-mobile-sheet,
+  .panvas-app-shell .panvas-overlay:not(.panvas-tooltip) {
+    position: fixed; inset: auto 0 var(--panvas-keyboard-inset, 0px);
+    width: 100%; max-width: 100%; min-width: 0;
+    max-height: min(76dvh, calc(var(--panvas-visual-height, 100dvh) - 56px));
+    overflow: auto; overscroll-behavior: contain;
+    transform: none; margin: 0; padding-bottom: max(12px, env(safe-area-inset-bottom));
+    border-radius: 16px 16px 0 0; border: 1px solid rgb(var(--border-default));
+    background: rgb(var(--bg-elevated)); box-shadow: 0 -8px 32px #0002; z-index: 100;
+  }
+  .panvas-mobile-sheet > :not(.panvas-sheet-close) {
+    width: 100%; max-width: 100%; min-width: 0; max-height: none;
+  }
+  .panvas-mobile-sheet button, .panvas-properties-panel button,
+  .panvas-view-inspector button { min-height: 40px; }
+  .panvas-mobile-sheet select, .panvas-mobile-sheet input:not([type='range']),
+  .panvas-properties-panel select { min-height: 40px; }
+  .panvas-properties-panel, .panvas-view-inspector {
+    bottom: var(--panvas-keyboard-inset, 0px); max-width: 100%;
+    max-height: calc(var(--panvas-visual-height, 100dvh) - 56px);
+  }
+  .panvas-dialog input, .panvas-dialog textarea { font-size: 16px; }
+  .panvas-layer-modal { height: var(--panvas-visual-height, 100dvh); }
+  .panvas-layer-modal .panvas-dialog { max-height: calc(var(--panvas-visual-height, 100dvh) - 16px); }
+  .panvas-layer-modal .glass-panel { max-height: calc(var(--panvas-visual-height, 100dvh) - 24px); }
+}
+
+@media (min-width: 600px) and (max-width: 1023px) {
+  .panvas-notebook-chrome {
+    position: relative; inset: auto; flex-shrink: 0; padding: 8px; gap: 8px;
+    min-height: 76px; background: rgb(var(--bg-primary));
+    border-bottom: 1px solid rgb(var(--border-subtle));
+  }
+  .panvas-notebook-chrome > div:first-child:not(:last-child) { max-width: none; }
+  .panvas-notebook-chrome .panvas-writing-preset-host { display: none; }
+}
+@media (max-width: 599px) {
+  .panvas-overlay[aria-label='Image controls'], .panvas-overlay[aria-label='Line style'] {
+    inset: auto 8px calc(64px + var(--panvas-keyboard-inset, 0px)) !important;
+    width: calc(100% - 16px); height: auto; min-height: 48px;
+    max-width: calc(100% - 16px); flex-wrap: wrap; justify-content: center;
+  }
+  .panvas-local-mode-prompt { right: 8px; max-width: calc(100vw - 16px); }
+  .panvas-canvas-toolbar {
+    top: auto; bottom: 0; left: 0; right: 0; max-width: 100%;
+    transform: none; animation: none;
+  }
+  .panvas-canvas-toolbar > div {
+    overflow: visible; justify-content: space-around; border-radius: 0;
+    padding: 4px 4px max(4px, env(safe-area-inset-bottom));
+    background: rgb(var(--bg-elevated)); backdrop-filter: none;
+  }
+  .panvas-canvas-toolbar > div > [aria-hidden='true'] { display: none; }
+  .panvas-canvas-toolbar > div > button,
+  .panvas-canvas-toolbar > div > div > button { min-width: 40px; min-height: 44px; }
+  .panvas-canvas-toolbar [role='menu'], .panvas-canvas-toolbar [role='dialog'] {
+    position: fixed; inset: auto 0 58px; width: 100%; max-width: 100%;
+    max-height: calc(var(--panvas-visual-height, 100dvh) - 120px);
+    overflow: auto; border-radius: 16px 16px 0 0; margin: 0;
+  }
+  .panvas-canvas-toolbar [role='menu'] button { min-height: 44px; }
 }

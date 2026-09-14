@@ -4,9 +4,14 @@ node_modules/
 # Build and release output
 dist/
 dist-electron/
+main.js
 build/
+!build/
+build/*
+!build/icon.ico
 release/
 tsconfig.tsbuildinfo
+Landingpage.png
 
 # Environment and local integration configuration
 .env
@@ -46,4 +51,43 @@ agent/
 glm work/
 *.zip
 diff.txt
+.qa*
+strix_runs/
+stitch_reference/
+
+# Certificates, keys, secrets, and private credentials
+*.key
+*.pem
+*.p12
+*.pfx
+credentials*
+secrets*
+tokens*
+*.token
+tokens.json
+private-config*
+*.local
+.env.*
+!.env.example
+
+# Logs and temporary testing
+logs/
+.tmp/
+temp/
+
+# Local scratch and agent tooling
+.agents/skills/
+skills-lock.json
+qa-artifacts/
+screenshots-temp/
+recordings-temp/
+
+# Local research and scratch notes
+docs/freeNotes Android/
+LANDING_PAGE_REBUILD_PLAN.md
+PANVAS_LANDING_ASTRA_HANDOFF.md
+HUMAN_REVIEW_REQUIRED.md
+PROGRESS.md
+release.md
+media-master/
 

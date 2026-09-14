@@ -1,3 +1,5 @@
+import { stickyPaperStyle } from './stickyNotes';
+import { textObjectStyle } from './textTypography';
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -31,10 +33,12 @@ interface FloatingTextEditorProps {
   onFocus: (editor: Editor) => void;
   onBlur: () => void;
   zIndex?: number;
+  pageOffset?: { x: number; y: number };
   /** Optional PDF placement contract. Text coordinates remain source-page coordinates. */
   pdfPlacement?: {
     rotation: PdfPageRotation;
     sourceDimensions: PdfPageDimensions;
+    sourceOffset?: { x: number; y: number };
   };
 }
 
@@ -47,6 +51,7 @@ export const FloatingTextEditor: React.FC<FloatingTextEditorProps> = ({
   onBlur,
   pdfPlacement,
   zIndex,
+  pageOffset,
 }) => {
   const isSelected = engine.selection.getSelectedElements().some(el => el.id === object.id);
   const stickyNote = isStickyNote(object);
@@ -500,7 +505,7 @@ export const FloatingTextEditor: React.FC<FloatingTextEditorProps> = ({
 
   const pdfVisualRect = pdfPlacement
     ? sourceRectToVisual(
-      { x: pos.x, y: pos.y, width: currentWidth, height: currentHeight },
+      { x: pos.x + (pdfPlacement.sourceOffset?.x ?? 0), y: pos.y + (pdfPlacement.sourceOffset?.y ?? 0), width: currentWidth, height: currentHeight },
       pdfPlacement.sourceDimensions,
       pdfPlacement.rotation,
     )
@@ -578,8 +583,9 @@ export const FloatingTextEditor: React.FC<FloatingTextEditorProps> = ({
         touchAction: isTextTool ? 'auto' : 'none',
         isolation: 'isolate',
         zIndex,
-        left: `${(pdfVisualRect?.x ?? pos.x) * scale}px`,
-        top: `${(pdfVisualRect?.y ?? pos.y) * scale}px`,
+        ...textObjectStyle(object),
+        left: `${(pdfVisualRect?.x ?? pos.x + (pageOffset?.x ?? 0)) * scale}px`,
+        top: `${(pdfVisualRect?.y ?? pos.y + (pageOffset?.y ?? 0)) * scale}px`,
         width: `${pdfVisualRect?.width ?? currentWidth}px`,
         minHeight: `${pdfVisualRect?.height ?? textMinHeight}px`,
         ...(pdfVisualRect ? { height: `${pdfVisualRect.height}px` } : currentHeight ? { height: `${Math.max(textMinHeight, currentHeight)}px` } : {}),
@@ -633,6 +639,7 @@ export const FloatingTextEditor: React.FC<FloatingTextEditorProps> = ({
               className="w-full h-full shadow-md transition-colors"
               style={{
                 backgroundColor: bgRgba,
+                ...stickyPaperStyle(object),
                 borderRadius: getShapeBorderRadius(stickyShape),
               }}
             />
@@ -700,7 +707,7 @@ export const FloatingTextEditor: React.FC<FloatingTextEditorProps> = ({
           {stickyStylePanel === 'color' && <div className="flex shrink-0 items-center gap-1">
             {STICKY_NOTE_COLORS.map(({ name, value }) => (
               <button
-                key={value}
+                key={`${name}-${value}`}
                 type="button"
                 aria-label={`${name} sticky note`}
                 title={name}

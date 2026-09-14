@@ -1,5 +1,8 @@
 # Architecture
 
+> [!NOTE]
+> **Historical Document**: This document reflects early planning/development phases (August-September 2026). For the canonical v0.1.0 architecture and documentation, see [README.md](../README.md) and [docs/ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Runtime flow
 
 `main.tsx` imports global CSS, initializes PostHog analytics, and renders `App` in `StrictMode`. `App` initializes auth, Dexie defaults, workspace/recent/trash state, and sync scheduling. Wouter chooses a route. `AppShell` surrounds authenticated work and preview routes. `WorkspaceContent` renders a notebook shell when a page is active; otherwise it renders the real Excalidraw canvas.

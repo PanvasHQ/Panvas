@@ -7,6 +7,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { Link } from 'wouter';
+import { PANVAS_LOGO_SRC } from '@/lib/brand';
 
 // Reusable notebook texture (same pattern as landing page)
 function AuthTexture({ gridOpacity = 0.02, dotOpacity = 0.012 }: { gridOpacity?: number; dotOpacity?: number }) {
@@ -50,7 +51,7 @@ export function AuthLayout({ children, title, subtitle }: AuthLayoutProps) {
         {/* Ambient background artwork */}
         <div 
           className="absolute inset-0 bg-cover bg-center bg-no-repeat"
-          style={{ backgroundImage: `url("/app-screenshots/HeroResearchWorkSpace.png")` }}
+          style={{ backgroundImage: `url("/Application SS updated/optimized/HeroResearchWorkSpace-1280.webp")` }}
         />
         <div className="absolute inset-0 bg-[#0D0D0D]/70" />
         <AuthTexture gridOpacity={0.025} dotOpacity={0.015} />
@@ -66,7 +67,7 @@ export function AuthLayout({ children, title, subtitle }: AuthLayoutProps) {
               className="flex items-center gap-3 cursor-pointer group"
             >
               <img 
-                src="./panvas_logo.png" 
+                src={PANVAS_LOGO_SRC} 
                 alt="Panvas" 
                 className="w-9 h-9 rounded-lg border border-white/8 group-hover:border-white/15 transition-colors" 
               />
@@ -136,7 +137,7 @@ export function AuthLayout({ children, title, subtitle }: AuthLayoutProps) {
         <div className="lg:hidden p-6 pb-0">
           <Link href="/">
             <div className="flex items-center gap-2.5 cursor-pointer">
-              <img src="./panvas_logo.png" alt="Panvas" className="w-7 h-7 rounded-md border border-white/8" />
+              <img src={PANVAS_LOGO_SRC} alt="Panvas" className="w-7 h-7 rounded-md border border-white/8" />
               <span className="font-sketch text-lg text-[#E8E8E8] tracking-wide">Panvas</span>
             </div>
           </Link>

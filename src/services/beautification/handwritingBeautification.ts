@@ -1,24 +1,6 @@
 import type { BoundingBox, Stroke } from '@/components/notebook/engine/drawingTypes';
-
-export const STANDARD_TEXT_FONT_FAMILIES = [
-  'Inter, sans-serif',
-  "'Times New Roman', serif",
-  "'Courier New', monospace",
-  "'Comic Sans MS', cursive",
-] as const;
-
-export const HANDWRITING_FONT_FAMILIES = [
-  "'Patrick Hand', cursive",
-  "'Kalam', cursive",
-  "'Caveat', cursive",
-  "'Permanent Marker', cursive",
-  "'Shadows Into Light', cursive",
-] as const;
-
-export const PANVAS_TEXT_FONT_FAMILIES = [
-  ...STANDARD_TEXT_FONT_FAMILIES,
-  ...HANDWRITING_FONT_FAMILIES,
-] as const;
+import { PANVAS_TEXT_FONT_FAMILIES } from '../../components/notebook/textFonts.ts';
+export { HANDWRITING_FONT_FAMILIES, PANVAS_TEXT_FONT_FAMILIES, STANDARD_TEXT_FONT_FAMILIES } from '../../components/notebook/textFonts.ts';
 
 export type HandwritingFontFamily = typeof PANVAS_TEXT_FONT_FAMILIES[number];
 
@@ -36,6 +18,20 @@ export interface HandwritingToolPreferences {
   recentColors: string[];
   /** BCP-47 language tag. Empty means the browser/OS default language. */
   language: string;
+}
+
+/** Recognition languages exposed by the active local pipeline. Keep this
+ * deliberately small until additional language models are actually shipped. */
+export const SUPPORTED_HANDWRITING_RECOGNITION_LANGUAGES = [
+  { value: 'en-US', label: 'English' },
+] as const;
+
+export function normalizeHandwritingRecognitionLanguage(value: unknown): string {
+  const candidate = typeof value === 'string' ? value.trim() : '';
+  if (!candidate) return '';
+  // Keep the persisted shape stable while safely migrating every legacy
+  // non-English selection to the one model currently available.
+  return 'en-US';
 }
 
 export interface BeautifiedTextPlacement {
@@ -108,7 +104,7 @@ export function sanitizeHandwritingToolPreferences(input: unknown): HandwritingT
     .filter((candidate, index, colors) => colors.findIndex(item => item.toLowerCase() === candidate.toLowerCase()) === index)
     .slice(0, 5);
   const language = typeof value.language === 'string' && value.language.length <= 35
-    ? value.language.trim()
+    ? normalizeHandwritingRecognitionLanguage(value.language)
     : DEFAULT_HANDWRITING_TOOL_PREFERENCES.language;
   return { fontFamily, fontSize, color, thickness, recentColors, language };
 }

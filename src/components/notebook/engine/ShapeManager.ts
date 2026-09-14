@@ -1,3 +1,4 @@
+import { buildLineStyleGeometry, lineStyleHit } from './lineStyleGeometry.ts';
 // ============================================
 // Panvas — Shape Manager
 // ============================================
@@ -70,6 +71,16 @@ export class ShapeManager {
   renderShape(ctx: CanvasRenderingContext2D, shape: Shape): void {
     ctx.save();
     
+    if (shape.shapeType === 'line' || shape.shapeType === 'arrow') {
+      const geometry = buildLineStyleGeometry(shape);
+      ctx.strokeStyle = shape.color; ctx.fillStyle = shape.color; ctx.lineWidth = shape.strokeWidth;
+      ctx.globalAlpha = Math.max(0, Math.min(1, shape.opacity ?? 1)); ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.setLineDash([]);
+      ctx.beginPath();
+      for (const path of geometry.paths) path.forEach((point, i) => i === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
+      ctx.stroke(); ctx.beginPath();
+      for (const dot of geometry.dots) { ctx.moveTo(dot.x + geometry.radius, dot.y); ctx.arc(dot.x, dot.y, geometry.radius, 0, Math.PI * 2); }
+      ctx.fill(); ctx.restore(); return;
+    }
     // Apply rotation around center
     const cx = shape.x + shape.width / 2;
     const cy = shape.y + shape.height / 2;
@@ -114,26 +125,10 @@ export class ShapeManager {
         ctx.lineTo(shape.x, cy);
         ctx.closePath();
         break;
-      case 'line':
-        ctx.moveTo(shape.x, shape.y);
-        ctx.lineTo(shape.x + shape.width, shape.y + shape.height);
-        break;
-      case 'arrow':
-        // A simple arrow
-        const angle = Math.atan2(shape.height, shape.width);
-        const headlen = 15;
-        const x2 = shape.x + shape.width;
-        const y2 = shape.y + shape.height;
-        ctx.moveTo(shape.x, shape.y);
-        ctx.lineTo(x2, y2);
-        ctx.moveTo(x2, y2);
-        ctx.lineTo(x2 - headlen * Math.cos(angle - Math.PI / 6), y2 - headlen * Math.sin(angle - Math.PI / 6));
-        ctx.moveTo(x2, y2);
-        ctx.lineTo(x2 - headlen * Math.cos(angle + Math.PI / 6), y2 - headlen * Math.sin(angle + Math.PI / 6));
-        break;
+
     }
 
-    if (shape.fill && shape.shapeType !== 'line' && shape.shapeType !== 'arrow') {
+    if (shape.fill) {
       ctx.fill();
     }
     ctx.stroke();
@@ -149,6 +144,10 @@ export class ShapeManager {
 
     for (const shape of this.shapes) {
       if (!this.layerManager.isEditable(shape.layerId)) continue;
+      if (shape.shapeType === 'line' || shape.shapeType === 'arrow') {
+        if (lineStyleHit(shape, { x, y }, radius)) hits.push(shape.id);
+        continue;
+      }
       // Very basic hit testing for now (bounding box + radius)
       // For precise selection, we'd need type-specific geometry math.
       const minX = Math.min(shape.x, shape.x + shape.width) - radius;

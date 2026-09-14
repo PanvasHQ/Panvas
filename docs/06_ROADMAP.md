@@ -1,5 +1,8 @@
 # Functional roadmap
 
+> [!NOTE]
+> **Historical Document**: This document reflects early planning/development phases (August-September 2026). For the canonical v0.1.0 architecture and documentation, see [README.md](../README.md) and [docs/ARCHITECTURE.md](ARCHITECTURE.md).
+
 This replaces UI-first sequencing with functionality-first engineering. Do not begin AI before the foundations are stable.
 
 1. **Local desktop/filesystem foundation** 🔴: choose Electron/Tauri architecture; establish safe main/preload IPC; make a workspace directory and files the source of truth; define migration/backup strategy.

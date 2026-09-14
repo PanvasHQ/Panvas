@@ -193,6 +193,7 @@ function Nav({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
         {links.map(([label, href]) => (
           <button type="button" key={href} onClick={() => go(href)}>{label}</button>
         ))}
+        <Link href="/download">Download</Link>
         <Link href="/roadmap">Roadmap</Link>
       </nav>
       <button type="button" className="pl-button pl-button-primary pl-nav-cta" onClick={onOpenWorkspace}>
@@ -215,6 +216,7 @@ function Nav({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
                 {links.map(([label, href]) => (
                   <button type="button" key={href} onClick={() => go(href)}>{label}<ArrowRight aria-hidden="true" /></button>
                 ))}
+                <Link href="/download" onClick={() => setOpen(false)}>Download <ArrowRight aria-hidden="true" /></Link>
                 <Link href="/roadmap" onClick={() => setOpen(false)}>Roadmap <ArrowRight aria-hidden="true" /></Link>
               </nav>
               <button type="button" className="pl-button pl-button-primary" onClick={() => { setOpen(false); onOpenWorkspace(); }}>
@@ -242,9 +244,11 @@ function Hero({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
           <p className="pl-hero-support">A local-first visual workspace for technical thinking. Notebooks, ink, PDFs, and an infinite Canvas, with room for your own way of working.</p>
           <div className="pl-actions">
             <a className="pl-button pl-button-primary" href="#download"><Download aria-hidden="true" /> Windows</a>
+            <a className="pl-button pl-button-primary" href={PANVAS_RELEASE.windows.downloadUrl}><Download aria-hidden="true" /> Windows</a>
             <button type="button" className="pl-button pl-button-secondary" onClick={onOpenWorkspace}>Explore Panvas <ArrowRight aria-hidden="true" /></button>
           </div>
           <span className="pl-hero-availability">Windows pre-release · Browser build in development</span>
+          <span className="pl-hero-availability">Panvas v0.1.0 · Windows 64-bit &amp; Browser Build</span>
         </div>
         <div className="pl-hero-art">
           <SketchNote className="pl-hero-note">a place for the way you think <span aria-hidden="true">✧</span></SketchNote>
@@ -253,6 +257,35 @@ function Hero({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
             <HeroInkPlayground onOpenWorkspace={onOpenWorkspace}>
               <ProductImage src="HeroPanvasClean.png" alt="The real Panvas workspace, with handwritten welcome notes, drawing tools, notebook navigation, and page properties" eager sizes="(max-width: 760px) 94vw, 68vw" />
             </HeroInkPlayground>
+            <div className="pl-hero-video-frame">
+              {reduceMotion ? (
+                <img
+                  src="/media/panvas-showcase-poster.webp"
+                  alt="Panvas product showcase demonstration"
+                  className="pl-hero-video"
+                  width={1920}
+                  height={1080}
+                  loading="eager"
+                  decoding="async"
+                />
+              ) : (
+                <video
+                  className="pl-hero-video"
+                  autoPlay
+                  muted
+                  loop
+                  playsInline
+                  preload="metadata"
+                  poster="/media/panvas-showcase-poster.webp"
+                  width={1920}
+                  height={1080}
+                  aria-label="Panvas workspace product showcase video demonstration"
+                >
+                  <source src="/media/panvas-showcase.mp4" type="video/mp4" />
+                  Your browser does not support the video tag.
+                </video>
+              )}
+            </div>
             <span className="pl-hero-edge" aria-hidden="true" />
           </div>
           <div className="pl-hero-caption"><span>Your ideas. Your handwriting. Your space.</span><span>Local by default ↗</span></div>
@@ -461,6 +494,7 @@ function Distribution({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
         <div className="pl-download-intro">
           <h2>Choose your surface.</h2>
           <p>A place to begin, with your files on your device. Windows pre-release and browser development builds.</p>
+          <p>A place to begin, with your files on your device. Windows installer and browser build.</p>
         </div>
         <div className="pl-distribution-table">
           <div className="pl-distribution-row">
@@ -469,11 +503,22 @@ function Distribution({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
             <a className="pl-button pl-button-primary" href={PANVAS_RELEASE.windows.downloadUrl} target="_blank" rel="noreferrer" onClick={() => captureEvent('cta_click', { placement: 'download_windows' })}>
               View release candidates <Download aria-hidden="true" />
             </a>
+            <dl><div><dt>Architecture</dt><dd>x64</dd></div><div><dt>System</dt><dd>Windows 10 / 11</dd></div><div><dt>Status</dt><dd>v0.1.0 Release</dd></div></dl>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-start' }}>
+              <a className="pl-button pl-button-primary" href={PANVAS_RELEASE.windows.downloadUrl} target="_blank" rel="noreferrer" onClick={() => captureEvent('cta_click', { placement: 'download_windows' })}>
+                Download Installer (.exe) <Download aria-hidden="true" />
+              </a>
+              <Link href="/download" style={{ fontSize: '0.82rem', color: 'var(--pl-ink-dim)', textDecoration: 'underline' }}>
+                Verify SHA-256 Checksum ↗
+              </Link>
+            </div>
           </div>
           <div className="pl-distribution-row">
             <div><span className="pl-platform">Panvas Web</span><h3>Browser</h3></div>
             <dl><div><dt>Storage</dt><dd>IndexedDB</dd></div><div><dt>Support</dt><dd>Chromium-first</dd></div><div><dt>Account</dt><dd>Not required</dd></div></dl>
             <button type="button" className="pl-button pl-button-secondary" onClick={onOpenWorkspace}>Explore browser build <ArrowRight aria-hidden="true" /></button>
+            <dl><div><dt>Storage</dt><dd>IndexedDB</dd></div><div><dt>Support</dt><dd>Chromium / Modern</dd></div><div><dt>Account</dt><dd>Not required</dd></div></dl>
+            <button type="button" className="pl-button pl-button-secondary" onClick={onOpenWorkspace}>Open Panvas in Browser <ArrowRight aria-hidden="true" /></button>
           </div>
         </div>
       </div>

@@ -23,6 +23,7 @@ export const isPublicRoute = (route: string, desktop: boolean = isDesktop): bool
     route === '/' ||
     route === '/landing' ||
     route === '/app/landing' ||
+    route === '/download' ||
     route === '/privacy' ||
     route === '/terms' ||
     route === '/security' ||

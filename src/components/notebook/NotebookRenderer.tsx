@@ -13,7 +13,9 @@ import { NotebookNavigator } from './NotebookNavigator';
 import { NotebookWorkspaceControls } from './NotebookWorkspaceControls';
 import { NotebookPageUtilities } from './NotebookPageUtilities';
 import { PresentationOverlay } from '@/components/workspace/PresentationOverlay';
+import { resolveNotebookNavigationDelta, shouldNotebookHandleNavigationKey } from './notebookNavigation';
 import { NotebookPageView } from './NotebookPageView';
+import { InactivePagePreview } from './InactivePagePreview';
 import { NotebookContextMenu, type ContextMenuState } from './NotebookContextMenu';
 import { HandwritingConversionDialog } from './HandwritingConversionDialog';
 import type { Editor } from '@tiptap/react';
@@ -24,14 +26,26 @@ import { canvasRepository } from '@/repositories/CanvasRepository';
 import { generateId } from '@/lib/utils/id';
 import { getSafeHttpUrl, htmlToTipTapJson } from './tiptapExtensions';
 import { useToolState } from './useEngineState';
+import { attachTwoFingerViewportGesture } from './engine/touchViewportGesture';
 import { useIsMobileViewport } from '@/hooks/useIsMobileViewport';
-import { capturePageGeometryAnchor, derivePagePropertyOverrides, getNotebookPageDefaults, resolveNotebookPageLayout, resolvePageDimensions, resolvePageGeometryScrollDelta, resolvePageProperties, type PageGeometryAnchor } from '@/lib/pageProperties';
+import { capturePageGeometryAnchor, derivePagePropertyOverrides, getNotebookPageDefaults, hasAuthoritativePageAppearance, resolveNotebookPageLayout, resolvePageDimensions, resolvePageGeometryScrollDelta, resolvePageProperties, resolvePageRenderProperties, type PageGeometryAnchor } from '@/lib/pageProperties';
 import type { NotebookPropertyBatchSnapshot, PagePropertySet } from '@/types/notebook';
 import { createStickyNote, STICKY_NOTE_MIN_HEIGHT, STICKY_NOTE_WIDTH } from './stickyNotes';
 import type { HandwritingToolPreferences } from '@/services/beautification/handwritingBeautification';
 import type { ReviewedHandwritingLine } from '@/services/recognition/bulkConversion';
-import { PanelTopOpen, Plus } from 'lucide-react';
+import { PanelTopOpen, PanelRight, Plus } from 'lucide-react';
 import { pageAudioPersistence } from '@/services/audio/pageAudioPersistenceInstance';
+import { changeVoiceNote, type VoiceState } from '@/services/audio/voiceNoteCommands';
+import { formatPageIndicator } from './pageIndicator';
+import {
+  capturePageOwnedDrawing,
+  hasValidPageDrawingOwnership,
+  mayApplyPageLoadToEngine,
+  mayPersistPagePropertyChange,
+  mergeLoadedPageData,
+  resolveNotebookPageRenderData,
+  type PageOwnedDrawing,
+} from './notebookPageRenderState';
 
 const clipboardCodeLanguages = new Set([
   'python', 'javascript', 'typescript', 'java', 'c', 'cpp', 'csharp',
@@ -40,6 +54,37 @@ const clipboardCodeLanguages = new Set([
 ]);
 
 const plainTextUrlPattern = /https?:\/\/[^\s<>"']+/gi;
+
+function captureEngineOwnedDrawing(
+  notebookEngine: NotebookEngine,
+  documentId: string | undefined,
+  sheetId: string | undefined,
+  renderedSheetId = sheetId,
+): PageOwnedDrawing | null {
+  if (!documentId || !sheetId || !renderedSheetId) return null;
+  // DATA SAFETY: This ownership check prevents one notebook page from rendering or saving another page's scene.
+  const owner = notebookEngine.getDrawingOwnership();
+  if (owner.pageId !== sheetId || renderedSheetId !== sheetId) {
+    if (import.meta.env.DEV) {
+      console.warn('[NotebookRenderer] blocked cross-sheet drawing save', {
+        documentId,
+        sheetId,
+        renderedSheetId,
+        sceneOwnerSheetId: owner.pageId,
+        drawingRevision: owner.revision,
+      });
+    }
+    return null;
+  }
+  return capturePageOwnedDrawing(
+    documentId,
+    sheetId,
+    owner.pageId ?? '',
+    owner.revision,
+    notebookEngine.getDrawingData(),
+    renderedSheetId,
+  );
+}
 
 function textContentWithSafeLinks(text: string): any[] {
   const content: any[] = [];
@@ -131,7 +176,7 @@ function getPlainTextPastePresentation(content: any): 'sticky-note' | 'mixed-pas
   return hasCode ? 'mixed-paste' : 'sticky-note';
 }
 
-export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean }) {
+export function NotebookRenderer({ spreadMode = false, onEngineReady }: { spreadMode?: boolean; onEngineReady?: (engine: NotebookEngine) => void }) {
   const { activePageId, notebookPages, notebookSections, notebooks, workspaces, activeNotebookSectionId } = useWorkspaceStore();
   const page = notebookPages.find(item => item.id === activePageId);
   const notebook = page ? notebooks.find(item => item.id === page.notebookId) : undefined;
@@ -139,6 +184,15 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
   
   // Engine setup
   const notebookEngine = useMemo(() => new NotebookEngine(), []);
+  // The renderer owns this engine for its full mounted lifetime. Re-renders
+  // keep the same instance; a replacement instance or genuine unmount tears
+  // down the old one exactly once through NotebookEngine's idempotent cleanup.
+  useEffect(() => {
+    return () => notebookEngine.destroy();
+  }, [notebookEngine]);
+  useEffect(() => {
+    onEngineReady?.(notebookEngine);
+  }, [notebookEngine, onEngineReady]);
   const [viewport, setViewport] = useState<Readonly<ViewportState>>(() => notebookEngine.viewport.getState());
   // Read straight from the engine rather than mirroring it. The previous
   // `useState(getState()) + subscribe(setToolState)` pair was resubscribed by the effect
@@ -147,6 +201,25 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
   const toolState = useToolState(notebookEngine);
   const [pageProperties, setPageProperties] = useState(() => notebookEngine.getProperties());
   const [sectionDataCache, setSectionDataCache] = useState<Record<string, DrawingData>>({});
+  const sectionDataCacheRef = useRef<Record<string, DrawingData>>({});
+  const updateSectionDataCache = useCallback((update: (current: Record<string, DrawingData>) => Record<string, DrawingData>) => {
+    const next = update(sectionDataCacheRef.current);
+    sectionDataCacheRef.current = next;
+    setSectionDataCache(next);
+  }, []);
+  const focusedPageLoadGenerationRef = useRef(0);
+  // The focused page owns the live engine. Keep its identity available while
+  // resolving the visible page props so a metadata snapshot cannot briefly
+  // overwrite an in-memory property change during a render.
+  const [focusedPageId, setFocusedPageId] = useState<string>(activePageId || '');
+  const focusedPageIdRef = useRef(focusedPageId);
+  const drawingSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDrawingSaveRef = useRef<PageOwnedDrawing | null>(null);
+  const propertySaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingPropertySaveRef = useRef<PageOwnedDrawing | null>(null);
+  const persistDrawingRef = useRef<(snapshot: PageOwnedDrawing | null) => void>(() => {});
+  const latestScheduledDrawingRevisionRef = useRef(new Map<string, number>());
+  const latestScheduledDrawingFingerprintRef = useRef(new Map<string, string>());
   const [textObjects, setTextObjects] = useState<TextObject[]>([]);
   const [, setSelectionRevision] = useState(0);
   const [handwritingStrokes, setHandwritingStrokes] = useState<Stroke[]>([]);
@@ -206,14 +279,16 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
   useEffect(() => {
     const unsubViewport = notebookEngine.viewport.subscribe(setViewport);
 
-    let propSaveTimeout: NodeJS.Timeout;
-    const unsubProps = notebookEngine.onPropertiesChange((newProps) => {
+    const unsubProps = notebookEngine.onPropertiesChange((newProps, source) => {
       // 1. Immediately update React state for instant UI response
       setPageProperties(newProps);
       
-      const currentPageId = focusedPageIdRef.current || page?.id;
+      const sceneOwnerPageId = notebookEngine.getDrawingOwnership().pageId;
+      const currentPageId = source === 'load'
+        ? sceneOwnerPageId
+        : focusedPageIdRef.current || sceneOwnerPageId;
       if (currentPageId) {
-        setSectionDataCache(prev => {
+        updateSectionDataCache(prev => {
           const prevData = prev[currentPageId] || createEmptyDrawingData();
           return {
             ...prev,
@@ -224,13 +299,22 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
           };
         });
       }
+
+      // Page loads publish properties for rendering, but they are not edits.
+      // Persisting a load notification can write whichever page owns the live
+      // engine 500 ms later into the page that originally emitted the event.
+      if (!mayPersistPagePropertyChange(source) || !currentPageId) return;
+      const pageOwnedSnapshot = captureEngineOwnedDrawing(notebookEngine, notebook?.id, currentPageId);
+      if (!pageOwnedSnapshot) return;
       
       // 2. Debounce persistence so serialization and disk/IPC never block the UI render
-      clearTimeout(propSaveTimeout);
-      propSaveTimeout = setTimeout(() => {
-        if (workspace && notebook && currentPageId) {
-          persistDrawing(currentPageId, notebookEngine.getDrawingData());
-        }
+      if (propertySaveTimeoutRef.current) clearTimeout(propertySaveTimeoutRef.current);
+      pendingPropertySaveRef.current = pageOwnedSnapshot;
+      propertySaveTimeoutRef.current = setTimeout(() => {
+        const pending = pendingPropertySaveRef.current;
+        pendingPropertySaveRef.current = null;
+        propertySaveTimeoutRef.current = null;
+        if (pending) persistDrawingRef.current(pending);
       }, 500);
     });
     
@@ -246,12 +330,11 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
     return () => {
       unsubViewport();
       unsubProps();
-      clearTimeout(propSaveTimeout);
       unsubDrawing();
       unsubHistory();
       unsubSelection();
     };
-  }, [notebookEngine, workspace?.id, notebook?.id, page?.id]);
+  }, [notebookEngine, notebook?.id, updateSectionDataCache]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -290,6 +373,7 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
   // viewport-level bottom sheet that never reserves chrome width, so the
   // auto-close protection does not apply there.
   const isMobileViewport = useIsMobileViewport();
+  const isCompactWorkspace = useIsMobileViewport(1023);
   const PROPERTIES_DRAWER_AUTOCLOSE_WIDTH = 680;
   useEffect(() => {
     if (!isPropertiesPanelOpen) return;
@@ -310,15 +394,24 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
   // desktop windows get proportionally larger paper instead of hitting a
   // 1150px ceiling that left big displays mostly empty.
   const hasAutoZoomed = useRef(false);
+  const fittedViewportRef = useRef('');
+  const fittedScaleRef = useRef<number | null>(null);
   useEffect(() => {
     if (containerSize.width === 0 || paperDimensions.width === 0) return;
-    if (hasAutoZoomed.current) return;
+    const fitKey = `${isMobileViewport}:${containerSize.width}:${paperDimensions.width}:${activeNotebookSectionId}`;
+    const phoneResized = isMobileViewport && fittedViewportRef.current !== fitKey;
+    const wasAutoFitted = fittedScaleRef.current !== null && Math.abs(notebookEngine.viewport.getState().scale - fittedScaleRef.current) < 0.001;
+    const changedComposition = fittedViewportRef.current !== '' && !fittedViewportRef.current.startsWith(`${isMobileViewport}:`);
+    if (hasAutoZoomed.current && !phoneResized && !wasAutoFitted && !changedComposition) return;
 
-    const targetWidth = containerSize.width * 0.85;
-    const fitZoom = Math.max(0.4, Math.min(1.75, targetWidth / paperDimensions.width));
+    const targetWidth = isMobileViewport ? containerSize.width - 16 : containerSize.width * 0.85;
+    const fitZoom = Math.max(0.25, Math.min(1.75, targetWidth / paperDimensions.width));
     notebookEngine.viewport.setZoom(fitZoom);
+    if (isMobileViewport && containerRef.current) containerRef.current.scrollLeft = 0;
+    fittedViewportRef.current = fitKey;
+    fittedScaleRef.current = fitZoom;
     hasAutoZoomed.current = true;
-  }, [containerSize.width, paperDimensions.width, notebookEngine]);
+  }, [containerSize.width, paperDimensions.width, notebookEngine, isMobileViewport, activeNotebookSectionId]);
 
   // Reset auto-zoom when active notebook or section changes (not on every single page scroll)
   useEffect(() => {
@@ -349,19 +442,21 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
 
     return uniquePages;
   }, [notebookPages, activeNotebookSectionId]);
+  const currentSectionPageIdsKey = useMemo(
+    () => currentSectionPages.map(sectionPage => sectionPage.id).join('\u0000'),
+    [currentSectionPages],
+  );
   
   // Compute the canonical section layout in stable base-document coordinates.
   // Two-page mode is a real spread (paired columns), not a global UI scale.
-  const resolvedSectionProperties = useMemo(() => new Map(
-    currentSectionPages.map(sectionPage => [
-      sectionPage.id,
-      resolvePageProperties(
-        notebook,
-        sectionPage,
-        sectionDataCache[sectionPage.id]?.properties,
-      ),
-    ]),
-  ), [currentSectionPages, notebook, sectionDataCache]);
+  const resolvedSectionProperties = useMemo(() => {
+    return new Map(currentSectionPages.map(sectionPage => {
+      const cachedProperties = sectionDataCache[sectionPage.id]?.properties;
+      // On first load there is no cache yet, so persisted metadata remains the
+      // source until the engine finishes loading.
+      return [sectionPage.id, resolvePageRenderProperties(notebook, sectionPage, cachedProperties)] as const;
+    }));
+  }, [currentSectionPages, notebook, sectionDataCache]);
 
   const layoutConfig = useMemo(() => resolveNotebookPageLayout(
     currentSectionPages.map(sectionPage => ({
@@ -370,6 +465,9 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
     })),
     spreadMode,
   ), [currentSectionPages, resolvedSectionProperties, spreadMode]);
+  const sectionAppearanceReady = currentSectionPages.every(sectionPage =>
+    hasAuthoritativePageAppearance(sectionPage, sectionDataCache[sectionPage.id]?.properties),
+  );
 
   useLayoutEffect(() => {
     const pending = pageGeometryTransitionRef.current;
@@ -548,6 +646,7 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
   // importer opens) left an orphaned listener holding a stale `prevMode` that fired on the
   // next Space, silently reverting the mode with no user action.
   useEffect(() => {
+    if (workspaceViewMode !== 'edit') return undefined;
     // Non-null only while the override is engaged; also the restore-once guard.
     let overriddenFrom: NotebookMode | null = null;
 
@@ -586,7 +685,7 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
       window.removeEventListener('blur', restore);
       restore();
     };
-  }, [notebookEngine]);
+  }, [notebookEngine, workspaceViewMode]);
 
   // Viewport-level panning: Hand tool (left button) and middle mouse button.
   //
@@ -726,27 +825,70 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
     // element itself appears or disappears.
   }, [notebookEngine, hasActivePage]);
 
+  // The page canvas opts out of browser gestures so single-finger ink and
+  // selection stay exact. Put a two-finger viewport controller on the actual
+  // scroll surface so pinch/pan starts naturally on paper rather than only in
+  // the surrounding margin.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    return attachTwoFingerViewportGesture({
+      target: container,
+      getScale: () => notebookEngine.viewport.getState().scale,
+      setScale: scale => notebookEngine.viewport.setZoom(scale),
+      cancelActivePointerInteraction: () => notebookEngine.input.cancelActivePointerInteraction(),
+      getContentOffset: scale => ({ x: Math.max((container.clientWidth - layoutConfig.totalWidth * scale) / 2, isMobileViewport ? 8 : 32), y: 0 }),
+    });
+  }, [notebookEngine, hasActivePage, layoutConfig.totalWidth, isMobileViewport]);
+
 
   // Central persistence writer for drawing data. Every notebook save goes
   // through here so the StatusBar save indicator reflects reality and a
   // failed write is surfaced instead of silently dropped: the roadmap's
   // "intentional failure does not falsely report save success" contract.
   const lastSaveErrorToastAtRef = useRef(0);
-  const persistDrawing = useCallback((pageId: string, data: DrawingData) => {
-    if (!pageId) return;
+  const persistDrawing = useCallback((snapshot: PageOwnedDrawing | null) => {
+    if (!snapshot || !hasValidPageDrawingOwnership(snapshot)) {
+      return;
+    }
+    const pageId = snapshot.saveTargetSheetId;
+    const data = snapshot.data;
+    const fingerprint = JSON.stringify(data);
+    const latestScheduledRevision = latestScheduledDrawingRevisionRef.current.get(pageId);
+    const latestScheduledFingerprint = latestScheduledDrawingFingerprintRef.current.get(pageId);
+    if (latestScheduledRevision !== undefined && (
+      snapshot.drawingRevision < latestScheduledRevision
+      || (snapshot.drawingRevision === latestScheduledRevision && fingerprint === latestScheduledFingerprint)
+    )) {
+      return;
+    }
+    latestScheduledDrawingRevisionRef.current.set(pageId, snapshot.drawingRevision);
+    latestScheduledDrawingFingerprintRef.current.set(pageId, fingerprint);
     const { notebookPages: allPages, notebooks: allNotebooks, workspaces: allWorkspaces } = useWorkspaceStore.getState();
     const targetPage = allPages.find(p => p.id === pageId) ?? notebookPages.find(p => p.id === pageId);
-    if (!targetPage) return;
+    if (!targetPage) {
+      return;
+    }
     const targetNotebook = allNotebooks.find(n => n.id === targetPage.notebookId) ?? notebooks.find(n => n.id === targetPage.notebookId);
-    if (!targetNotebook) return;
+    if (!targetNotebook || targetNotebook.id !== snapshot.documentId) {
+      return;
+    }
     const targetWorkspace = allWorkspaces.find(w => w.id === targetNotebook.workspaceId) ?? workspaces.find(w => w.id === targetNotebook.workspaceId);
-    if (!targetWorkspace) return;
+    if (!targetWorkspace) {
+      return;
+    }
 
-    setSectionDataCache(prev => ({ ...prev, [pageId]: data }));
+    updateSectionDataCache(prev => ({ ...prev, [pageId]: data }));
     useCanvasStore.getState().setSaveStatus('saving');
     pageAudioPersistence.saveDrawing({ workspaceId: targetWorkspace.id, notebookId: targetNotebook.id, pageId }, data)
       .then(savedData => {
-        setSectionDataCache(prev => ({ ...prev, [pageId]: savedData }));
+        // The persisted result belongs to this exact snapshot. If the live
+        // engine has produced a newer cache entry while the write was in
+        // flight, keep that newer entry visible instead of rolling the page
+        // back until the next interaction.
+        updateSectionDataCache(prev => prev[pageId] === data
+          ? { ...prev, [pageId]: savedData }
+          : prev);
         if (focusedPageIdRef.current === pageId) notebookEngine.audio.setAll(savedData.audioNotes);
         useCanvasStore.getState().setSaveStatus('saved');
         if (typeof window !== 'undefined') {
@@ -762,26 +904,105 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
           useUIStore.getState().showToast('Save failed. Your changes are kept in memory and will retry on the next edit.', 'error');
         }
       });
-  }, [notebookEngine, notebookPages, notebooks, workspaces]);
+  }, [notebookEngine, notebookPages, notebooks, workspaces, updateSectionDataCache]);
+  persistDrawingRef.current = persistDrawing;
+
+  // Debounced writes belong to immutable page snapshots, not to a particular
+  // render/effect instance. Rebinding subscriptions while scrolling must not
+  // discard the final sheet's pending edit. A genuine unmount flushes both
+  // queues before their timers are cleared.
+  useEffect(() => () => {
+    const pendingProperty = pendingPropertySaveRef.current;
+    const pendingDrawing = pendingDrawingSaveRef.current;
+    pendingPropertySaveRef.current = null;
+    pendingDrawingSaveRef.current = null;
+    if (propertySaveTimeoutRef.current) clearTimeout(propertySaveTimeoutRef.current);
+    if (drawingSaveTimeoutRef.current) clearTimeout(drawingSaveTimeoutRef.current);
+    propertySaveTimeoutRef.current = null;
+    drawingSaveTimeoutRef.current = null;
+    if (pendingProperty) persistDrawingRef.current(pendingProperty);
+    if (pendingDrawing) persistDrawingRef.current(pendingDrawing);
+  }, [notebookEngine]);
 
   // In-Memory Section Data Cache
-  const [focusedPageId, setFocusedPageId] = useState<string>(activePageId || '');
-  const focusedPageIdRef = useRef(focusedPageId);
-  focusedPageIdRef.current = focusedPageId;
   const focusedPage = notebookPages.find(item => item.id === focusedPageId) ?? page;
 
   // Keep focusedPageId in sync when activePageId changes
   useEffect(() => {
-    if (activePageId && currentSectionPages.some(p => p.id === activePageId)) {
-      if (focusedPageId !== activePageId) {
-        setFocusedPageId(activePageId);
-      }
-    } else if (!focusedPageId && currentSectionPages.length > 0) {
-      setFocusedPageId(currentSectionPages[0].id);
+    const targetPageId = activePageId && currentSectionPages.some(p => p.id === activePageId)
+      ? activePageId
+      : !focusedPageId
+        ? currentSectionPages[0]?.id
+        : undefined;
+    if (!targetPageId || focusedPageId === targetPageId) return;
+    // Focus owns the shared engine and may only move once target data is
+    // available. The section preload will update this effect when a cache gap
+    // is filled; until then the existing focused page remains authoritative.
+    if (sectionDataCacheRef.current[targetPageId]) {
+      handleActivatePageRef.current(targetPageId);
     }
-  }, [activePageId, focusedPageId, currentSectionPages]);
+  }, [activePageId, focusedPageId, currentSectionPages, sectionDataCache]);
 
   const handlePagePropertiesUpdate = useCallback((updates: Partial<PagePropertySet>) => {
+    const previousProperties = notebookEngine.getProperties();
+    const noteSpaceKeys: (keyof PagePropertySet)[] = ['extraHeight', 'extraTop', 'extraRight', 'extraBottom', 'extraLeft'];
+    const isNoteSpaceChange = noteSpaceKeys.some(key => key in updates);
+    const isLineColorChange = updates.ruleLineColor !== undefined;
+    const changesDimensions =
+      (updates.orientation !== undefined && updates.orientation !== previousProperties.orientation)
+      || (updates.pageSize !== undefined && updates.pageSize !== previousProperties.pageSize)
+      || isNoteSpaceChange;
+    if (changesDimensions) {
+      const container = containerRef.current;
+      const pageId = focusedPageIdRef.current;
+      const pageElement = pageId ? document.getElementById(`page-${pageId}`) : null;
+      if (container && pageId && pageElement) {
+        const containerRect = container.getBoundingClientRect();
+        pageGeometryTransitionRef.current = {
+          pageId,
+          anchor: capturePageGeometryAnchor(pageElement.getBoundingClientRect(), {
+            x: containerRect.left + container.clientWidth / 2,
+            y: containerRect.top + container.clientHeight / 2,
+          }),
+        };
+      }
+    }
+    const pageId = focusedPageIdRef.current;
+    const applyProperties = (properties: PagePropertySet) => {
+      notebookEngine.setProperties(properties);
+      setPageProperties({ ...properties });
+      if (pageId) {
+        updateSectionDataCache(previous => {
+          const previousData = previous[pageId] || createEmptyDrawingData();
+          return { ...previous, [pageId]: { ...previousData, properties: { ...properties } } };
+        });
+      }
+      if (changesDimensions) setPageGeometryTransitionRevision(revision => revision + 1);
+      if (!workspace || !notebook || !pageId) return;
+      const overrides = derivePagePropertyOverrides(properties, notebook);
+      useWorkspaceStore.setState(state => ({
+        notebookPages: state.notebookPages.map(item => item.id === pageId
+          ? { ...item, pagePropertyOverrides: overrides, updatedAt: Date.now() }
+          : item),
+      }));
+      void notebookRepository.setPagePropertyOverrides(workspace.id, pageId, overrides).catch(error => {
+        console.error('[NotebookRenderer] page-property metadata save failed:', error);
+        useCanvasStore.getState().setSaveStatus('error');
+        useUIStore.getState().showToast('Page properties could not be saved.', 'error');
+      });
+    };
+    const nextProperties = { ...previousProperties, ...updates };
+    if (isNoteSpaceChange || isLineColorChange) {
+      notebookEngine.history.push({
+        description: isNoteSpaceChange ? 'Change research space' : 'Change line color',
+        execute: () => applyProperties(nextProperties),
+        undo: () => applyProperties(previousProperties),
+      });
+    } else applyProperties(nextProperties);
+  }, [notebookEngine, notebook, workspace, updateSectionDataCache]);
+
+  const handleApplyPropertiesToAll = useCallback(async (updates: Partial<PagePropertySet>) => {
+    if (!workspace || !notebook) throw new Error('No active notebook.');
     const previousProperties = notebookEngine.getProperties();
     const changesDimensions =
       (updates.orientation !== undefined && updates.orientation !== previousProperties.orientation)
@@ -801,25 +1022,6 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
         };
       }
     }
-    notebookEngine.setProperties(updates);
-    if (changesDimensions) setPageGeometryTransitionRevision(revision => revision + 1);
-    const pageId = focusedPageIdRef.current;
-    if (!workspace || !notebook || !pageId) return;
-    const overrides = derivePagePropertyOverrides(notebookEngine.getProperties(), notebook);
-    useWorkspaceStore.setState(state => ({
-      notebookPages: state.notebookPages.map(item => item.id === pageId
-        ? { ...item, pagePropertyOverrides: overrides, updatedAt: Date.now() }
-        : item),
-    }));
-    void notebookRepository.setPagePropertyOverrides(workspace.id, pageId, overrides).catch(error => {
-      console.error('[NotebookRenderer] page-property metadata save failed:', error);
-      useCanvasStore.getState().setSaveStatus('error');
-      useUIStore.getState().showToast('Page properties could not be saved.', 'error');
-    });
-  }, [notebookEngine, notebook, workspace]);
-
-  const handleApplyPropertiesToAll = useCallback(async (updates: Partial<PagePropertySet>) => {
-    if (!workspace || !notebook) throw new Error('No active notebook.');
     const snapshot = await notebookRepository.applyPageDefaults(workspace.id, notebook.id, updates);
     const changedKeys = Object.keys(updates) as (keyof PagePropertySet)[];
     useWorkspaceStore.setState(state => ({
@@ -833,13 +1035,15 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
         return { ...item, pagePropertyOverrides: overrides, updatedAt: Date.now() };
       }),
     }));
-    setSectionDataCache(previous => Object.fromEntries(Object.entries(previous).map(([id, data]) => [
+    updateSectionDataCache(previous => Object.fromEntries(Object.entries(previous).map(([id, data]) => [
       id,
       { ...data, properties: { ...data.properties, ...updates } },
     ])));
     notebookEngine.setProperties(updates);
+    setPageProperties(prev => ({ ...prev, ...updates }));
+    if (changesDimensions) setPageGeometryTransitionRevision(revision => revision + 1);
     return snapshot;
-  }, [notebookEngine, notebook, workspace]);
+  }, [notebookEngine, notebook, workspace, updateSectionDataCache]);
 
   const handleRestorePropertiesBatch = useCallback(async (snapshot: NotebookPropertyBatchSnapshot) => {
     if (!workspace) throw new Error('No active workspace.');
@@ -853,7 +1057,7 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
         ? { ...item, pagePropertyOverrides: { ...restoredPages.get(item.id) }, updatedAt: Date.now() }
         : item),
     }));
-    setSectionDataCache(previous => Object.fromEntries(Object.entries(previous).map(([id, data]) => {
+    updateSectionDataCache(previous => Object.fromEntries(Object.entries(previous).map(([id, data]) => {
       const overrides = restoredPages.get(id);
       return [id, overrides === undefined ? data : {
         ...data,
@@ -864,7 +1068,7 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
     if (focusedOverrides !== undefined) {
       notebookEngine.setProperties({ ...snapshot.defaultPageProperties, ...focusedOverrides });
     }
-  }, [notebookEngine, workspace]);
+  }, [notebookEngine, workspace, updateSectionDataCache]);
 
   // Preload section drawing data into memory cache when section changes
   useEffect(() => {
@@ -885,67 +1089,85 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
       for (const [id, d] of entries) {
         map[id] = d;
       }
-      setSectionDataCache(prev => ({ ...prev, ...map }));
+      updateSectionDataCache(prev => mergeLoadedPageData(prev, map));
     }
 
     preloadSection();
     return () => { mounted = false; };
-  }, [workspace?.id, notebook?.id, activeNotebookSectionId, currentSectionPages.length]);
+  }, [workspace?.id, notebook?.id, activeNotebookSectionId, currentSectionPageIdsKey, updateSectionDataCache]);
 
   // Sync focused page data with notebookEngine
   useEffect(() => {
     if (!focusedPageId || !workspace || !notebook) return;
-    const cachedData = sectionDataCache[focusedPageId];
+    let cancelled = false;
+    const requestedPageId = focusedPageId;
+    // handleActivatePage binds cached data synchronously before React commits
+    // focusedPageId. Re-applying that pre-edit cache from this passive effect can
+    // erase a stroke made immediately after a fast scroll/focus transfer.
+    if (notebookEngine.getDrawingOwnership().pageId === requestedPageId) return;
+    const requestGeneration = ++focusedPageLoadGenerationRef.current;
+    const cachedData = sectionDataCacheRef.current[requestedPageId];
     if (cachedData) {
-      notebookEngine.setDrawingData(cachedData, focusedPageId);
+      if (!mayApplyPageLoadToEngine(
+        requestedPageId,
+        focusedPageIdRef.current,
+        requestGeneration,
+        focusedPageLoadGenerationRef.current,
+      )) return;
+      notebookEngine.setDrawingData(cachedData, requestedPageId);
       setTextObjects([...notebookEngine.texts.getTexts()]);
     } else {
-      notebookRepository.loadDrawingData(workspace.id, notebook.id, focusedPageId).then(loaded => {
+      notebookRepository.loadDrawingData(workspace.id, notebook.id, requestedPageId).then(loaded => {
+        if (cancelled) return;
         const raw = (loaded || createEmptyDrawingData()) as DrawingData;
-        const pageMetadata = notebookPages.find(item => item.id === focusedPageId);
+        const pageMetadata = notebookPages.find(item => item.id === requestedPageId);
         const d = { ...raw, properties: resolvePageProperties(notebook, pageMetadata, raw.properties) };
-        setSectionDataCache(prev => ({ ...prev, [focusedPageId]: d }));
-        notebookEngine.setDrawingData(d, focusedPageId);
+        const effectiveData = sectionDataCacheRef.current[requestedPageId] ?? d;
+        updateSectionDataCache(prev => prev[requestedPageId] ? prev : { ...prev, [requestedPageId]: d });
+        if (!mayApplyPageLoadToEngine(
+          requestedPageId,
+          focusedPageIdRef.current,
+          requestGeneration,
+          focusedPageLoadGenerationRef.current,
+        )) return;
+        notebookEngine.setDrawingData(effectiveData, requestedPageId);
         setTextObjects([...notebookEngine.texts.getTexts()]);
       });
     }
-  }, [focusedPageId, workspace?.id, notebook?.id, notebookEngine]);
+    return () => { cancelled = true; };
+  }, [focusedPageId, workspace?.id, notebook?.id, notebookEngine, notebookPages, updateSectionDataCache]);
 
   // Safe Autosave: debounced write strictly on user drawing actions
   useEffect(() => {
-    let drawingSaveTimeout: NodeJS.Timeout;
-
     const onUserDrawingAction = () => {
       const currentPageId = focusedPageIdRef.current;
       if (!currentPageId) return;
       const { notebookPages: allPages } = useWorkspaceStore.getState();
       const pageOwner = allPages.find(p => p.id === currentPageId);
       if (!pageOwner || (notebook && pageOwner.notebookId !== notebook.id)) return;
-      const currentData = notebookEngine.getDrawingData();
-      setSectionDataCache(prev => ({ ...prev, [currentPageId]: currentData }));
-      clearTimeout(drawingSaveTimeout);
-      drawingSaveTimeout = setTimeout(() => {
-        if (currentPageId) {
-          // A layer, Element, or audio change can be persisted immediately while
-          // this older drawing debounce is still pending. Never let that stale
-          // snapshot overwrite the newer page state.
-          const latestData = focusedPageIdRef.current === currentPageId
-            ? notebookEngine.getDrawingData()
-            : currentData;
-          persistDrawing(currentPageId, latestData);
-        }
+      const pageOwnedSnapshot = captureEngineOwnedDrawing(notebookEngine, notebook?.id, currentPageId);
+      if (!pageOwnedSnapshot) return;
+      updateSectionDataCache(prev => ({ ...prev, [currentPageId]: pageOwnedSnapshot.data }));
+      if (drawingSaveTimeoutRef.current) clearTimeout(drawingSaveTimeoutRef.current);
+      pendingDrawingSaveRef.current = pageOwnedSnapshot;
+      drawingSaveTimeoutRef.current = setTimeout(() => {
+        const pending = pendingDrawingSaveRef.current;
+        pendingDrawingSaveRef.current = null;
+        drawingSaveTimeoutRef.current = null;
+        if (pending) persistDrawingRef.current(pending);
       }, 1000);
     };
 
     const unsubDrawing = notebookEngine.input.onDrawingChange(onUserDrawingAction);
-    const unsubHistory = notebookEngine.history.subscribe(onUserDrawingAction);
+    const unsubHistory = notebookEngine.history.subscribe((_canUndo, _canRedo, source) => {
+      if (source === 'user') onUserDrawingAction();
+    });
 
     return () => {
       unsubDrawing();
       unsubHistory();
-      clearTimeout(drawingSaveTimeout);
     };
-  }, [notebookEngine, notebook?.id, persistDrawing]);
+  }, [notebookEngine, notebook?.id, updateSectionDataCache]);
 
   // NOTE: no early return may be placed above this point, and none between here and the JSX.
   // Seventeen hooks are declared below, so bailing out early changes the hook count for the
@@ -966,44 +1188,46 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
   const flushActivePageDrawing = useCallback(() => {
     const pageId = focusedPageIdRef.current;
     if (pageId) {
-      persistDrawing(pageId, notebookEngine.getDrawingData());
+      persistDrawing(captureEngineOwnedDrawing(notebookEngine, notebook?.id, pageId));
     }
-  }, [notebookEngine, persistDrawing]);
+  }, [notebook?.id, notebookEngine, persistDrawing]);
 
   // Handle immediate page activation on pointerdown or click without jumping the view
   const handleActivatePage = useCallback((targetPageId: string) => {
     if (targetPageId === focusedPageIdRef.current) return;
 
+    const incomingData = sectionDataCacheRef.current[targetPageId];
+    if (!incomingData) {
+      // Never install an empty placeholder into the shared engine for a page
+      // that may have persisted objects. Mark it active and let the existing
+      // section preload fill this page-ID cache gap before transferring focus.
+      setActivePage(targetPageId);
+      return;
+    }
+
     // 1. Immediately flush outgoing page drawing data to cache & storage
     const outgoingPageId = focusedPageIdRef.current;
     if (outgoingPageId) {
-      persistDrawing(outgoingPageId, notebookEngine.getDrawingData());
+      persistDrawing(captureEngineOwnedDrawing(notebookEngine, notebook?.id, outgoingPageId));
     }
-
-    // 2. Switch the ownership ref before loading the incoming page so any
-    // synchronous engine callbacks triggered by setDrawingData() are attributed
-    // to the correct page ID.
-    focusedPageIdRef.current = targetPageId;
-    setFocusedPageId(targetPageId);
 
     // The previous page's FloatingTextEditor is about to unmount. Its TipTap
     // instance must not remain as the toolbar target while the new page mounts.
     // The next focused editor registers itself through its existing onFocus path.
     setActiveEditor(null);
 
-    // 3. Load incoming page data synchronously into notebookEngine.
-    const targetPage = notebookPages.find(item => item.id === targetPageId);
-    const incomingData = sectionDataCache[targetPageId] || {
-      ...createEmptyDrawingData(),
-      properties: resolvePageProperties(notebook, targetPage),
-    };
+    // 2. Load the already page-ID-resolved data synchronously. Load-originated
+    // history/property notifications carry the engine's new owner and cannot be
+    // mistaken for edits to either the outgoing or incoming sheet.
+    notebookEngine.unmount();
     notebookEngine.setDrawingData(incomingData, targetPageId);
+    focusedPageIdRef.current = targetPageId;
     setTextObjects([...notebookEngine.texts.getTexts()]);
 
-    // 4. Switch focusedPageId & activePageId
+    // 3. Switch focusedPageId & activePageId
     setFocusedPageId(targetPageId);
     setActivePage(targetPageId);
-  }, [focusedPageId, workspace, notebook, notebookEngine, notebookPages, sectionDataCache, setActivePage]);
+  }, [notebook?.id, notebookEngine, persistDrawing, setActivePage]);
 
   handleActivatePageRef.current = handleActivatePage;
 
@@ -1091,6 +1315,7 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
 
   // Scroll to active page when activePageId changes from sidebar/navigator clicks
   useLayoutEffect(() => {
+    if (!sectionAppearanceReady) return;
     if (!activePageId || activePageId === lastNavigatedPageIdRef.current) return;
 
     handleActivatePage(activePageId);
@@ -1142,7 +1367,7 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
       });
       return () => cancelAnimationFrame(raf);
     }
-  }, [activePageId, currentSectionPages, handleActivatePage, layoutConfig.positions, spreadMode, viewport.scale]);
+  }, [activePageId, currentSectionPages, handleActivatePage, layoutConfig.positions, sectionAppearanceReady, spreadMode, viewport.scale]);
 
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
@@ -1225,7 +1450,7 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
           notebookEngine.drawing.redraw();
         },
       });
-      persistDrawing(targetPageId, notebookEngine.getDrawingData());
+      persistDrawing(captureEngineOwnedDrawing(notebookEngine, notebook?.id, targetPageId));
     };
 
     const persistStickyChange = (event: Event) => {
@@ -1233,7 +1458,7 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
       if (!id || !notebookEngine.texts.getTexts().some(text => text.id === id)) return;
       setTextObjects([...notebookEngine.texts.getTexts()]);
       const targetPageId = focusedPageIdRef.current || activePageId;
-      if (targetPageId) persistDrawing(targetPageId, notebookEngine.getDrawingData());
+      if (targetPageId) persistDrawing(captureEngineOwnedDrawing(notebookEngine, notebook?.id, targetPageId));
     };
 
     document.addEventListener('panvas:create-sticky-note', createSticky);
@@ -1330,7 +1555,7 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
 
           // Immediate persistence
           if (workspace && notebook && targetPageId) {
-            persistDrawing(targetPageId, notebookEngine.getDrawingData());
+            persistDrawing(captureEngineOwnedDrawing(notebookEngine, notebook?.id, targetPageId));
           }
         };
         img.onerror = (err) => {
@@ -1398,7 +1623,7 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
     });
 
     if (workspace && notebook && targetPageId) {
-      persistDrawing(targetPageId, notebookEngine.getDrawingData());
+      persistDrawing(captureEngineOwnedDrawing(notebookEngine, notebook?.id, targetPageId));
     }
   }, [focusedPageId, activePageId, getSensiblePastePosition, notebookEngine, workspace, notebook]);
 
@@ -1466,7 +1691,7 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
     });
 
     if (workspace && notebook && targetPageId) {
-      persistDrawing(targetPageId, notebookEngine.getDrawingData());
+      persistDrawing(captureEngineOwnedDrawing(notebookEngine, notebook?.id, targetPageId));
     }
   }, [focusedPageId, activePageId, toolState.color, getSensiblePastePosition, notebookEngine, workspace, notebook]);
 
@@ -1655,7 +1880,7 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
     }
     const targetPageId = focusedPageIdRef.current || activePageId;
     setTextObjects([...notebookEngine.texts.getTexts()]);
-    if (targetPageId) persistDrawing(targetPageId, notebookEngine.getDrawingData());
+    if (targetPageId) persistDrawing(captureEngineOwnedDrawing(notebookEngine, notebook?.id, targetPageId));
     setIsHandwritingDialogOpen(false);
     setHandwritingStrokes([]);
   }, [activePageId, notebookEngine, persistDrawing]);
@@ -1777,6 +2002,18 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
       }
 
       const isMod = e.ctrlKey || e.metaKey;
+
+      const navigationDelta = shouldNotebookHandleNavigationKey(e)
+        ? resolveNotebookNavigationDelta(e, workspaceViewMode, containerRef.current?.clientHeight ?? 0)
+        : null;
+      if (navigationDelta !== null) {
+        const container = containerRef.current;
+        if (container) {
+          e.preventDefault();
+          container.scrollBy({ top: navigationDelta, behavior: 'auto' });
+        }
+        return;
+      }
 
       if (workspaceViewMode !== 'edit') {
         if (e.key === 'Escape' && workspaceViewMode === 'present') setWorkspaceViewMode('edit');
@@ -1973,44 +2210,45 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
     setTextObjects([...notebookEngine.texts.getTexts()]);
     const currentPageId = focusedPageIdRef.current || page?.id;
     if (!currentPageId) return;
-    const data = notebookEngine.getDrawingData();
-    setSectionDataCache(previous => ({ ...previous, [currentPageId]: data }));
-    persistDrawing(currentPageId, data);
-  }, [notebookEngine, page?.id, persistDrawing]);
+    const snapshot = captureEngineOwnedDrawing(notebookEngine, notebook?.id, currentPageId);
+    if (!snapshot) return;
+    updateSectionDataCache(previous => ({ ...previous, [currentPageId]: snapshot.data }));
+    persistDrawing(snapshot);
+  }, [notebook?.id, notebookEngine, page?.id, persistDrawing, updateSectionDataCache]);
 
   const handlePageAudioPersisted = useCallback((pageId: string, data: DrawingData) => {
-    setSectionDataCache(previous => ({ ...previous, [pageId]: data }));
+    updateSectionDataCache(previous => ({ ...previous, [pageId]: data }));
     if (focusedPageIdRef.current === pageId) {
       notebookEngine.audio.setAll(data.audioNotes);
       const persistedVoice = (data.objects ?? []).filter(object => object.type === 'text' && object.metadata?.isVoiceNote === true) as TextObject[];
       const ordinary = notebookEngine.texts.getTexts().filter(object => object.metadata?.isVoiceNote !== true);
-      notebookEngine.texts.setTexts([...ordinary, ...persistedVoice]);
-      setTextObjects([...ordinary, ...persistedVoice]);
+      const live = new Map(notebookEngine.texts.getTexts().map(object => [object.id, object]));
+      const merged = [...ordinary, ...persistedVoice.map(object => live.get(object.id) ?? object)];
+      notebookEngine.texts.setTexts(merged);
+      setTextObjects(merged);
+      notebookEngine.input.notifyChange();
     }
-  }, [notebookEngine]);
+  }, [notebookEngine, updateSectionDataCache]);
 
-  const handleDeleteVoiceNote = useCallback(async (note: AudioNote) => {
+  const handleVoiceCommand = useCallback((note: AudioNote, change: { delete: true } | { title: string }) => {
     if (!workspace?.id || !notebook?.id || !focusedPageIdRef.current) return;
     const owner = { workspaceId: workspace.id, notebookId: notebook.id, pageId: focusedPageIdRef.current };
-    try {
-      const data = await pageAudioPersistence.removeVoiceNote(owner, note.id);
-      handlePageAudioPersisted(owner.pageId, data);
-      await canvasRepository.deleteAudio(note.fileId).catch(() => useUIStore.getState().showToast('Voice note was removed, but its binary cleanup failed.', 'error'));
-    } catch (error) {
-      useUIStore.getState().showToast(error instanceof Error ? error.message : 'Voice note could not be deleted.', 'error');
-    }
-  }, [handlePageAudioPersisted, notebook?.id, workspace?.id]);
-
-  const handleRenameVoiceNote = useCallback(async (note: AudioNote, title: string) => {
-    if (!workspace?.id || !notebook?.id || !focusedPageIdRef.current) return;
-    const owner = { workspaceId: workspace.id, notebookId: notebook.id, pageId: focusedPageIdRef.current };
-    try {
-      const data = await pageAudioPersistence.rename(owner, note.id, title);
-      handlePageAudioPersisted(owner.pageId, data);
-    } catch (error) {
-      useUIStore.getState().showToast(error instanceof Error ? error.message : 'Voice note could not be renamed.', 'error');
-    }
-  }, [handlePageAudioPersisted, notebook?.id, workspace?.id]);
+    const persist = (state: VoiceState) => {
+      void pageAudioPersistence.replaceVoiceState(owner, state.notes, state.objects).catch(() =>
+        useUIStore.getState().showToast('Voice note changes could not be saved.', 'error'));
+    };
+    changeVoiceNote(notebookEngine, note.id, change, persist);
+    handleLayersChange();
+  }, [notebookEngine, notebook?.id, workspace?.id, handleLayersChange]);
+  const handleDeleteVoiceNote = useCallback((note: AudioNote) => handleVoiceCommand(note, { delete: true }), [handleVoiceCommand]);
+  const handleRenameVoiceNote = useCallback((note: AudioNote, title: string) => handleVoiceCommand(note, { title }), [handleVoiceCommand]);
+  useEffect(() => {
+    notebookEngine.selection.setVoiceDeleteHandler(id => {
+      const note = notebookEngine.audio.getAll().find(item => item.id === id);
+      if (note) handleDeleteVoiceNote(note);
+    });
+    return () => notebookEngine.selection.setVoiceDeleteHandler(undefined);
+  }, [notebookEngine, handleDeleteVoiceNote]);
 
   const handleInsertPage = useCallback(async () => {
     const sectionId = page?.sectionId ?? activeNotebookSectionId;
@@ -2093,7 +2331,7 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
 
   return (
     <div
-      className="panvas-notebook-workspace relative flex h-full w-full overflow-hidden bg-panvas-bg-primary"
+      className={`panvas-notebook-workspace relative flex h-full w-full min-w-0 overflow-hidden bg-panvas-bg-primary ${isCompactWorkspace ? 'flex-col' : ''}`}
       onPaste={workspaceViewMode === 'edit' ? handlePaste : undefined}
       onDrop={workspaceViewMode === 'edit' ? handleDrop : undefined}
       onDragOver={workspaceViewMode === 'edit' ? handleDragOver : undefined}
@@ -2110,7 +2348,13 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
           interactive turned the whole top band into an invisible click sink over the top of
           page 1 and over anything scrolled beneath it. Each child re-enables pointer events
           on its own visible chrome. */}
-      {workspaceViewMode !== 'present' && notebookModeLevel === 2 && (
+      {isMobileViewport && workspaceViewMode !== 'present' && <div className="panvas-mobile-document-header">
+        <button type="button" className="min-w-0 flex-1 truncate text-left text-xs font-medium" onClick={() => useUIStore.getState().toggleSidebar()} title="Browse notebook pages">{focusedPage?.title ?? 'Notebook'}</button>
+        <button type="button" onClick={() => handlePanelZoom((containerSize.width - 16) / paperDimensions.width)} className="px-2 text-xs" aria-label="Fit page width">Fit width</button>
+        <button type="button" className="panvas-icon-control focus-ring" onClick={() => useUIStore.getState().togglePropertiesPanel()} aria-label="Open page and view inspector" aria-expanded={isPropertiesPanelOpen}><PanelRight size={18} /></button>
+        <NotebookPageUtilities engine={notebookEngine} workspaceId={workspace?.id} notebookId={notebook?.id} ownerId={focusedPage?.id} editable={workspaceViewMode === 'edit'} onPageDataPersisted={handlePageAudioPersisted} onVoiceDelete={handleDeleteVoiceNote} onVoiceRename={handleRenameVoiceNote} onChange={handleLayersChange} compact onExportPage={() => void handleExportPagePdf()} onExportNotebook={() => void handleExportNotebookPdf()} onPrintPage={() => void handlePrintPage()} onPrintNotebook={() => void handlePrintNotebook()} isExporting={isExportingPdf} />
+      </div>}
+      {!isMobileViewport && workspaceViewMode !== 'present' && notebookModeLevel === 2 && (
         isToolbarCollapsed ? (
           <button
             type="button"
@@ -2133,13 +2377,13 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
           </div>
         )
       )}
-      {workspaceViewMode !== 'present' && notebookModeLevel !== 2 && <div className={`panvas-notebook-chrome panvas-layer-toolbar absolute top-0 left-0 right-0 p-4 flex justify-between items-start pointer-events-none gap-4 ${isPropertiesPanelOpen ? 'right-72 max-[599px]:right-0' : ''}`}>
+      {!isMobileViewport && workspaceViewMode !== 'present' && notebookModeLevel !== 2 && <div className={`panvas-notebook-chrome panvas-layer-toolbar absolute top-0 left-0 right-0 p-4 flex justify-between items-start pointer-events-none gap-4 ${isPropertiesPanelOpen ? 'right-72 max-[599px]:right-0' : ''}`}>
         {/* Below ~500px of notebook width the navigator's minimum footprint
             (~116px even fully truncated) starves the toolbar cell below the
             minimal tier and the bar overlaps the workspace controls. Tool
             access wins: the navigator is hidden and navigation stays available
             through the library toggle in the workspace controls. */}
-        {!isConstrainedHeader && (containerSize.width === 0 || containerSize.width >= 500) && (
+        {!isCompactWorkspace && !isConstrainedHeader && (containerSize.width === 0 || containerSize.width >= 500) && (
           <div className="pointer-events-auto flex flex-shrink items-start gap-1 min-w-0 max-w-[30%]">
             <NotebookNavigator />
           </div>
@@ -2150,7 +2394,7 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
         </div>
 
         <div className={`pointer-events-auto flex flex-shrink-0 items-end gap-2 ${isConstrainedHeader ? 'flex-col gap-1' : 'items-start'}`}>
-          <NotebookPageUtilities engine={notebookEngine} workspaceId={workspace?.id} notebookId={notebook?.id} ownerId={focusedPage?.id} editable={workspaceViewMode === 'edit'} onPageDataPersisted={handlePageAudioPersisted} onChange={handleLayersChange} compact={containerSize.width < 900} onExportPage={() => void handleExportPagePdf()} onExportNotebook={() => void handleExportNotebookPdf()} onPrintPage={() => void handlePrintPage()} onPrintNotebook={() => void handlePrintNotebook()} isExporting={isExportingPdf} />
+          <NotebookPageUtilities engine={notebookEngine} workspaceId={workspace?.id} notebookId={notebook?.id} ownerId={focusedPage?.id} editable={workspaceViewMode === 'edit'} onPageDataPersisted={handlePageAudioPersisted} onVoiceDelete={handleDeleteVoiceNote} onVoiceRename={handleRenameVoiceNote} onChange={handleLayersChange} compact={containerSize.width < 900} onExportPage={() => void handleExportPagePdf()} onExportNotebook={() => void handleExportNotebookPdf()} onPrintPage={() => void handlePrintPage()} onPrintNotebook={() => void handlePrintNotebook()} isExporting={isExportingPdf} />
           <NotebookWorkspaceControls />
         </div>
       </div>}
@@ -2158,6 +2402,8 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
       {/* Native Scrolling Viewport */}
       <main 
         ref={containerRef}
+        tabIndex={0}
+        aria-label="Notebook pages"
         className={`panvas-notebook-viewport notebook-viewport relative flex-1 min-w-0 min-h-0 overflow-auto bg-panvas-bg-secondary ${
           toolState.mode === 'hand' ? 'cursor-grab active:cursor-grabbing' : ''
         }`}
@@ -2166,16 +2412,21 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
         onDragEnter={handleDragOver}
         onContextMenu={workspaceViewMode === 'edit' ? handleContextMenu : event => event.preventDefault()}
         onPointerDown={() => {
+          containerRef.current?.focus({ preventScroll: true });
           if (contextMenu.isOpen) {
             setContextMenu(prev => ({ ...prev, isOpen: false }));
           }
         }}
       >
-
+        {!sectionAppearanceReady ? (
+          <div className="flex min-h-full w-full items-center justify-center text-xs text-panvas-text-secondary" role="status">
+            Preparing notebook appearance…
+          </div>
+        ) : (
         <div 
           className="flex flex-col items-center mx-auto"
           style={{ 
-            width: `${Math.max(containerSize.width, layoutConfig.totalWidth * viewport.scale + 64)}px`,
+            width: `${Math.max(containerSize.width, layoutConfig.totalWidth * viewport.scale + (isMobileViewport ? 16 : 64))}px`,
             minHeight: '100%',
             height: `${layoutConfig.totalHeight * viewport.scale}px`,
             position: 'relative'
@@ -2191,15 +2442,24 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
             }}
           >
             {layoutConfig.positions.map((pos, index) => {
-              const pageNumText = `${index + 1} / ${totalPages}`;
+              const pageNumText = formatPageIndicator(index + 1, totalPages);
               const isFocused = pos.id === focusedPageId;
               const pageItem = currentSectionPages.find(p => p.id === pos.id)!;
+              const renderData = resolveNotebookPageRenderData(
+                pos.id,
+                focusedPageId,
+                sectionDataCache,
+                isFocused ? notebookEngine.getDrawingData() : undefined,
+                notebookEngine.getDrawingOwnership().pageId ?? '',
+              );
 
               return (
                 <div 
                   key={pos.id} 
                   data-page-id={pos.id}
                   data-page-index={index}
+                  data-focused-sheet={isFocused ? 'true' : 'false'}
+                  data-scene-owner-sheet-id={isFocused ? notebookEngine.getDrawingOwnership().pageId ?? '' : ''}
                   className="absolute"
                   style={{ 
                     left: pos.x,
@@ -2208,30 +2468,47 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
                     height: pos.height 
                   }}
                 >
-                  <NotebookPageView
-                    key={pos.id}
-                    page={pageItem}
-                    data={sectionDataCache[pos.id]}
-                    properties={resolvedSectionProperties.get(pos.id)!}
-                    width={pos.width}
-                    height={pos.height}
-                    renderScale={debouncedScale}
-                    pageNumberText={pageNumText}
-                    isFocused={isFocused}
-                    toolState={toolState}
-                    notebookEngine={notebookEngine}
-                    activeEditor={activeEditor}
-                    setActiveEditor={setActiveEditor}
-                    onActivatePage={() => handleActivatePage(pos.id)}
-                    handleDrop={handleDrop}
-                    handleDragOver={handleDragOver}
-                    editable={workspaceViewMode === 'edit'}
-                    onVoiceNoteChange={handleLayersChange}
-                    onVoiceNoteDelete={note => void handleDeleteVoiceNote(note)}
-                    onVoiceNoteRename={(note, title) => void handleRenameVoiceNote(note, title)}
-                    onUpdateProperties={isFocused ? handlePagePropertiesUpdate : undefined}
-                  />
-                  {isFocused && workspaceViewMode === 'edit' && (
+                  {isFocused ? (
+                    <NotebookPageView
+                      key={pos.id}
+                      page={pageItem}
+                      data={renderData}
+                      properties={resolvedSectionProperties.get(pos.id)!}
+                      width={pos.width}
+                      height={pos.height}
+                      renderScale={debouncedScale}
+                      pageNumberText={pageNumText}
+                      isFocused
+                      toolState={toolState}
+                      notebookEngine={notebookEngine}
+                      sceneOwnerPageId={isFocused ? notebookEngine.getDrawingOwnership().pageId ?? '' : ''}
+                      activeEditor={activeEditor}
+                      setActiveEditor={setActiveEditor}
+                      onActivatePage={() => handleActivatePage(pos.id)}
+                      handleDrop={handleDrop}
+                      handleDragOver={handleDragOver}
+                      editable={workspaceViewMode === 'edit'}
+                      onVoiceNoteChange={handleLayersChange}
+                      onVoiceNoteDelete={note => void handleDeleteVoiceNote(note)}
+                      onVoiceNoteRename={(note, title) => void handleRenameVoiceNote(note, title)}
+                      onUpdateProperties={handlePagePropertiesUpdate}
+                    />
+                  ) : workspace && notebook ? (
+                    <InactivePagePreview
+                      key={pos.id}
+                      workspaceId={workspace.id}
+                      notebookId={notebook.id}
+                      notebook={notebook}
+                      page={pageItem}
+                      data={renderData}
+                      width={pos.width}
+                      height={pos.height}
+                      scale={1}
+                      pageNumberText={pageNumText}
+                      onActivate={() => handleActivatePage(pos.id)}
+                    />
+                  ) : null}
+                  {isFocused && workspaceViewMode === 'edit' && !isMobileViewport && (
                     <button
                       type="button"
                       onClick={() => void handleInsertPage()}
@@ -2247,7 +2524,12 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
             })}
           </div>
         </div>
+        )}
       </main>
+
+      {isMobileViewport && workspaceViewMode === 'edit' && <div className="panvas-mobile-tool-dock">
+        <NotebookFloatingToolbar editor={activeEditor} engine={notebookEngine} workspaceId={workspace?.id} hasSelectedStrokes={notebookEngine.selection.hasSelectedStrokes()} onConvertHandwriting={openHandwritingConversion} />
+      </div>}
 
       {/* Static properties panel on the right */}
       {isPropertiesPanelOpen && workspaceViewMode !== 'present' && (
@@ -2272,13 +2554,18 @@ export function NotebookRenderer({ spreadMode = false }: { spreadMode?: boolean 
         open={isHandwritingDialogOpen}
         strokes={handwritingStrokes}
         initialPreferences={notebookEngine.handwriting.getPreferences()}
-        onCancel={() => {
-          setIsHandwritingDialogOpen(false);
-          setHandwritingStrokes([]);
-        }}
+          onCancel={() => {
+            setIsHandwritingDialogOpen(false);
+            setHandwritingStrokes([]);
+          }}
         onConfirm={confirmHandwritingConversion}
       />
-      {workspaceViewMode === 'present' && <PresentationOverlay />}
+      {workspaceViewMode === 'present' && <PresentationOverlay onWheel={event => {
+        const container = containerRef.current;
+        if (!container || event.ctrlKey || event.metaKey) return;
+        event.preventDefault();
+        container.scrollBy({ left: event.deltaX, top: event.deltaY, behavior: 'auto' });
+      }} />}
     </div>
   );
 }

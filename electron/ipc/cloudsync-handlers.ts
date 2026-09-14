@@ -1,9 +1,11 @@
-import { ipcMain } from 'electron';
+import type { ipcMain } from 'electron';
 import { GoogleAuthDiagnosticError, googleAuthService } from './google-auth-service.js';
 import { GoogleDriveSyncProvider } from '../../src/services/cloudsync/googleDriveProvider.js';
 import { presentCloudError } from '../../src/services/cloudsync/errors.js';
 import { validateRemoteManifest } from '../../src/services/cloudsync/manifest.js';
 import type { ObjectUpload, SyncManifestV1 } from '../../src/services/cloudsync/types.js';
+import { requireTrustedSender } from './security.js';
+import { SyncRunAuthority } from '../../src/services/cloudsync/runAuthority.js';
 
 const WORKSPACE_ID = /^ws-[A-Za-z0-9_-]+$/;
 const OBJECT_HASH = /^[a-f0-9]{64}$/i;
@@ -16,6 +18,7 @@ function assertObjectHash(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !OBJECT_HASH.test(value)) throw new Error('Invalid object identifier.');
 }
 
+const driveAuthority = new SyncRunAuthority();
 let driveProvider = createDriveProvider();
 let driveV2Provider = createDriveProvider('sync-v2');
 
@@ -24,10 +27,12 @@ function createDriveProvider(remoteNamespace?: string): GoogleDriveSyncProvider 
     tokenProvider: () => googleAuthService.getValidAccessToken(),
     tokenRefresher: () => googleAuthService.forceRefreshAccessToken(),
     remoteNamespace,
+    assertCurrent: driveAuthority.capture(),
   });
 }
 
 function resetDriveProvider(): void {
+  driveAuthority.invalidate();
   driveProvider = createDriveProvider();
   driveV2Provider = createDriveProvider('sync-v2');
 }
@@ -41,10 +46,20 @@ async function safeDriveCall<T>(stage: string, operation: () => Promise<T>) {
   }
 }
 
-export function registerCloudSyncHandlers() {
-  ipcMain.handle('cloudsync:connect', async (_event, provider: string) => {
+type IpcHandleRegistrar = Pick<typeof ipcMain, 'handle'>;
+
+export function registerCloudSyncHandlers(registrar: IpcHandleRegistrar) {
+  const registerPrivilegedHandler = (channel: string, handler: (...args: any[]) => unknown): void => {
+    registrar.handle(channel, (event, ...args) => {
+      requireTrustedSender(event);
+      return handler(...args);
+    });
+  };
+
+  registerPrivilegedHandler('cloudsync:connect', async (provider: string) => {
     if (provider === 'googledrive') {
       try {
+        resetDriveProvider();
         const connection = await googleAuthService.startAuthFlow();
         resetDriveProvider();
         return { success: true, connection };
@@ -58,54 +73,63 @@ export function registerCloudSyncHandlers() {
     return { success: false, errorCode: 'connection', diagnostic: { provider: 'googledrive', stage: 'authorization', reason: 'unsupported_provider', retryable: false } };
   });
 
-  ipcMain.handle('cloudsync:disconnect', async (_event, provider: string) => {
+  registerPrivilegedHandler('cloudsync:disconnect', async (provider: string) => {
     if (provider === 'googledrive') {
+      driveAuthority.invalidate();
       await googleAuthService.disconnect();
       resetDriveProvider();
     }
     return { success: true };
   });
 
-  ipcMain.handle('cloudsync:getConnection', async (_event, provider: string) => {
+  registerPrivilegedHandler('cloudsync:getConnection', async (provider: string) => {
     if (provider === 'googledrive') return await googleAuthService.getConnectionInfo();
     return null;
   });
 
-  ipcMain.handle('cloudsync:drive:ensureAppRoot', () => safeDriveCall('drive-root', () => driveProvider.ensureAppRoot()));
-  ipcMain.handle('cloudsync:drive:listRemoteWorkspaces', () => safeDriveCall('workspace-discovery', () => driveProvider.listRemoteWorkspaces()));
-  ipcMain.handle('cloudsync:drive:readManifest', (_event, workspaceId: unknown) => safeDriveCall('manifest-read', async () => {
+  // Keep the filesystem service out of the renderer/SSR import graph. The
+  // trusted sender guard runs before this lazy import, so an untrusted invoke
+  // cannot initialize or reach privileged filesystem code.
+  registerPrivilegedHandler('cloudsync:resetLocalData', async () => {
+    const { workspaceService } = await import('./WorkspaceService.js');
+    return workspaceService.resetLocalData();
+  });
+
+  registerPrivilegedHandler('cloudsync:drive:ensureAppRoot', () => safeDriveCall('drive-root', () => driveProvider.ensureAppRoot()));
+  registerPrivilegedHandler('cloudsync:drive:listRemoteWorkspaces', () => safeDriveCall('workspace-discovery', () => driveProvider.listRemoteWorkspaces()));
+  registerPrivilegedHandler('cloudsync:drive:readManifest', (workspaceId: unknown) => safeDriveCall('manifest-read', async () => {
     assertWorkspaceId(workspaceId);
     return driveProvider.readManifest(workspaceId);
   }));
-  ipcMain.handle('cloudsync:drive:writeManifest', (_event, workspaceId: unknown, manifestValue: unknown, ifMatch: unknown) => safeDriveCall('manifest-publication', async () => {
+  registerPrivilegedHandler('cloudsync:drive:writeManifest', (workspaceId: unknown, manifestValue: unknown, ifMatch: unknown) => safeDriveCall('manifest-publication', async () => {
     assertWorkspaceId(workspaceId);
     const manifest = validateRemoteManifest(manifestValue);
     if (!manifest || manifest.workspaceId !== workspaceId) throw new Error('Invalid sync manifest.');
     if (ifMatch !== null && typeof ifMatch !== 'string') throw new Error('Invalid manifest precondition.');
     return driveProvider.writeManifest(workspaceId, manifest as SyncManifestV1, ifMatch);
   }));
-  ipcMain.handle('cloudsync:drive:getObject', (_event, workspaceId: unknown, hash: unknown) => safeDriveCall('object-download', async () => {
+  registerPrivilegedHandler('cloudsync:drive:getObject', (workspaceId: unknown, hash: unknown) => safeDriveCall('object-download', async () => {
     assertWorkspaceId(workspaceId); assertObjectHash(hash);
     return driveProvider.getObject(workspaceId, hash);
   }));
-  ipcMain.handle('cloudsync:drive:putObjectIfAbsent', (_event, workspaceId: unknown, uploadValue: unknown) => safeDriveCall('object-transfer', async () => {
+  registerPrivilegedHandler('cloudsync:drive:putObjectIfAbsent', (workspaceId: unknown, uploadValue: unknown) => safeDriveCall('object-transfer', async () => {
     assertWorkspaceId(workspaceId);
     const upload = uploadValue as Partial<ObjectUpload>;
     assertObjectHash(upload?.hash);
     if (!(upload?.bytes instanceof Uint8Array)) throw new Error('Invalid object payload.');
     return driveProvider.putObjectIfAbsent(workspaceId, { hash: upload.hash, bytes: upload.bytes });
   }));
-  ipcMain.handle('cloudsync:drive:deleteObject', (_event, workspaceId: unknown, hash: unknown) => safeDriveCall('object-delete', async () => {
+  registerPrivilegedHandler('cloudsync:drive:deleteObject', (workspaceId: unknown, hash: unknown) => safeDriveCall('object-delete', async () => {
     assertWorkspaceId(workspaceId); assertObjectHash(hash);
     await driveProvider.deleteObject(workspaceId, hash);
     return true;
   }));
-  ipcMain.handle('cloudsync:drive:moveObject', (_event, workspaceId: unknown, fromHash: unknown, toHash: unknown) => safeDriveCall('object-move', async () => {
+  registerPrivilegedHandler('cloudsync:drive:moveObject', (workspaceId: unknown, fromHash: unknown, toHash: unknown) => safeDriveCall('object-move', async () => {
     assertWorkspaceId(workspaceId); assertObjectHash(fromHash); assertObjectHash(toHash);
     await driveProvider.moveObject(workspaceId, fromHash, toHash);
     return true;
   }));
-  ipcMain.handle('cloudsync:drive:getMetadata', (_event, workspaceId: unknown, hash: unknown) => safeDriveCall('object-metadata', async () => {
+  registerPrivilegedHandler('cloudsync:drive:getMetadata', (workspaceId: unknown, hash: unknown) => safeDriveCall('object-metadata', async () => {
     assertWorkspaceId(workspaceId); assertObjectHash(hash);
     return driveProvider.getMetadata(workspaceId, hash);
   }));
@@ -113,30 +137,30 @@ export function registerCloudSyncHandlers() {
   function assertRootFile(name: unknown): asserts name is string {
     if (name !== 'profile.json' && name !== 'catalog.json') throw new Error('Invalid V2 root file.');
   }
-  ipcMain.handle('cloudsync:driveV2:readRootJson', (_event, name: unknown) => safeDriveCall('v2-root-read', async () => {
+  registerPrivilegedHandler('cloudsync:driveV2:readRootJson', (name: unknown) => safeDriveCall('v2-root-read', async () => {
     assertRootFile(name); return driveV2Provider.readRootJson(name);
   }));
-  ipcMain.handle('cloudsync:driveV2:writeRootJson', (_event, name: unknown, value: unknown, ifMatch: unknown) => safeDriveCall('v2-root-write', async () => {
+  registerPrivilegedHandler('cloudsync:driveV2:writeRootJson', (name: unknown, value: unknown, ifMatch: unknown) => safeDriveCall('v2-root-write', async () => {
     assertRootFile(name); if (!value || typeof value !== 'object' || (ifMatch !== null && typeof ifMatch !== 'string')) throw new Error('Invalid V2 root payload.');
     return driveV2Provider.writeRootJson(name, value, ifMatch);
   }));
-  ipcMain.handle('cloudsync:driveV2:readWorkspaceJson', (_event, workspaceId: unknown, name: unknown) => safeDriveCall('v2-manifest-read', async () => {
+  registerPrivilegedHandler('cloudsync:driveV2:readWorkspaceJson', (workspaceId: unknown, name: unknown) => safeDriveCall('v2-manifest-read', async () => {
     assertWorkspaceId(workspaceId); if (name !== 'manifest.json') throw new Error('Invalid V2 workspace file.');
     return driveV2Provider.readWorkspaceJson(workspaceId, name);
   }));
-  ipcMain.handle('cloudsync:driveV2:writeWorkspaceJson', (_event, workspaceId: unknown, name: unknown, value: unknown, ifMatch: unknown) => safeDriveCall('v2-manifest-write', async () => {
+  registerPrivilegedHandler('cloudsync:driveV2:writeWorkspaceJson', (workspaceId: unknown, name: unknown, value: unknown, ifMatch: unknown) => safeDriveCall('v2-manifest-write', async () => {
     assertWorkspaceId(workspaceId); if (name !== 'manifest.json' || !value || typeof value !== 'object' || (ifMatch !== null && typeof ifMatch !== 'string')) throw new Error('Invalid V2 manifest payload.');
     return driveV2Provider.writeWorkspaceJson(workspaceId, name, value, ifMatch);
   }));
-  ipcMain.handle('cloudsync:driveV2:getObject', (_event, hash: unknown) => safeDriveCall('v2-object-download', async () => {
+  registerPrivilegedHandler('cloudsync:driveV2:getObject', (hash: unknown) => safeDriveCall('v2-object-download', async () => {
     assertObjectHash(hash); return driveV2Provider.getObject('v2', hash);
   }));
-  ipcMain.handle('cloudsync:driveV2:putObjectIfAbsent', (_event, uploadValue: unknown) => safeDriveCall('v2-object-transfer', async () => {
+  registerPrivilegedHandler('cloudsync:driveV2:putObjectIfAbsent', (uploadValue: unknown) => safeDriveCall('v2-object-transfer', async () => {
     const upload = uploadValue as Partial<ObjectUpload>; assertObjectHash(upload?.hash);
     if (!(upload?.bytes instanceof Uint8Array)) throw new Error('Invalid V2 object payload.');
     return driveV2Provider.putObjectIfAbsent('v2', { hash: upload.hash, bytes: upload.bytes });
   }));
-  ipcMain.handle('cloudsync:driveV2:getMetadata', (_event, hash: unknown) => safeDriveCall('v2-object-metadata', async () => {
+  registerPrivilegedHandler('cloudsync:driveV2:getMetadata', (hash: unknown) => safeDriveCall('v2-object-metadata', async () => {
     assertObjectHash(hash); return driveV2Provider.getMetadata('v2', hash);
   }));
 }

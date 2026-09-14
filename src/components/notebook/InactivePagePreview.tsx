@@ -1,19 +1,20 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
+import { textObjectStyle } from './textTypography';
 import { notebookRepository } from '@/repositories/NotebookRepository';
 import { canvasRepository } from '@/repositories/CanvasRepository';
 import { useAuthStore } from '@/stores/authStore';
 import { PageRenderer } from './PageRenderer';
 import { createEmptyDrawingData, type DrawingData, type TextObject, DEFAULT_PAGE_LAYER_ID } from './engine/drawingTypes';
-import { useNotebookSettingsStore } from '@/stores/notebookSettingsStore';
-import type { NotebookPage } from '@/types/notebook';
+import type { Notebook, NotebookPage } from '@/types/notebook';
+import { resolvePageProperties } from '@/lib/pageProperties';
 import { ViewportManager } from './engine/ViewportManager';
 import { ShapeManager } from './engine/ShapeManager';
 import { ImageManager } from './engine/ImageManager';
 import { LayerManager } from './engine/LayerManager';
 import { DrawingEngine } from './engine/DrawingEngine';
-import { FileText } from 'lucide-react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import { notebookTipTapExtensions } from './tiptapExtensions';
+import { resolvePageSurfaceGeometry } from '@/lib/pageProperties';
 import {
   getStickyNoteColor,
   getStickyNoteOpacity,
@@ -26,16 +27,19 @@ import {
 interface InactivePagePreviewProps {
   workspaceId: string;
   notebookId: string;
+  notebook: Notebook;
   page: NotebookPage;
   width: number;
   height: number;
   scale: number;
   pageNumberText: string;
+  /** Immutable page-owned snapshot supplied by the notebook renderer. */
+  data?: DrawingData;
   onClick?: () => void;
   onActivate?: () => void;
 }
 
-const StaticTextPreview: React.FC<{ object: TextObject; scale: number }> = ({ object, scale }) => {
+const StaticTextPreview: React.FC<{ object: TextObject; scale: number; offset?: { x: number; y: number } }> = ({ object, scale, offset }) => {
   const editor = useEditor({
     editable: false,
     extensions: notebookTipTapExtensions,
@@ -57,8 +61,9 @@ const StaticTextPreview: React.FC<{ object: TextObject; scale: number }> = ({ ob
     <div
       className={`absolute pointer-events-none z-0 ${object.metadata?.pastePresentation === 'sticky-note' ? 'panvas-pasted-note' : object.metadata?.pastePresentation === 'mixed-paste' ? 'panvas-mixed-paste' : ''}`}
       style={{
-        left: `${object.x * scale}px`,
-        top: `${object.y * scale}px`,
+        ...textObjectStyle(object),
+        left: `${(object.x + (offset?.x ?? 0)) * scale}px`,
+        top: `${(object.y + (offset?.y ?? 0)) * scale}px`,
         width: `${object.width}px`,
         minHeight: object.height ? `${object.height}px` : undefined,
         transform: `scale(${scale})`,
@@ -94,48 +99,49 @@ const StaticTextPreview: React.FC<{ object: TextObject; scale: number }> = ({ ob
 };
 
 export const InactivePagePreview: React.FC<InactivePagePreviewProps> = ({
-  workspaceId, notebookId, page, width, height, scale, pageNumberText, onClick, onActivate
+  workspaceId, notebookId, notebook, page, width, height, scale, pageNumberText, data: pageSnapshot, onClick, onActivate
 }) => {
-  const [data, setData] = useState<DrawingData | null>(null);
+  const [loadedData, setLoadedData] = useState<DrawingData | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [pdfError, setPdfError] = useState(false);
 
   // Preview engine instance persists across width/height changes (e.g. zoom).
   const engineRef = useRef<{ drawing: DrawingEngine; viewport: ViewportManager } | null>(null);
+  const renderGenerationRef = useRef(0);
+  const data = pageSnapshot ?? loadedData;
+  const properties = data ? data.properties : createEmptyDrawingData().properties;
+  const pageGeometry = useMemo(() => resolvePageSurfaceGeometry(properties), [properties]);
 
   // Load Drawing Data for default pages
   useEffect(() => {
     let mounted = true;
+    if (pageSnapshot) {
+      setLoadedData(null);
+      return () => { mounted = false; };
+    }
     if (page.type === 'pdf') {
-      setData(createEmptyDrawingData()); // PDFs don't use regular drawing data, just need properties
+      const emptyData = createEmptyDrawingData();
+      emptyData.properties = resolvePageProperties(notebook, page);
+      setLoadedData(emptyData); // PDFs don't use regular drawing data, just need properties
       return;
     }
 
     notebookRepository.loadDrawingData(workspaceId, notebookId, page.id).then(loaded => {
       if (!mounted) return;
-      if (loaded) {
-        setData(loaded);
-      } else {
-        const defaultSettings = useNotebookSettingsStore.getState();
-        const emptyData = createEmptyDrawingData();
-        if (defaultSettings.paperColor) emptyData.properties.paperColor = defaultSettings.paperColor;
-        if (defaultSettings.template) emptyData.properties.template = defaultSettings.template;
-        if (defaultSettings.orientation) emptyData.properties.orientation = defaultSettings.orientation.toLowerCase() as any;
-        if (defaultSettings.pageSize) emptyData.properties.pageSize = defaultSettings.pageSize;
-        if (defaultSettings.margins) emptyData.properties.margins = defaultSettings.margins;
-        setData(emptyData);
-      }
+      const resolved = (loaded || createEmptyDrawingData()) as DrawingData;
+      setLoadedData({ ...resolved, properties: resolvePageProperties(notebook, page, resolved.properties) });
     });
     return () => { mounted = false; };
-  }, [workspaceId, notebookId, page.id, page.type]);
+  }, [workspaceId, notebookId, notebook, page, pageSnapshot]);
 
   // Build the preview engine and load its data. Deliberately excludes
   // width/height: this must NOT rerun on every zoom-driven size change.
   useEffect(() => {
     if (!data || page.type === 'pdf' || !canvasRef.current) return;
+    const generation = ++renderGenerationRef.current;
 
     const viewport = new ViewportManager();
     viewport.setZoom(scale);
+    viewport.setPageCoordinateTransform(0, width, height, pageGeometry.source.left, pageGeometry.source.top);
     const layers = new LayerManager();
     layers.setData(data.layers, data.activeLayerId);
     const shapes = new ShapeManager(viewport, layers);
@@ -156,11 +162,17 @@ export const InactivePagePreview: React.FC<InactivePagePreviewProps> = ({
     }
 
     drawing.redraw();
+    if (generation !== renderGenerationRef.current) {
+      drawing.detachCanvas();
+      images.destroy();
+      return;
+    }
     engineRef.current = { drawing, viewport };
 
     return () => {
-      engineRef.current = null;
-      images.clearImages();
+      if (renderGenerationRef.current === generation) engineRef.current = null;
+      drawing.detachCanvas();
+      images.destroy();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, page.type]);
@@ -170,8 +182,9 @@ export const InactivePagePreview: React.FC<InactivePagePreviewProps> = ({
   useEffect(() => {
     if (!engineRef.current || page.type === 'pdf') return;
     engineRef.current.viewport.setZoom(scale);
+    engineRef.current.viewport.setPageCoordinateTransform(0, width, height, pageGeometry.source.left, pageGeometry.source.top);
     engineRef.current.drawing.resize(width, height);
-  }, [width, height, scale, page.type]);
+  }, [width, height, scale, page.type, pageGeometry.source.left, pageGeometry.source.top]);
 
   const textObjects: TextObject[] = useMemo(() => {
     if (!data || !data.objects) return [];
@@ -229,7 +242,6 @@ export const InactivePagePreview: React.FC<InactivePagePreviewProps> = ({
         }).promise;
       } catch (err) {
         console.error('Failed to load PDF preview:', err);
-        if (mounted) setPdfError(true);
       }
     }
 
@@ -245,10 +257,10 @@ export const InactivePagePreview: React.FC<InactivePagePreviewProps> = ({
     }
   };
 
-  const properties = data ? data.properties : createEmptyDrawingData().properties;
-
   return (
-    <div 
+    <div
+      data-page-id={page.id}
+      data-rendered-page-id={page.id}
       className="relative shadow-2xl transition-shadow" 
       onPointerDown={handleTriggerActivate}
       onClick={handleTriggerActivate}
@@ -262,7 +274,7 @@ export const InactivePagePreview: React.FC<InactivePagePreviewProps> = ({
       >
         {/* Render text objects on inactive page */}
         {textObjects.map(obj => (
-          <StaticTextPreview key={obj.id} object={obj} scale={scale} />
+          <StaticTextPreview key={obj.id} object={obj} scale={1} offset={{ x: pageGeometry.source.left, y: pageGeometry.source.top }} />
         ))}
 
         <div className="absolute inset-0 z-10 flex items-center justify-center">
@@ -273,13 +285,6 @@ export const InactivePagePreview: React.FC<InactivePagePreviewProps> = ({
           />
         </div>
         
-        {page.type === 'pdf' && (
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm rounded-xl p-4 text-white shadow-xl pointer-events-none">
-            <FileText className="w-12 h-12 mb-2 opacity-90" />
-            <span className="font-medium text-sm truncate max-w-[200px]">{page.title || 'PDF Document'}</span>
-            <span className="text-xs opacity-70 mt-1">Click to open</span>
-          </div>
-        )}
       </PageRenderer>
     </div>
   );

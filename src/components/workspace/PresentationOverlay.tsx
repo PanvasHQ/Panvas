@@ -4,7 +4,7 @@ import { useLayoutStore } from '@/stores/layoutStore';
 interface LaserPoint { id: number; x: number; y: number; createdAt: number }
 
 /** Ephemeral presentation ink. No NotebookEngine or repository is reachable here. */
-export function PresentationOverlay() {
+export function PresentationOverlay({ onWheel }: { onWheel?: (event: React.WheelEvent<HTMLDivElement>) => void }) {
   const laserMode = useLayoutStore(state => state.laserMode);
   const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
   const [trail, setTrail] = useState<LaserPoint[]>([]);
@@ -22,6 +22,7 @@ export function PresentationOverlay() {
     <div
       className="panvas-layer-popover absolute inset-0 cursor-none touch-none"
       aria-label={`Presentation laser (${laserMode})`}
+      onWheel={onWheel}
       onPointerMove={event => {
         const rect = event.currentTarget.getBoundingClientRect();
         const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };

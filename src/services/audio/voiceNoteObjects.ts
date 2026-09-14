@@ -8,6 +8,23 @@ export const VOICE_NOTE_HEIGHT = 132;
 export const VOICE_NOTE_MIN_WIDTH = 156;
 export const VOICE_NOTE_MIN_HEIGHT = 84;
 
+export const VOICE_NOTE_COLORS = ['#f4f1e9', '#fff0b3', '#dcecff', '#dceede', '#f7dfe8', '#e9dff7', '#292a2e'] as const;
+
+export function voiceNoteStyle(object: TextObject, offset = { x: 0, y: 0 }) {
+  const color = /^#[0-9a-f]{6}$/i.test(String(object.metadata?.voiceColor)) ? String(object.metadata?.voiceColor) : VOICE_NOTE_COLORS[0];
+  const opacity = typeof object.metadata?.voiceOpacity === 'number' ? Math.max(0, Math.min(1, object.metadata.voiceOpacity)) : 1;
+  const rgb = color.slice(1).match(/../g)!.map(value => parseInt(value, 16));
+  return { left: object.x + offset.x, top: object.y + offset.y, width: object.width, height: object.height ?? VOICE_NOTE_HEIGHT,
+    backgroundColor: color, color: rgb[0] * .299 + rgb[1] * .587 + rgb[2] * .114 < 128 ? '#fafafa' : '#292a2e', opacity };
+}
+
+export function clampVoiceNoteRect(rect: { x: number; y: number; width: number; height: number }, bounds: { x: number; y: number; width: number; height: number }) {
+  const size = clampVoiceNoteSize(rect.width, rect.height);
+  const width = Math.min(size.width, bounds.width);
+  const height = Math.min(size.height, bounds.height);
+  return { width, height, x: Math.max(bounds.x, Math.min(rect.x, bounds.x + bounds.width - width)), y: Math.max(bounds.y, Math.min(rect.y, bounds.y + bounds.height - height)) };
+}
+
 export function clampVoiceNoteSize(width: number, height: number): { width: number; height: number } {
   return { width: Math.max(VOICE_NOTE_MIN_WIDTH, width), height: Math.max(VOICE_NOTE_MIN_HEIGHT, height) };
 }

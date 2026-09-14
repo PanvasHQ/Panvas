@@ -6,90 +6,41 @@
 import React from 'react';
 import { useCloudSyncStore } from '@/stores/cloudSyncStore';
 import { Cloud, CloudOff, RefreshCw, AlertCircle } from 'lucide-react';
+import { CLOUD_SYNC_ENABLED } from '@/config/features';
+import { getCloudSyncPresentation } from '@/services/cloudsync/presentation';
 
-export function SyncIndicator() {
-  const { statusByProvider, connectionByProvider, triggerSync, lastError } = useCloudSyncStore();
-
+export function SyncIndicator({ onOpenCloudSync }: { onOpenCloudSync?: () => void } = {}) {
+  const { statusByProvider, connectionByProvider, triggerSync, lastError, reviewItems, workspaceRecoveryIssues } = useCloudSyncStore();
   const gdConnection = connectionByProvider.googledrive;
   const gdStatus = statusByProvider.googledrive;
+  const recoveryOnly = gdStatus === 'synced-review' && workspaceRecoveryIssues.length > 0 && reviewItems.length === 0;
 
-  // When no provider is connected: Local only
-  if (!gdConnection || gdStatus === 'disconnected') {
-    return (
-      <div className="flex items-center gap-1.5 px-2 py-1 text-panvas-text-tertiary" title="Working locally (no cloud account connected)">
-        <CloudOff size={13} />
-        <span className="text-[10px] font-medium tracking-wide">Local only</span>
-      </div>
-    );
+  const presentation = getCloudSyncPresentation({ enabled: CLOUD_SYNC_ENABLED, status: gdStatus, connection: gdConnection, lastError, recoveryOnly });
+
+  let icon: React.ReactNode = <Cloud size={13} className="text-panvas-accent-green" aria-hidden="true" />;
+  const label = presentation.indicatorLabel;
+  const title = presentation.title;
+  let color = 'text-panvas-text-secondary';
+  if (presentation.kind === 'disconnected') {
+    icon = <CloudOff size={13} aria-hidden="true" />;
+    color = 'text-panvas-text-tertiary';
+  } else if (presentation.kind === 'offline') {
+    icon = <CloudOff size={13} aria-hidden="true" />;
+    color = 'text-panvas-text-tertiary';
+  } else if (presentation.kind === 'busy') {
+    icon = <RefreshCw size={12} className="animate-spin text-panvas-accent-blue" aria-hidden="true" />;
+    color = 'text-panvas-text-secondary';
+  } else if (presentation.kind === 'attention') {
+    icon = <AlertCircle size={13} aria-hidden="true" />;
+    color = gdStatus === 'account-migration-required' || gdStatus === 'synced-review' ? 'text-panvas-accent-amber' : 'text-panvas-accent-rose';
   }
 
-  if (gdStatus === 'offline' || !navigator.onLine) {
-    return (
-      <div className="flex items-center gap-1.5 px-2 py-1 text-panvas-text-tertiary" title="Offline: changes are saved locally and will sync when back online">
-        <CloudOff size={13} />
-        <span className="text-[10px] font-medium tracking-wide">Offline</span>
-      </div>
-    );
-  }
-
-  if (gdStatus === 'syncing' || gdStatus === 'connecting') {
-    return (
-      <div className="flex items-center gap-1.5 px-2 py-1 text-panvas-text-secondary" title="Syncing changes with Google Drive…">
-        <RefreshCw size={12} className="animate-spin text-panvas-accent-blue" />
-        <span className="text-[10px] font-medium tracking-wide">{gdStatus === 'connecting' ? 'Connecting…' : 'Syncing…'}</span>
-      </div>
-    );
-  }
-
-  if (gdStatus === 'account-migration-required') {
-    return (
-      <div
-        className="flex items-center gap-1.5 px-2 py-1 text-panvas-accent-amber"
-        title={lastError || 'Some workspaces are linked to another Google account.'}
-      >
-        <AlertCircle size={13} />
-        <span className="text-[10px] font-medium tracking-wide">Account action needed</span>
-      </div>
-    );
-  }
-
-  if (gdStatus === 'synced-review') {
-    return (
-      <button
-        type="button"
-        onClick={() => void triggerSync()}
-        className="flex items-center gap-1.5 px-2 py-1 text-panvas-accent-amber hover:text-panvas-text-primary transition-colors focus-ring rounded"
-        title="Synced - changes need review. Your work was preserved."
-      >
-        <AlertCircle size={13} />
-        <span className="text-[10px] font-medium tracking-wide">Review changes</span>
-      </button>
-    );
-  }
-
-  if (gdStatus === 'error' || gdStatus === 'conflict' || gdStatus === 'auth-expired' || gdStatus === 'rate-limited') {
-    return (
-      <button
-        type="button"
-        onClick={() => void triggerSync()}
-        className="flex items-center gap-1.5 px-2 py-1 text-panvas-accent-rose hover:text-panvas-text-primary transition-colors focus-ring rounded"
-        title={`Sync error: ${lastError || 'Click to retry'}`}
-      >
-        <AlertCircle size={13} />
-        <span className="text-[10px] font-medium tracking-wide">{gdStatus === 'auth-expired' ? 'Auth expired' : gdStatus === 'rate-limited' ? 'Retry later' : 'Sync error'}</span>
-      </button>
-    );
-  }
-
+  const className = `flex items-center gap-1.5 rounded px-2 py-1 transition-colors focus-ring ${color} ${onOpenCloudSync ? 'hover:bg-panvas-bg-hover hover:text-panvas-text-primary' : ''}`;
+  const handleClick = () => onOpenCloudSync ? onOpenCloudSync() : void triggerSync();
   return (
-    <button
-      type="button"
-      onClick={() => void triggerSync()}
-      className="flex items-center gap-1.5 px-2 py-1 text-panvas-text-secondary hover:text-panvas-text-primary transition-colors focus-ring rounded"
-      title={`Google Drive: ${gdStatus === 'connected' ? 'Connected' : 'Synced'} (${gdConnection.email || gdConnection.displayName || 'Connected'}). Click to sync now.`}
-    >
-      <Cloud size={13} className="text-panvas-accent-green" />
-      <span className="text-[10px] font-medium tracking-wide">{gdStatus === 'connected' ? 'Connected' : 'Synced'}</span>
+    <button type="button" onClick={handleClick} className={className} title={title} aria-label={onOpenCloudSync ? 'Open Cloud Sync' : label}>
+      {icon}
+      <span className="text-[10px] font-medium tracking-wide max-[599px]:sr-only">{label}</span>
     </button>
   );
 }

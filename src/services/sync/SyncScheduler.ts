@@ -2,6 +2,7 @@
 // Panvas — Sync Scheduler
 // Manages the background interval and online/offline states
 // ============================================
+// OSS NOTE: Legacy implementation retained for backward compatibility; review after v0.1.
 
 import { processSyncQueue, getPendingCount, getLastSyncError } from './SyncEngine';
 import { useAuthStore } from '@/stores/authStore';

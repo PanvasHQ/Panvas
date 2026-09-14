@@ -1,3 +1,5 @@
+import type { LineStyle } from './lineStyleGeometry.ts';
+import { recropImageGeometry } from './imageAppearance.ts';
 // ============================================
 // Panvas — Selection Engine
 // ============================================
@@ -29,6 +31,8 @@ type ObjectOrderSnapshot = {
 };
 
 export class SelectionEngine {
+  private voiceDeleteHandler?: (noteId: string) => void;
+  setVoiceDeleteHandler(handler?: (noteId: string) => void): void { this.voiceDeleteHandler = handler; }
   private drawingEngine: DrawingEngine;
   private shapeManager: ShapeManager;
   private historyManager: HistoryManager;
@@ -151,22 +155,23 @@ export class SelectionEngine {
   /** Replaces an exact selected stroke snapshot with one or more text lines. */
   replaceSelectedStrokesWithTexts(strokes: readonly Stroke[], texts: readonly TextObject[]): boolean {
     if (strokes.length === 0 || texts.length === 0) return false;
-    const selectedStrokeIds = new Set(
-      this.selectedElements.filter(element => element.type === 'stroke').map(element => element.id),
-    );
     const currentById = new Map(this.drawingEngine.getStrokes().map(stroke => [stroke.id, stroke]));
     const sourceStrokes = strokes.map(stroke => structuredClone(stroke));
-    const sourceIsStillSelected = sourceStrokes.every(source => {
+    const sourceIsStillValid = sourceStrokes.every(source => {
       const current = currentById.get(source.id);
-      return selectedStrokeIds.has(source.id)
-        && current !== undefined
+      return current !== undefined
         && this.layerManager.isEditable(current.layerId)
         && JSON.stringify(current) === JSON.stringify(source);
     });
-    if (!sourceIsStillSelected) return false;
+    if (!sourceIsStillValid) return false;
 
     const convertedIds = new Set(sourceStrokes.map(stroke => stroke.id));
-    const sourceSelection = this.selectedElements.map(element => ({ ...element }));
+    // Dialog focus can clear the live visual selection after the immutable
+    // stroke snapshot has been taken. That does not invalidate unchanged ink.
+    // Reconstruct the source selection so undo restores useful selection state.
+    const sourceSelection = this.selectedElements.length > 0
+      ? this.selectedElements.map(element => ({ ...element }))
+      : sourceStrokes.map(stroke => ({ type: 'stroke' as const, id: stroke.id }));
     const retainedSelection = sourceSelection.filter(element => (
       element.type !== 'stroke' || !convertedIds.has(element.id)
     ));
@@ -191,7 +196,14 @@ export class SelectionEngine {
 
   deleteSelection(): void {
     if (this.selectedElements.length === 0) return;
-    const elements = [...this.selectedElements];
+    const selected = [...this.selectedElements];
+    const voiceIds = new Set<string>();
+    if (this.voiceDeleteHandler) for (const element of selected) {
+      const object = this.textManager.getTexts().find(item => item.id === element.id);
+      if (object?.metadata?.isVoiceNote) { voiceIds.add(element.id); this.voiceDeleteHandler(String(object.metadata.audioNoteId)); }
+    }
+    const elements = selected.filter(element => !voiceIds.has(element.id));
+    if (!elements.length) return;
 
     // Store exact references for undo
     const strokesToRestore: any[] = [];
@@ -386,6 +398,13 @@ export class SelectionEngine {
           finalMap.set(el.id, opacity);
           shape.opacity = opacity;
         }
+      } else if (el.type === 'image' && !toolFilter) {
+        const image = this.imageManager.getImages().find(item => item.id === el.id);
+        if (image) {
+          origMap.set(el.id, image.opacity ?? 1);
+          finalMap.set(el.id, opacity);
+          image.opacity = opacity;
+        }
       }
     }
 
@@ -403,6 +422,9 @@ export class SelectionEngine {
           } else if (el.type === 'shape') {
             const shape = this.shapeManager.getShapes().find(item => item.id === el.id);
             if (shape) shape.opacity = finalOpacity;
+          } else if (el.type === 'image') {
+            const image = this.imageManager.getImages().find(item => item.id === el.id);
+            if (image) image.opacity = finalOpacity;
           }
         }
         this.drawingEngine.redraw();
@@ -417,6 +439,9 @@ export class SelectionEngine {
           } else if (el.type === 'shape') {
             const shape = this.shapeManager.getShapes().find(item => item.id === el.id);
             if (shape) shape.opacity = origOpacity;
+          } else if (el.type === 'image') {
+            const image = this.imageManager.getImages().find(item => item.id === el.id);
+            if (image) image.opacity = origOpacity;
           }
         }
         this.drawingEngine.redraw();
@@ -450,6 +475,35 @@ export class SelectionEngine {
         this.drawingEngine.redraw();
       },
     });
+    return true;
+  }
+
+  changeLineStyle(style: LineStyle): void {
+    const objects = this.selectedElements.filter(el => el.type === 'shape').map(el => this.shapeManager.getShapes().find(shape => shape.id === el.id)).filter((shape): shape is Shape => !!shape && this.layerManager.isEditable(shape.layerId) && (shape.shapeType === 'line' || shape.shapeType === 'arrow'));
+    if (!objects.length) return;
+    const before = objects.map(shape => shape.lineStyle);
+    const apply = (undo = false) => { objects.forEach((entry, i) => { const shape = this.shapeManager.getShapes().find(item => item.id === entry.id); if (shape) { shape.lineStyle = undo ? before[i] : style; if (!shape.lineStyle) delete shape.lineStyle; } }); this.drawingEngine.redraw(); };
+    this.historyManager.push({ description: 'Change line style', execute: () => apply(), undo: () => apply(true) });
+  }
+
+  cropImage(id: string, crop: BoundingBox): boolean {
+    const image = this.imageManager.getImages().find(item => item.id === id);
+    if (!image || !this.layerManager.isEditable(image.layerId) ||
+      ![crop.x, crop.y, crop.width, crop.height].every(Number.isFinite) ||
+      crop.x < 0 || crop.y < 0 || crop.width <= 0 || crop.height <= 0 ||
+      crop.x + crop.width > 1 + 1e-8 || crop.y + crop.height > 1 + 1e-8) return false;
+    const before = { crop: image.crop, x: image.x, y: image.y, width: image.width, height: image.height };
+    const after = { crop: { ...crop }, ...recropImageGeometry(image, crop) };
+    const apply = (value: typeof before) => {
+      const current = this.imageManager.getImages().find(item => item.id === id);
+      if (!current) return;
+      Object.assign(current, value);
+      if (!value.crop) delete current.crop;
+      this.notifySelectionChange();
+      this.drawingEngine.redraw();
+    };
+    apply(after);
+    this.historyManager.pushExecuted({ description: 'Crop image', execute: () => apply(after), undo: () => apply(before) });
     return true;
   }
 
@@ -588,7 +642,7 @@ export class SelectionEngine {
       const onLayer = (item: { layerId?: string }) => (item.layerId ?? 'layer-default') === layer.id;
       const text = [...this.textManager.getTexts()].reverse().find(item => onLayer(item) && contains(item));
       if (text) return { type: 'text', id: text.id };
-      const shape = [...this.shapeManager.getShapes()].reverse().find(item => onLayer(item) && (shapeHits.has(item.id) || contains(item)));
+      const shape = [...this.shapeManager.getShapes()].reverse().find(item => onLayer(item) && (shapeHits.has(item.id) || (item.shapeType !== 'line' && item.shapeType !== 'arrow' && contains(item))));
       if (shape) return { type: 'shape', id: shape.id };
       const stroke = [...this.drawingEngine.getStrokes()].reverse().find(item => onLayer(item) && strokeHits.has(item.id));
       if (stroke) return { type: 'stroke', id: stroke.id };
@@ -750,7 +804,7 @@ export class SelectionEngine {
     if (snapshot) this.pasteElements(snapshot);
   }
 
-  pasteElements(data: any, placement?: { x: number; y: number }): boolean {
+  pasteElements(data: any, placement?: { x: number; y: number }, onChange?: () => void): boolean {
     const snapshot = validateElementSnapshot(data);
     if (!snapshot || !this.layerManager.isEditable(this.layerManager.getActiveLayerId())) return false;
     data = snapshot;
@@ -827,6 +881,7 @@ export class SelectionEngine {
         });
         this.notifySelectionChange();
         this.drawingEngine.redraw();
+        onChange?.();
       },
       undo: () => {
         this.clearSelection();
@@ -839,6 +894,7 @@ export class SelectionEngine {
         this.textManager.removeTexts(textIds);
         this.imageManager.removeImages(imageIds);
         this.drawingEngine.redraw();
+        onChange?.();
       }
     });
 
@@ -1148,7 +1204,15 @@ export class SelectionEngine {
 
   // ---- Rendering Selection Bounding Boxes ----
 
+  private selectionControlsVisible = true;
+
+  setSelectionControlsVisible(visible: boolean): void {
+    this.selectionControlsVisible = visible;
+    this.drawingEngine.redraw();
+  }
+
   renderSelection(ctx: CanvasRenderingContext2D): void {
+    if (!this.selectionControlsVisible) return;
     if (this.selectedElements.length === 0) return;
 
     ctx.save();

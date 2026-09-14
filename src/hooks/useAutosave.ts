@@ -5,8 +5,9 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { useCanvasStore } from '@/stores/canvasStore';
+import { mergeCanvasAppStateForPersistence } from '@/services/canvas/canvasSceneState';
 
-export function useAutosave(activeCanvasId: string | null) {
+export function useAutosave(activeCanvasId: string | null, activeWorkspaceId?: string | null) {
   const { saveCanvasData } = useCanvasStore();
   
   // Track if there are pending unsaved changes
@@ -27,19 +28,20 @@ export function useAutosave(activeCanvasId: string | null) {
 
       isDirty.current = false;
 
-      await saveCanvasData({
-        canvasFileId: activeCanvasId,
-        elements: data.elements,
-        appState: {
-          viewBackgroundColor: data.appState.viewBackgroundColor,
-          zoom: data.appState.zoom,
-          scrollX: data.appState.scrollX,
-          scrollY: data.appState.scrollY,
-        },
-        files: data.files,
-      });
+      const previousAppState = useCanvasStore.getState().currentData?.appState ?? {};
+      try {
+        await saveCanvasData({
+          canvasFileId: activeCanvasId,
+          elements: data.elements,
+          appState: mergeCanvasAppStateForPersistence(previousAppState, data.appState),
+          files: data.files,
+        }, activeWorkspaceId ?? undefined);
+      } catch (error) {
+        isDirty.current = true;
+        throw error;
+      }
     },
-    [activeCanvasId, saveCanvasData]
+    [activeCanvasId, activeWorkspaceId, saveCanvasData]
   );
 
   // Debounced wrapper called by onChange
@@ -53,7 +55,8 @@ export function useAutosave(activeCanvasId: string | null) {
       }
 
       saveTimeout.current = setTimeout(() => {
-        void flushSave();
+        // The store records the error; retain dirty data for the next edit/retry.
+        void flushSave().catch(() => {});
       }, 1000); // 1000ms debounce
     },
     [flushSave]
@@ -66,9 +69,17 @@ export function useAutosave(activeCanvasId: string | null) {
         clearTimeout(saveTimeout.current);
         saveTimeout.current = null;
       }
-      void flushSave();
+      void flushSave().catch(() => {}); // Failure remains visible in the store.
     };
   }, [flushSave]);
 
-  return { triggerAutosave };
+  const saveNow = useCallback(async (elements: any, appState: any, files: any) => {
+    isDirty.current = true;
+    latestData.current = { elements, appState, files };
+    if (saveTimeout.current) clearTimeout(saveTimeout.current);
+    saveTimeout.current = null;
+    await flushSave(elements, appState, files);
+  }, [flushSave]);
+
+  return { triggerAutosave, saveNow };
 }

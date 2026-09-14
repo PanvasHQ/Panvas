@@ -15,33 +15,36 @@ export function AppearanceSection() {
       <div className="grid gap-6 mt-4">
         <div className="flex flex-col gap-4">
           <label className="text-xs font-semibold uppercase tracking-wider text-panvas-text-tertiary">Theme</label>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 sm:gap-6">
-            
-            <ThemeCard 
-              name="Dark Theme" 
-              active={theme === 'dark'} 
-              icon={<Moon size={18} />} 
-              onClick={() => setTheme('dark')}
-              previewColor="bg-[#0D0D0D]"
-            />
-            
-            <ThemeCard 
-              name="Light Theme" 
-              active={theme === 'light'} 
-              icon={<Sun size={18} />} 
+          <div className="grid grid-cols-3 gap-2 sm:gap-6">
+
+            <ThemeCard
+              name="Light"
+              active={theme === 'light'}
+              icon={<Sun size={18} />}
               onClick={() => setTheme('light')}
-              previewColor="bg-[#FFFFFF]"
+              preview={<div className="h-full w-full bg-[#FFFFFF]" />}
             />
 
-            <ThemeCard 
-              name="Ink Theme" 
-              active={theme === 'ink'} 
-              icon={<PenTool size={18} />} 
+            <ThemeCard
+              name="Ink"
+              active={theme === 'ink'}
+              icon={<PenTool size={18} />}
               onClick={() => setTheme('ink')}
-              previewColor="bg-[#F7F4EB]" // Moleskine feel
+              preview={<div className="h-full w-full bg-[#F7F4EB]" />}
             />
+            <ThemeCard
+              name="Dark"
+              active={theme === 'dark'}
+              icon={<Moon size={18} />}
+              onClick={() => setTheme('dark')}
+              preview={<div className="h-full w-full bg-[#0D0D0D]" />}
+            />
+
 
           </div>
+          <p className="text-xs text-panvas-text-tertiary">
+            Ink pairs warm paper surfaces with the original quiet chrome. Your document colors stay as you made them.
+          </p>
         </div>
       </div>
     </div>
@@ -53,23 +56,26 @@ interface ThemeCardProps {
   active: boolean;
   icon: React.ReactNode;
   onClick: () => void;
-  previewColor: string;
+  preview: React.ReactNode;
 }
 
-function ThemeCard({ name, active, icon, onClick, previewColor }: ThemeCardProps) {
+function ThemeCard({ name, active, icon, onClick, preview }: ThemeCardProps) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`flex flex-col items-center gap-4 rounded-2xl border p-6 text-left transition-all duration-200 focus-ring ${
-        active 
+      className={`flex min-w-0 flex-col items-center gap-4 rounded-2xl border p-6 max-[599px]:px-2 max-[599px]:py-4 text-left transition-all duration-200 focus-ring ${
+        active
           ? 'border-panvas-accent-violet bg-panvas-bg-secondary text-panvas-text-primary shadow-[0_0_0_1px_rgba(var(--accent-violet),0.18),var(--shadow-surface)]'
           : 'border-panvas-border-subtle bg-panvas-bg-primary text-panvas-text-secondary hover:border-panvas-border-strong hover:bg-panvas-bg-hover hover:shadow-[var(--shadow-surface)]'
       }`}
     >
-      <div className={`flex h-14 w-14 items-center justify-center rounded-full border border-panvas-border-subtle shadow-inner ${previewColor}`}>
-        {React.cloneElement(icon as React.ReactElement, { className: active ? 'text-panvas-accent-violet' : 'text-panvas-text-tertiary' })}
+      <div className="relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-full border border-panvas-border-subtle shadow-inner">
+        <div className="absolute inset-0">{preview}</div>
+        {React.cloneElement(icon as React.ReactElement<{ className?: string }>, {
+          className: `relative z-10 drop-shadow-[0_0_2px_rgba(255,255,255,0.7)] ${active ? 'text-panvas-accent-violet' : 'text-panvas-text-tertiary'}`,
+        })}
       </div>
       <span className="text-sm font-semibold">{name}</span>
       <span className="-mt-2 text-xs text-panvas-text-tertiary">{active ? 'Selected theme' : 'Switch theme'}</span>

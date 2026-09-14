@@ -27,24 +27,24 @@ const FULL_FIT_WIDTH =
 
 test('unknown width (before first measurement) renders every group', () => {
   const layout = resolveToolbarLayout(null);
-  assert.deepEqual(layout.visible, ['history', 'handwriting', 'primary', 'select']);
-  assert.deepEqual(layout.overflow, ['hand', 'image', 'shapes', 'ruler', 'laser', 'gestures', 'format']);
+  assert.deepEqual(layout.visible, ['history', 'handwriting', 'primary', 'select', 'shapes']);
+  assert.deepEqual(layout.overflow, ['hand', 'image', 'ruler', 'laser', 'gestures', 'format']);
   assert.equal(layout.compact, false);
 });
 
 test('desktop bracket (>= full breakpoint) keeps every group directly visible', () => {
   for (const width of [TOOLBAR_FULL_BREAKPOINT, 1200, 1600]) {
     const layout = resolveToolbarLayout(width);
-    assert.deepEqual(layout.visible, ['history', 'handwriting', 'primary', 'select'], `width ${width}`);
-    assert.deepEqual(layout.overflow, ['hand', 'image', 'shapes', 'ruler', 'laser', 'gestures', 'format'], `width ${width}`);
+    assert.deepEqual(layout.visible, ['history', 'handwriting', 'primary', 'select', 'shapes'], `width ${width}`);
+    assert.deepEqual(layout.overflow, ['hand', 'image', 'ruler', 'laser', 'gestures', 'format'], `width ${width}`);
   }
 });
 
 test('half-window bracket (720-959px) keeps primary tools and select, moves secondary groups into More', () => {
   for (const width of [TOOLBAR_MEDIUM_BREAKPOINT, 800, 959]) {
     const layout = resolveToolbarLayout(width);
-    assert.deepEqual(layout.visible, ['history', 'handwriting', 'primary', 'select'], `width ${width}`);
-    assert.deepEqual(layout.overflow, ['hand', 'image', 'shapes', 'ruler', 'laser', 'gestures', 'format'], `width ${width}`);
+    assert.deepEqual(layout.visible, ['history', 'handwriting', 'primary', 'select', 'shapes'], `width ${width}`);
+    assert.deepEqual(layout.overflow, ['hand', 'image', 'ruler', 'laser', 'gestures', 'format'], `width ${width}`);
     assert.equal(layout.compact, false, `width ${width}`);
   }
 });
@@ -74,6 +74,20 @@ test('narrow bracket (< 560px) collapses to history + active-tool + More', () =>
     // Primary tools remain reachable through the overflow menu.
     assert.ok(layout.overflow.includes('primary'), `width ${width}`);
   }
+});
+
+test('compact active Select is represented once and is not duplicated in More', () => {
+  for (const width of [195, 269, 360, 559]) {
+    const layout = resolveToolbarLayout(width, 'select');
+    assert.ok(layout.visible.includes('active-tool'), `width ${width}`);
+    assert.ok(!layout.visible.includes('select'), `width ${width}`);
+    assert.ok(!layout.overflow.includes('select'), `width ${width}`);
+  }
+});
+
+test('fullscreen active Select is not repeated in an overflow group', () => {
+  const layout = resolveFullscreenToolbarLayout(620, 'select');
+  assert.ok(!layout.overflow.includes('select'));
 });
 
 test('every tool group is always either visible or in the overflow menu', () => {
@@ -144,6 +158,19 @@ test('group order overflows secondary tools before primary tools', () => {
   assert.equal(layout.overflow.includes('primary'), false);
 });
 
+test('Shapes family is direct at medium and wide widths, overflowed when narrow, and never duplicated', () => {
+  for (const width of [720, 960, TOOLBAR_FULL_BREAKPOINT, 1600]) {
+    const layout = resolveToolbarLayout(width, 'shapes');
+    assert.ok(layout.visible.includes('shapes'), `width ${width}`);
+    assert.ok(!layout.overflow.includes('shapes'), `width ${width}`);
+  }
+  for (const width of [195, 480, 640]) {
+    const layout = resolveToolbarLayout(width);
+    assert.ok(layout.overflow.includes('shapes'), `width ${width}`);
+    assert.ok(!layout.visible.includes('shapes'), `width ${width}`);
+  }
+});
+
 test('desktop primary sequence fits before the More button', () => {
   const layout = resolveToolbarLayout(TOOLBAR_FULL_BREAKPOINT);
   const directWidth = 70 + 48 + layout.visible.reduce((sum, id) => sum + TOOLBAR_GROUP_WIDTHS[id], 0);
@@ -159,6 +186,14 @@ test('primary toolbar source order is Undo, Redo, Handwriting, Pencil, Pen, Mark
   assert.deepEqual([...positions].sort((left, right) => left - right), positions);
 });
 
+test('toolbar exposes one Shapes family trigger backed by the complete existing picker', async () => {
+  const toolbar = await readFile(new URL('../src/components/notebook/NotebookFloatingToolbar.tsx', import.meta.url), 'utf8');
+  assert.equal((toolbar.match(/key="shapes-family"/g) ?? []).length, 1);
+  for (const shape of ['rectangle', 'rounded-rectangle', 'ellipse', 'triangle', 'diamond', 'line', 'arrow']) {
+    assert.match(toolbar, new RegExp(`id: '${shape}'`));
+  }
+});
+
 test('fullscreen notebook chrome is one hideable drawing-tool header', async () => {
   const [renderer, toolbar] = await Promise.all([
     readFile(new URL('../src/components/notebook/NotebookRenderer.tsx', import.meta.url), 'utf8'),
@@ -167,7 +202,7 @@ test('fullscreen notebook chrome is one hideable drawing-tool header', async () 
   const start = renderer.indexOf('aria-label="Fullscreen notebook tools"');
   // Stop before the normal-mode utility header so the assertions only inspect
   // the fullscreen branch itself.
-  const end = renderer.indexOf("{workspaceViewMode !== 'present' && notebookModeLevel !== 2", start);
+  const end = renderer.indexOf("{!isMobileViewport && workspaceViewMode !== 'present' && notebookModeLevel !== 2", start);
   assert.ok(start >= 0 && end > start, 'fullscreen toolbar block should be present');
   const fullscreen = renderer.slice(start, end);
   assert.match(renderer, /aria-label="Fullscreen notebook tools"/);
@@ -236,7 +271,7 @@ test('text formatting and writing presets are mutually exclusive contextual surf
 
 test('Select exposes the existing freehand lasso behavior contextually without adding a primary tool', async () => {
   const toolbar = await readFile(new URL('../src/components/notebook/NotebookFloatingToolbar.tsx', import.meta.url), 'utf8');
-  assert.match(toolbar, /showSelectionGuide = activeTool === 'select'/);
+  assert.match(toolbar, /showSelectionGuide = !isPhone && activeTool === 'select'/);
   assert.match(toolbar, /aria-label="Select tool options"/);
   assert.match(toolbar, /Lasso Select/);
   assert.match(toolbar, /Click an object, or drag a freeform boundary/);

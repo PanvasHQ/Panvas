@@ -213,7 +213,7 @@ export function ContextMenu() {
     menuItems.push({
       label: 'New Canvas Here',
       icon: <Plus size={13} />,
-      action: () => { openCreateDialog('canvas', targetId); closeContextMenu(); },
+      action: () => { openCreateDialog('canvas', targetId, 'folder'); closeContextMenu(); },
     });
     menuItems.push({
       label: 'New Subfolder',

@@ -1,5 +1,8 @@
 # Handoff to AntiGravity
 
+> [!NOTE]
+> **Historical Document**: This document reflects early planning/development phases (August-September 2026). For the canonical v0.1.0 architecture and documentation, see [README.md](../README.md) and [docs/ARCHITECTURE.md](ARCHITECTURE.md).
+
 You inherit a polished UI system and a partially real local-first workspace application. Start by reading `IMPLEMENTATION_PRIORITY.md`, `ARCHITECTURE.md`, and the actual source—not the preview screens alone.
 
 Do not rewrite `AppShell`, Sidebar, TopBar, existing theme tokens, Notebook/PDF/Canvas visual language, or working Excalidraw persistence for stylistic reasons. The UI is effectively frozen; feature work must preserve the same components/tokens and avoid unrelated screen changes.

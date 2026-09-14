@@ -82,9 +82,9 @@ export function ReferencePagePane() {
       <header className="flex h-10 shrink-0 items-center justify-between border-b border-panvas-border-subtle bg-panvas-bg-primary px-3">
         <div className="min-w-0"><div className="truncate text-xs font-medium text-panvas-text-primary">{selected.title}</div><div className="truncate text-2xs text-panvas-text-tertiary">{notebook.name} · Read-only reference</div></div>
         <div className="flex items-center gap-1">
-          <button type="button" onClick={() => setZoom(value => Math.max(0.35, value - 0.1))} className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-panvas-bg-hover" title="Zoom out reference"><Minus size={13} /></button>
+          <button type="button" onClick={() => setZoom(value => Math.max(0.35, value - 0.1))} className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-panvas-bg-hover" title="Zoom out reference" aria-label="Zoom out reference"><Minus size={13} /></button>
           <span className="w-10 text-center text-2xs text-panvas-text-secondary">{Math.round(zoom * 100)}%</span>
-          <button type="button" onClick={() => setZoom(value => Math.min(1.5, value + 0.1))} className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-panvas-bg-hover" title="Zoom in reference"><Plus size={13} /></button>
+          <button type="button" onClick={() => setZoom(value => Math.min(1.5, value + 0.1))} className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-panvas-bg-hover" title="Zoom in reference" aria-label="Zoom in reference"><Plus size={13} /></button>
         </div>
       </header>
       <div className="flex-1 overflow-auto p-6">
@@ -92,7 +92,7 @@ export function ReferencePagePane() {
           <PdfReferencePreview page={selected} zoom={zoom} />
         ) : (
           <div className="mx-auto origin-top" style={{ width: 794, height: 1123, transform: `scale(${zoom})`, transformOrigin: 'top center', marginBottom: 1123 * (zoom - 1) }}>
-            <InactivePagePreview workspaceId={workspace.id} notebookId={notebook.id} page={selected} width={794} height={1123} scale={1} pageNumberText="Reference" />
+            <InactivePagePreview workspaceId={workspace.id} notebookId={notebook.id} notebook={notebook} page={selected} width={794} height={1123} scale={1} pageNumberText="Reference" />
           </div>
         )}
       </div>

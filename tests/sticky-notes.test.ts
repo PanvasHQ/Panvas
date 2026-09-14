@@ -62,3 +62,18 @@ test('sticky notes participate in selection bounds and deletion', () => {
   const remaining = [sticky].filter(text => !selected.some(element => element.id === text.id));
   assert.equal(remaining.some(text => text.id === sticky.id), false);
 });
+
+
+test('sticky gallery presets persist meaningful paper styles using existing text objects', async () => {
+  const { STICKY_PRESETS, createStickyPreset, getStickyPaper, updateStickyNote } = await import('../src/components/notebook/stickyNotes.ts');
+  for (const preset of STICKY_PRESETS) {
+    const note = createStickyPreset(preset.id, 'preset', 40, 60);
+    const restored = JSON.parse(JSON.stringify(note));
+    assert.equal(restored.type, 'text');
+    assert.equal(restored.width, preset.width);
+    assert.equal(restored.height, preset.height);
+    assert.equal(getStickyPaper(restored), preset.paper);
+    assert.equal(getStickyPaper(updateStickyNote(restored, { color: '#ffffff', shape: 'oval' })), preset.paper);
+  }
+  assert.equal(getStickyPaper({}), 'plain');
+});

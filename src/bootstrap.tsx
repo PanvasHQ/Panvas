@@ -7,19 +7,17 @@ import { PrivacyPolicyPage } from '@/components/legal/PrivacyPolicyPage';
 import { TermsOfServicePage } from '@/components/legal/TermsOfServicePage';
 import { SecurityPage } from '@/components/legal/SecurityPage';
 import { RoadmapPage } from '@/components/marketing/RoadmapPage';
+import { DownloadPage } from '@/components/marketing/DownloadPage';
+import { NotFoundPage } from '@/components/marketing/NotFoundPage';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { initAnalytics } from '@/lib/analytics';
+import { applyThemeClasses, readAndMigrateTheme } from '@/lib/theme';
 import '@/styles/index.css';
 
 // The public page does not need editor engines, auth restoration, or sync startup.
 // Keep the existing application intact and load it when the visitor enters it.
 const WorkspaceApp = React.lazy(() => {
-  const fonts = document.querySelector<HTMLLinkElement>('[data-panvas-editor-fonts]');
-  if (fonts?.dataset.href && !fonts.href) {
-    fonts.rel = 'stylesheet';
-    fonts.href = fonts.dataset.href;
-  }
-  return Promise.all([import('@/app/App'), import('@/styles/blocks.css')])
+  return Promise.all([import('@/app/App'), import('@/styles/blocks.css'), import('@/styles/editor-fonts.css')])
     .then(([module]) => ({ default: module.App }));
 });
 
@@ -27,6 +25,7 @@ function PublicSurface() {
   return (
     <Router hook={usePanvasLocation}>
       <Switch>
+        <Route path="/download" component={DownloadPage} />
         <Route path="/privacy" component={PrivacyPolicyPage} />
         <Route path="/terms" component={TermsOfServicePage} />
         <Route path="/security" component={SecurityPage} />
@@ -35,6 +34,7 @@ function PublicSurface() {
         <Route path="/app/landing" component={LandingPage} />
         <Route path="/" component={LandingPage} />
         <Route component={LandingPage} />
+        <Route component={NotFoundPage} />
       </Switch>
     </Router>
   );
@@ -57,13 +57,9 @@ export function mountPanvas(): void {
   // Apply the persisted theme before React paints. Restricted storage contexts
   // must still be able to start with the default theme.
   try {
-    const persistedTheme = localStorage.getItem('panvas-theme');
-    if (persistedTheme === 'light' || persistedTheme === 'dark' || persistedTheme === 'ink') {
-      document.documentElement.classList.remove('dark', 'theme-ink');
-      if (persistedTheme === 'dark') document.documentElement.classList.add('dark');
-      if (persistedTheme === 'ink') document.documentElement.classList.add('theme-ink');
-      void window.panvas?.settings?.setTheme(persistedTheme);
-    }
+    const theme = readAndMigrateTheme();
+    applyThemeClasses(theme);
+    void window.panvas?.settings?.setTheme(theme);
   } catch (error) {
     console.warn('[Panvas] Persisted theme is unavailable:', error);
   }

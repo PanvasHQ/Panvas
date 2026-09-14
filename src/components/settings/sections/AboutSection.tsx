@@ -5,6 +5,7 @@
 import React from 'react';
 import { ExternalLink, Github, FileText, Shield } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
+import { PANVAS_LOGO_SRC } from '@/lib/brand';
 
 export function AboutSection() {
   const { user } = useAuthStore();
@@ -20,7 +21,7 @@ export function AboutSection() {
       </div>
 
       <div className="flex items-center gap-6 p-6 bg-panvas-bg-secondary rounded-2xl border border-panvas-border-subtle shadow-glass-sm">
-        <img src="./panvas_logo.png" alt="Panvas Logo" className="w-16 h-16 object-contain" />
+        <img src={PANVAS_LOGO_SRC} alt="Panvas Logo" className="w-16 h-16 object-contain" />
         <div className="flex flex-col gap-1">
           <h3 className="text-xl font-semibold text-panvas-text-primary">Panvas</h3>
           <p className="text-sm text-panvas-text-secondary">Version {version} (Build {build})</p>

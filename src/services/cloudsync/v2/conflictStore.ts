@@ -21,4 +21,16 @@ export const dexieSyncV2ConflictStore: SyncV2ConflictStore = {
   async hasUnresolved(profileId) {
     return (await conflictDB.conflicts.where('profileId').equals(profileId).filter(item => item.resolvedAt === null).count()) > 0;
   },
+  async listUnresolved(profileId) {
+    return conflictDB.conflicts.where('profileId').equals(profileId).filter(item => item.resolvedAt === null).toArray();
+  },
+  async resolve(conflictId, profileId) {
+    const conflict = await conflictDB.conflicts.get(conflictId);
+    if (!conflict || conflict.profileId !== profileId || conflict.resolvedAt !== null) return false;
+    await conflictDB.conflicts.update(conflictId, { resolvedAt: Date.now() });
+    return true;
+  },
+  async clear() {
+    await conflictDB.conflicts.clear();
+  },
 };

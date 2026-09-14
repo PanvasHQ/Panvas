@@ -10,11 +10,10 @@ import {
   type ReviewedHandwritingLine,
 } from '@/services/recognition/bulkConversion';
 import {
-  HANDWRITING_FONT_FAMILIES,
-  STANDARD_TEXT_FONT_FAMILIES,
   sanitizeHandwritingToolPreferences,
   type HandwritingToolPreferences,
 } from '@/services/beautification/handwritingBeautification';
+import { TextFontPicker } from './TextFontPicker';
 
 interface HandwritingConversionDialogProps {
   open: boolean;
@@ -26,10 +25,6 @@ interface HandwritingConversionDialogProps {
     preferences: HandwritingToolPreferences,
     providerId: string,
   ) => void;
-}
-
-function fontLabel(font: string): string {
-  return font.replace(/['",]/g, '').replace(/\s+(?:sans-serif|serif|monospace|cursive)$/i, '');
 }
 
 function lineError(line: ReviewedHandwritingLine): string | null {
@@ -197,19 +192,12 @@ export function HandwritingConversionDialog({
               <div className="grid gap-3 sm:grid-cols-3">
                 <label className="text-xs font-medium text-panvas-text-secondary">
                   Font
-                  <select
+                  <TextFontPicker
+                    ariaLabel="Conversion font"
                     value={preferences.fontFamily}
-                    onChange={event => setPreferences(previous => sanitizeHandwritingToolPreferences({ ...previous, fontFamily: event.target.value }))}
-                    className="mt-1.5 block w-full rounded-lg border border-panvas-border-default bg-panvas-bg-secondary px-2 py-1.5 text-sm text-panvas-text-primary"
-                    style={{ fontFamily: preferences.fontFamily }}
-                  >
-                    <optgroup label="Standard">
-                      {STANDARD_TEXT_FONT_FAMILIES.map(font => <option key={font} value={font}>{fontLabel(font)}</option>)}
-                    </optgroup>
-                    <optgroup label="Handwriting">
-                      {HANDWRITING_FONT_FAMILIES.map(font => <option key={font} value={font}>{fontLabel(font)}</option>)}
-                    </optgroup>
-                  </select>
+                    onChange={font => setPreferences(previous => sanitizeHandwritingToolPreferences({ ...previous, fontFamily: font || 'Inter, sans-serif' }))}
+                    className="mt-1.5 block w-full"
+                  />
                 </label>
                 <label className="text-xs font-medium text-panvas-text-secondary">
                   Font size

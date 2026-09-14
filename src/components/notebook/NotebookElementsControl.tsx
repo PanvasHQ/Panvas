@@ -1,14 +1,15 @@
+import { ElementPreview } from './ElementPreview';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Heart, Plus, Shapes, Trash2, Upload } from 'lucide-react';
 import type { NotebookEngine } from './engine/NotebookEngine';
-import { getStarterElements, localElementRepository, type LocalElement } from '@/services/elements/LocalElementRepository';
+import { filterLocalElements, getStarterElements, localElementRepository, type LocalElement, type LocalElementFilter } from '@/services/elements/LocalElementRepository';
 import { useUIStore } from '@/stores/uiStore';
 import { useDismissibleLayer } from '@/components/ui/useDismissibleLayer';
 
 export function NotebookElementsControl({ engine, workspaceId, onInsert }: { engine: NotebookEngine; workspaceId?: string; onInsert?: () => void }) {
   const [isOpen, setIsOpen] = useState(false);
   const [elements, setElements] = useState<LocalElement[]>([]);
-  const [category, setCategory] = useState('All');
+  const [category, setCategory] = useState<LocalElementFilter>('All');
   const fileRef = useRef<HTMLInputElement>(null);
   const controlRef = useRef<HTMLDivElement>(null);
   const showToast = useUIStore(state => state.showToast);
@@ -21,8 +22,8 @@ export function NotebookElementsControl({ engine, workspaceId, onInsert }: { eng
   }, [isOpen, showToast, workspaceId]);
 
   const allElements = useMemo(() => [...getStarterElements(), ...elements], [elements]);
-  const categories = useMemo(() => ['All', ...new Set(allElements.map(item => item.category))], [allElements]);
-  const visible = category === 'All' ? allElements : allElements.filter(item => item.category === category);
+  const categories: LocalElementFilter[] = ['All', 'Starter', 'My Elements'];
+  const visible = useMemo(() => filterLocalElements(allElements, category), [allElements, category]);
 
   const capture = async () => {
     if (!workspaceId) return;
@@ -45,7 +46,7 @@ export function NotebookElementsControl({ engine, workspaceId, onInsert }: { eng
       }
       const created = await localElementRepository.create(workspaceId, snapshot, `Element ${elements.length + 1}`);
       setElements(await localElementRepository.getAll(workspaceId));
-      setCategory('All');
+      setCategory('My Elements');
       showToast(`Saved ${created.name} for offline reuse.`, 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Element could not be saved.', 'error');
@@ -53,9 +54,8 @@ export function NotebookElementsControl({ engine, workspaceId, onInsert }: { eng
   };
 
   const insert = (element: LocalElement) => {
-    if (engine.selection.pasteElements(element.snapshot, engine.drawing.getInsertionPoint())) {
+    if (engine.selection.pasteElements(element.snapshot, engine.drawing.getInsertionPoint(), () => engine.input.notifyChange())) {
       engine.tools.setMode('select');
-      engine.input.notifyChange();
       onInsert?.();
       showToast(`Inserted ${element.name}.`, 'success');
       setIsOpen(false);
@@ -102,18 +102,18 @@ export function NotebookElementsControl({ engine, workspaceId, onInsert }: { eng
             {categories.map(item => <button key={item} type="button" onClick={() => setCategory(item)} className={`whitespace-nowrap rounded-full px-2 py-1 text-2xs focus-ring ${category === item ? 'bg-panvas-accent-blue/15 text-panvas-accent-blue' : 'bg-panvas-bg-secondary text-panvas-text-secondary'}`}>{item}</button>)}
           </div>
           <div className="max-h-64 space-y-1 overflow-y-auto">
-            {visible.length === 0 && <div className="panvas-empty-state p-5 text-center text-xs">Select ink, shapes, text, or images, then save the selection.</div>}
+            {visible.length === 0 && <div className="panvas-empty-state p-5 text-center text-xs">Select one or more objects and choose &quot;Save selection&quot; to reuse them here.</div>}
             {visible.map(element => (
               <div key={element.id} className="flex items-center gap-1 rounded-lg border border-panvas-border-subtle bg-panvas-bg-primary p-1.5">
-                <button type="button" onClick={() => insert(element)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-panvas-bg-secondary text-panvas-text-secondary hover:bg-panvas-bg-hover" title={`Insert ${element.name}`}><Shapes size={17} /></button>
+                <button type="button" onClick={() => insert(element)} className="flex h-14 w-[76px] shrink-0 items-center justify-center overflow-hidden rounded-md border border-panvas-border-subtle bg-panvas-bg-secondary text-panvas-text-secondary hover:border-panvas-accent-blue focus-ring" aria-label={`Insert ${element.name}`} title={`Insert ${element.name}`}><ElementPreview snapshot={element.snapshot} engine={engine} /></button>
                 <div className="min-w-0 flex-1">
                   {element.builtin ? <><div className="truncate text-xs font-medium text-panvas-text-primary">{element.name}</div><div className="text-2xs text-panvas-text-tertiary">Starter</div></> : <>
                     <input defaultValue={element.name} aria-label={`Element name ${element.name}`} onBlur={event => void localElementRepository.update(workspaceId!, element.id, { name: event.target.value }).then(setElements)} className="w-full bg-transparent text-xs font-medium text-panvas-text-primary outline-none" />
                     <input defaultValue={element.category} aria-label={`Element category ${element.name}`} onBlur={event => void localElementRepository.update(workspaceId!, element.id, { category: event.target.value }).then(setElements)} className="w-full bg-transparent text-2xs text-panvas-text-tertiary outline-none" />
                   </>}
                 </div>
-                {!element.builtin && <><button type="button" title={element.favorite ? 'Remove favorite' : 'Favorite'} onClick={() => void localElementRepository.update(workspaceId!, element.id, { favorite: !element.favorite }).then(setElements)} className={element.favorite ? 'p-1 text-panvas-accent-rose' : 'p-1 text-panvas-text-tertiary'}><Heart size={13} fill={element.favorite ? 'currentColor' : 'none'} /></button>
-                <button type="button" title="Delete Element" onClick={() => void localElementRepository.remove(workspaceId!, element.id).then(setElements)} className="p-1 text-panvas-text-tertiary hover:text-panvas-text-error"><Trash2 size={13} /></button></>}
+                {!element.builtin && <><button type="button" title={element.favorite ? 'Remove favorite' : 'Favorite'} aria-label={`${element.favorite ? 'Remove favorite' : 'Favorite'} ${element.name}`} onClick={() => void localElementRepository.update(workspaceId!, element.id, { favorite: !element.favorite }).then(setElements)} className={element.favorite ? 'p-1 text-panvas-accent-rose' : 'p-1 text-panvas-text-tertiary'}><Heart size={13} fill={element.favorite ? 'currentColor' : 'none'} /></button>
+                <button type="button" title={`Delete ${element.name}`} aria-label={`Delete ${element.name}`} onClick={() => void localElementRepository.remove(workspaceId!, element.id).then(setElements)} className="p-1 text-panvas-text-tertiary hover:text-panvas-text-error"><Trash2 size={13} /></button></>}
               </div>
             ))}
           </div>

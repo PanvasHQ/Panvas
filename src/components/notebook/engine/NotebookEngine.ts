@@ -31,7 +31,6 @@ import { resolvePageDimensions } from '@/lib/pageProperties';
 import { getHandwritingRecognitionProvider } from '@/services/recognition';
 import type { HandwritingRecognitionProvider } from '@/services/recognition/types';
 import {
-  createHandwritingContinuationCommand,
   createHandwritingConversionCommand,
 } from '@/services/recognition/conversion';
 import {
@@ -42,13 +41,7 @@ import {
   RealTimeHandwritingSession,
   type HandwritingRecognitionCommit,
 } from '@/services/recognition/RealTimeHandwritingSession';
-import {
-  anchorNewHandwritingLinePlacement,
-  anchorSeparateSameLinePlacement,
-  createExtendedHandwritingLine,
-  findSameGeneratedHandwritingLine,
-  hasMatchingHandwritingTypography,
-} from '@/services/recognition/handwritingLineContinuation';
+import type { PagePropertyChangeSource } from '../notebookPageRenderState';
 
 export interface NotebookEngineOptions {
   recognitionProvider?: HandwritingRecognitionProvider;
@@ -100,9 +93,13 @@ export class NotebookEngine {
   readonly handwriting: RealTimeHandwritingSession;
 
   private properties: PageProperties;
-  private propertiesListeners: Set<(props: Readonly<PageProperties>) => void> = new Set();
+  private sceneOwnerPageId: string | null = null;
+  private drawingRevision = 0;
+  private propertiesListeners: Set<(props: Readonly<PageProperties>, source: PagePropertyChangeSource) => void> = new Set();
   private unsubscribeHandwritingLifecycle: (() => void) | null = null;
   private unsubscribeHandwritingTool: (() => void) | null = null;
+  private unsubscribeDrawingRevision: (() => void) | null = null;
+  private unsubscribeHistoryRevision: (() => void) | null = null;
 
   constructor(options: NotebookEngineOptions = {}) {
     this.viewport = new ViewportManager();
@@ -140,6 +137,14 @@ export class NotebookEngine {
     this.unsubscribeHandwritingTool = this.tools.subscribe(state => {
       this.handwriting.setActive(state.handwritingToTextEnabled);
     });
+    this.unsubscribeDrawingRevision = this.input.onDrawingChange(() => {
+      this.drawingRevision += 1;
+    });
+    this.unsubscribeHistoryRevision = this.history.subscribe((_canUndo, _canRedo, source) => {
+      if (source === 'user') {
+        this.drawingRevision += 1;
+      }
+    });
     this.properties = createEmptyDrawingData().properties;
     
     // Wire up redraw callback
@@ -154,6 +159,32 @@ export class NotebookEngine {
 
   /** Bind the engine to a canvas element. Call once after the canvas mounts. */
   mount(canvas: HTMLCanvasElement, cssWidth: number, cssHeight: number): void {
+    // React Strict Mode replays effect cleanup/setup against the same engine.
+    // Restore the owned listeners that destroy() released.
+    this.handwriting.revive();
+    if (!this.unsubscribeHandwritingLifecycle) {
+      this.unsubscribeHandwritingLifecycle = this.input.onInkStrokeLifecycle(event => {
+        if (event.type === 'start') this.handwriting.beginStroke();
+        else if (event.type === 'cancel') this.handwriting.cancelStroke();
+        else this.handwriting.completeStroke(event.stroke);
+      });
+    }
+    if (!this.unsubscribeHandwritingTool) {
+      this.unsubscribeHandwritingTool = this.tools.subscribe(state => {
+        this.handwriting.setActive(state.handwritingToTextEnabled);
+      });
+      this.handwriting.setActive(this.tools.getState().handwritingToTextEnabled);
+    }
+    if (!this.unsubscribeDrawingRevision) {
+      this.unsubscribeDrawingRevision = this.input.onDrawingChange(() => {
+        this.drawingRevision += 1;
+      });
+    }
+    if (!this.unsubscribeHistoryRevision) {
+      this.unsubscribeHistoryRevision = this.history.subscribe((_canUndo, _canRedo, source) => {
+        if (source === 'user') this.drawingRevision += 1;
+      });
+    }
     this.drawing.setCanvas(canvas, cssWidth, cssHeight);
     this.input.attach(canvas);
     this.drawing.redraw();
@@ -175,7 +206,7 @@ export class NotebookEngine {
 
   /** Get all drawing data for persistence. */
   getDrawingData(): DrawingData {
-    return {
+    return structuredClone({
       version: 3,
       objects: [
         ...this.drawing.getStrokes(),
@@ -187,14 +218,21 @@ export class NotebookEngine {
       activeLayerId: this.layers.getActiveLayerId(),
       audioNotes: this.audio.getAll().map(note => ({ ...note })),
       properties: { ...this.properties },
-    };
+    });
+  }
+
+  getDrawingOwnership(): Readonly<{ pageId: string | null; revision: number }> {
+    return { pageId: this.sceneOwnerPageId, revision: this.drawingRevision };
   }
 
   /** Load drawing data (e.g., from disk). Replaces current state. */
   setDrawingData(data: DrawingData | null, pageId: string | null = null): void {
+    const ownedData = data ? structuredClone(data) : null;
+    this.sceneOwnerPageId = pageId;
+    this.drawingRevision += 1;
     this.selection.resetPageScope();
     this.handwriting.setPageId(pageId);
-    if (!data) {
+    if (!ownedData) {
       this.layers.setData(undefined, undefined);
       this.audio.setAll(undefined);
       this.drawing.setStrokes([]);
@@ -203,8 +241,8 @@ export class NotebookEngine {
       this.images.clearImages();
       this.properties = createEmptyDrawingData().properties;
     } else {
-      this.layers.setData(data.layers, data.activeLayerId);
-      this.audio.setAll(data.audioNotes);
+      this.layers.setData(ownedData.layers, ownedData.activeLayerId);
+      this.audio.setAll(ownedData.audioNotes);
       const validLayerIds = new Set(this.layers.getLayers().map(layer => layer.id));
       const fallbackLayerId = validLayerIds.has(DEFAULT_PAGE_LAYER_ID)
         ? DEFAULT_PAGE_LAYER_ID
@@ -213,25 +251,25 @@ export class NotebookEngine {
         ...object,
         layerId: object.layerId && validLayerIds.has(object.layerId) ? object.layerId : fallbackLayerId,
       });
-      if (data.version === 1) {
-        this.drawing.setStrokes((data.strokes || []).map(normalizeLayer));
-        this.shapes.setShapes((data.shapes || []).map(normalizeLayer));
+      if (ownedData.version === 1) {
+        this.drawing.setStrokes((ownedData.strokes || []).map(normalizeLayer));
+        this.shapes.setShapes((ownedData.shapes || []).map(normalizeLayer));
         this.texts.setTexts([]);
         this.images.clearImages();
       } else {
-        const objects = (data.objects || []).map(normalizeLayer);
+        const objects = (ownedData.objects || []).map(normalizeLayer);
         this.drawing.setStrokes(objects.filter(o => o.type === 'stroke') as Stroke[]);
         this.shapes.setShapes(objects.filter(o => o.type === 'shape') as Shape[]);
         this.texts.setTexts(objects.filter(o => o.type === 'text') as any[]);
         this.images.setImages(objects.filter(o => o.type === 'image') as any[]);
       }
-      this.properties = { ...createEmptyDrawingData().properties, ...(data.properties || {}) };
+      this.properties = { ...createEmptyDrawingData().properties, ...(ownedData.properties || {}) };
     }
     const dimensions = resolvePageDimensions(this.properties);
     this.ruler.setMaxLength(Math.max(dimensions.width, dimensions.height));
     this.history.clear();
     this.drawing.redraw();
-    this.notifyPropertiesChange();
+    this.notifyPropertiesChange('load');
   }
 
   /** Remove a layer while preserving its objects on the nearest editable layer. */
@@ -325,45 +363,12 @@ export class NotebookEngine {
   }
 
   private commitRecognizedHandwriting(conversion: HandwritingRecognitionCommit): boolean {
-    const initialPlacement = createBeautifiedTextPlacement(conversion.result.text, conversion.strokes, conversion.preferences);
-    if (!initialPlacement) return false;
+    // Automatic H2T is intentionally one idle batch -> one fresh text object.
+    // Do not inspect or merge with previously generated text: the source stroke
+    // geometry is the only placement input for this commit.
+    const placement = createBeautifiedTextPlacement(conversion.result.text, conversion.strokes, conversion.preferences);
+    if (!placement) return false;
     const sourceLayerId = conversion.strokes[0]?.layerId;
-    const existingLines = existingHandwritingLines(this.texts.getTexts(), sourceLayerId);
-    const sameLine = findSameGeneratedHandwritingLine(
-      this.texts.getTexts(),
-      conversion.sourceBounds,
-      sourceLayerId,
-      conversion.pageId,
-    );
-    if (
-      sameLine
-      && sameLine.side !== 'overlap'
-      && hasMatchingHandwritingTypography(sameLine.text, conversion.preferences, initialPlacement.fontSize)
-    ) {
-      const extended = createExtendedHandwritingLine(
-        sameLine,
-        conversion.result.text,
-        initialPlacement,
-        conversion.strokes,
-        conversion.batchId,
-      );
-      if (extended) {
-        this.history.pushReplacingCreations(createHandwritingContinuationCommand({
-          getStrokes: () => this.drawing.getStrokes(),
-          setStrokes: strokes => this.drawing.setStrokes(strokes),
-          replaceText: text => this.texts.replaceText(text),
-          redraw: () => this.drawing.redraw(),
-        }, conversion.strokes, sameLine.text, extended), conversion.strokes.map(stroke => stroke.id));
-        return true;
-      }
-    }
-
-    const placement = sameLine
-      ? anchorSeparateSameLinePlacement(initialPlacement, sameLine)
-      : anchorNewHandwritingLinePlacement(initialPlacement, existingLines);
-    const handwritingLineId = sameLine?.text.metadata?.handwritingLineId
-      ?? sameLine?.text.metadata?.recognitionBatchId
-      ?? conversion.batchId;
     const textObject: TextObject = {
       id: generateId('txt'),
       type: 'text',
@@ -383,7 +388,7 @@ export class NotebookEngine {
         recognitionProvider: conversion.providerId,
         recognitionLanguage: conversion.result.language ?? (conversion.preferences.language || undefined),
         recognitionBatchId: conversion.batchId,
-        handwritingLineId,
+        handwritingLineId: conversion.batchId,
         sourcePageId: conversion.pageId ?? undefined,
         sourceStrokeIds: conversion.strokes.map(stroke => stroke.id),
         sourceBounds: conversion.sourceBounds,
@@ -417,23 +422,28 @@ export class NotebookEngine {
 
   setProperties(updates: Partial<PageProperties>): void {
     this.properties = { ...this.properties, ...updates };
+    this.drawingRevision += 1;
     const dimensions = resolvePageDimensions(this.properties);
     this.ruler.setMaxLength(Math.max(dimensions.width, dimensions.height));
-    this.notifyPropertiesChange();
+    this.notifyPropertiesChange('user');
   }
 
-  onPropertiesChange(listener: (props: Readonly<PageProperties>) => void): () => void {
+  onPropertiesChange(listener: (props: Readonly<PageProperties>, source: PagePropertyChangeSource) => void): () => void {
     this.propertiesListeners.add(listener);
     return () => this.propertiesListeners.delete(listener);
   }
 
-  private notifyPropertiesChange(): void {
-    this.propertiesListeners.forEach(listener => listener(this.properties));
+  private notifyPropertiesChange(source: PagePropertyChangeSource): void {
+    this.propertiesListeners.forEach(listener => listener(this.properties, source));
   }
 
   // ---- Cleanup ----
 
   destroy(): void {
+    this.unsubscribeDrawingRevision?.();
+    this.unsubscribeDrawingRevision = null;
+    this.unsubscribeHistoryRevision?.();
+    this.unsubscribeHistoryRevision = null;
     this.unsubscribeHandwritingLifecycle?.();
     this.unsubscribeHandwritingLifecycle = null;
     this.unsubscribeHandwritingTool?.();

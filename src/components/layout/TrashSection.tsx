@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { useUIStore } from '@/stores/uiStore';
 import { trashCountdown } from '@/services/cloudsync/trash';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 
 export function TrashSection() {
   const {
@@ -23,6 +24,7 @@ export function TrashSection() {
   } = useWorkspaceStore();
 
   const [isExpanded, setIsExpanded] = React.useState(false);
+  const [isDeleteAllDialogOpen, setIsDeleteAllDialogOpen] = React.useState(false);
 
   const totalItems = deletedWorkspaces.length + deletedFolders.length + deletedCanvases.length
     + deletedNotebooks.length + deletedSections.length + deletedPages.length;
@@ -46,8 +48,13 @@ export function TrashSection() {
   };
 
   const handleDeleteAll = async () => {
-    if (totalItems === 0 || !window.confirm(`Permanently delete all ${totalItems} Trash item${totalItems === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    if (totalItems === 0) return;
+    setIsDeleteAllDialogOpen(true);
+  };
+
+  const confirmDeleteAll = async () => {
     await permanentlyDeleteAllTrash();
+    setIsDeleteAllDialogOpen(false);
   };
 
   return (
@@ -183,16 +190,20 @@ export function TrashSection() {
           </motion.div>
         )}
       </AnimatePresence>
+      <ConfirmDialog
+        open={isDeleteAllDialogOpen}
+        title="Empty Trash permanently?"
+        description={`This will permanently delete all ${totalItems} Trash item${totalItems === 1 ? '' : 's'}. This cannot be undone.`}
+        confirmLabel="Empty Trash"
+        onCancel={() => setIsDeleteAllDialogOpen(false)}
+        onConfirm={confirmDeleteAll}
+      />
     </section>
   );
 }
 
 function TrashItemRow({ name, icon, onRestore, onDelete, retentionLabel, originPath }: { name: string; icon: React.ReactNode; onRestore: () => void; onDelete?: () => void; retentionLabel?: string; originPath?: string }) {
-  const handleDelete = () => {
-    if (window.confirm(`Are you sure you want to permanently delete "${name}"? This action cannot be undone.`)) {
-      onDelete?.();
-    }
-  };
+  const [isConfirmOpen, setIsConfirmOpen] = React.useState(false);
 
   return (
     <div className="group flex items-center justify-between px-2 py-1 rounded-md text-xs hover:bg-panvas-bg-hover">
@@ -210,20 +221,33 @@ function TrashItemRow({ name, icon, onRestore, onDelete, retentionLabel, originP
         <button
           onClick={onRestore}
           title="Restore"
+          aria-label={`Restore ${name}`}
           className="p-1 rounded-md text-panvas-text-tertiary hover:bg-panvas-bg-elevated hover:text-panvas-text-primary transition-colors"
         >
           <RotateCcw size={12} />
         </button>
         {onDelete && (
         <button
-          onClick={handleDelete}
+          onClick={() => setIsConfirmOpen(true)}
           title="Delete Permanently"
+          aria-label={`Delete ${name} permanently`}
           className="p-1 rounded-md text-panvas-text-tertiary hover:bg-panvas-bg-elevated hover:text-panvas-accent-rose transition-colors"
         >
           <X size={12} />
         </button>
         )}
       </div>
+      <ConfirmDialog
+        open={isConfirmOpen}
+        title="Delete this item permanently?"
+        description={`“${name}” will be permanently deleted. This action cannot be undone.`}
+        confirmLabel="Delete permanently"
+        onCancel={() => setIsConfirmOpen(false)}
+        onConfirm={async () => {
+          await onDelete?.();
+          setIsConfirmOpen(false);
+        }}
+      />
     </div>
   );
 }

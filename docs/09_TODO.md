@@ -1,5 +1,8 @@
 # Engineering TODO
 
+> [!NOTE]
+> **Historical Document**: This document reflects early planning/development phases (August-September 2026). For the canonical v0.1.0 architecture and documentation, see [README.md](../README.md) and [docs/ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Critical
 - [ ] Decide and implement desktop host + secure IPC before claiming native filesystem support.
 - [ ] Define filesystem-first canonical data model and migration from Dexie-only data.

@@ -7,6 +7,7 @@ test('isPublicRoute identifies public marketing and trust routes on web', () => 
   assert.equal(isPublicRoute('/', false), true);
   assert.equal(isPublicRoute('/landing', false), true);
   assert.equal(isPublicRoute('/app/landing', false), true);
+  assert.equal(isPublicRoute('/download', false), true);
   assert.equal(isPublicRoute('/privacy', false), true);
   assert.equal(isPublicRoute('/terms', false), true);
   assert.equal(isPublicRoute('/security', false), true);
@@ -42,7 +43,9 @@ test('App.tsx uses adaptive Panvas location and exposes the live workspace witho
 
   // Live workspace must be directly wired on /app
   assert.match(app, /<Route path="\/app">\s*<AuthGuard>\s*<AppShell>\s*<WorkspaceContent \/>/);
-  assert.match(app, /<Route path="\/app\/library">\s*<AuthGuard>\s*<AppShell>\s*<LibraryWorkspace \/>/);
+  assert.match(app, /<Route path="\/app\/library">\s*<AuthGuard>\s*<AppShell>\s*(?:<ViewportErrorBoundary[^>]*>\s*)?<LibraryWorkspace \/>/);
+  assert.match(app, /<Route path="\/download" component=\{DownloadPage\} \/>/);
+  assert.match(app, /<Route component=\{NotFoundPage\} \/>/);
 });
 
 test('bootstrap.tsx routes public routes directly to PublicSurface', async () => {
@@ -50,10 +53,12 @@ test('bootstrap.tsx routes public routes directly to PublicSurface', async () =>
 
   assert.match(bootstrap, /import \{ usePanvasLocation, isPublicRoute, isDesktop, normalizeBrowserHash \} from '@\/lib\/location'/);
   assert.match(bootstrap, /function PublicSurface\(\)/);
+  assert.match(bootstrap, /<Route path="\/download" component=\{DownloadPage\} \/>/);
   assert.match(bootstrap, /<Route path="\/privacy" component=\{PrivacyPolicyPage\} \/>/);
   assert.match(bootstrap, /<Route path="\/terms" component=\{TermsOfServicePage\} \/>/);
   assert.match(bootstrap, /<Route path="\/security" component=\{SecurityPage\} \/>/);
   assert.match(bootstrap, /<Route path="\/roadmap" component=\{RoadmapPage\} \/>/);
   assert.match(bootstrap, /<Route path="\/" component=\{LandingPage\} \/>/);
+  assert.match(bootstrap, /<Route component=\{NotFoundPage\} \/>/);
 });
 

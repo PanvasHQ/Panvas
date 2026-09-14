@@ -7,6 +7,9 @@ import type { TextObject } from './drawingTypes.ts';
 import { LayerManager } from './LayerManager.ts';
 
 export class TextManager {
+  private defaultFontFamily = 'Inter, sans-serif';
+  getDefaultFontFamily(): string { return this.defaultFontFamily; }
+  setDefaultFontFamily(fontFamily: string): void { this.defaultFontFamily = fontFamily || 'Inter, sans-serif'; }
   private texts: TextObject[] = [];
   private editors: Map<string, any> = new Map(); // Store Editor instances
   private layerManager: LayerManager;

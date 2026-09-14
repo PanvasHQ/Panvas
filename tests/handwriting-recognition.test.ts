@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
-import type { Stroke } from '../src/components/notebook/engine/drawingTypes.ts';
+import { createEmptyDrawingData, type Stroke } from '../src/components/notebook/engine/drawingTypes.ts';
 import type { SelectedElement, TextObject } from '../src/components/notebook/engine/drawingTypes.ts';
 import { HistoryManager } from '../src/components/notebook/engine/HistoryManager.ts';
+import { LayerManager } from '../src/components/notebook/engine/LayerManager.ts';
+import { SelectionEngine } from '../src/components/notebook/engine/SelectionEngine.ts';
+import { TextManager } from '../src/components/notebook/engine/TextManager.ts';
 import { resolveDrawingStrokeContext, ToolManager } from '../src/components/notebook/engine/ToolManager.ts';
 import {
   applyHandwritingInkPreferences,
@@ -754,7 +757,7 @@ test('tool off never queues or recognizes strokes; active mode owns only newly c
   assert.deepEqual(commits, [['active-only']]);
 });
 
-test('same-line word spacing stays in one pending phrase and every stroke restarts the 1300ms debounce', async () => {
+test('same-line word spacing stays in one pending phrase and every stroke restarts the 650ms debounce', async () => {
   const scheduler = new FakeScheduler();
   const provider = new FakeProvider();
   const session = new RealTimeHandwritingSession(provider, () => true, () => true, scheduler);
@@ -772,7 +775,7 @@ test('same-line word spacing stays in one pending phrase and every stroke restar
   session.completeStroke(second);
   assert.equal(scheduler.size, 1);
   assert.deepEqual(scheduler.scheduledDelays, [HANDWRITING_IDLE_DELAY_MS, HANDWRITING_IDLE_DELAY_MS]);
-  assert.equal(HANDWRITING_IDLE_DELAY_MS, 1_300);
+  assert.equal(HANDWRITING_IDLE_DELAY_MS, 650);
   assert.equal(provider.calls.length, 0);
   session.completeStroke(nextLine);
   assert.deepEqual(provider.calls[0].map(item => item.id), ['first-word', 'second-word']);
@@ -966,6 +969,25 @@ test('removed or changed source strokes and engine destruction reject stale succ
   assert.equal(commits, 0);
 });
 
+test('a destroyed handwriting session can be safely re-armed by its owning engine', async () => {
+  const scheduler = new FakeScheduler();
+  const commits: string[] = [];
+  const session = new RealTimeHandwritingSession(
+    new FakeProvider({ status: 'success', text: 'back', isAvailable: true }),
+    conversion => { commits.push(conversion.result.text); return true; },
+    () => true,
+    scheduler,
+  );
+  session.setActive(true);
+  session.destroy();
+  session.revive();
+  session.setActive(true);
+  session.completeStroke(stroke('after-remount'));
+  scheduler.runAll();
+  await settleAsyncRecognition();
+  assert.deepEqual(commits, ['back']);
+});
+
 test('empty, unavailable, and bridge-error outcomes preserve ink and remain distinguishable', async () => {
   const source = stroke('outcome-source');
   const rawInk = [structuredClone(source)];
@@ -1150,7 +1172,10 @@ test('auto placement is page-coordinate based and preference persistence keeps f
   assert.match(toolbar, /applyHandwritingInkPreferences\(engine\.tools, handwritingSettings\)/);
   assert.match(toolbar, /active=\{toolState\.handwritingToTextEnabled\}/);
   assert.match(toolbar, /engine\.tools\.toggleHandwritingToText\(\)/);
-  assert.match(toolbar, /showHandwritingSettings = toolState\.handwritingToTextEnabled\s*&& toolState\.mode === 'draw'/);
+  const handwritingToolBranch = toolbar.match(/if \(toolId === 'handwriting-to-text'\) \{([\s\S]*?)\n    \} else if \(toolId === 'select'\)/)?.[1] ?? '';
+  assert.match(handwritingToolBranch, /engine\.tools\.setDrawingTool\(toolState\.drawingTool === 'pencil' \? 'pencil' : 'pen'\)/);
+  assert.doesNotMatch(handwritingToolBranch, /selection|setMode\('select'\)/);
+  assert.match(toolbar, /showHandwritingSettings = !isPhone && toolState\.handwritingToTextEnabled\s*&& toolState\.mode === 'draw'/);
   assert.doesNotMatch(toolbar, /setHandwritingToTextTool/);
   assert.doesNotMatch(toolbar, /activeTool === 'handwriting-to-text'/);
   assert.match(toolbar, /recentColors=\{settings\.recentColors\}/);
@@ -1200,6 +1225,18 @@ test('Auto font size preserves handwriting height for long sentences and expands
   assert.equal(sentence.fontSize, short.fontSize);
   assert.ok(sentence.width > short.width);
   assert.equal(sentence.x, source.points[0].x);
+
+  const small = createBeautifiedTextPlacement(
+    'small',
+    [geometricStroke('small-auto-size', 40, 140, 120, 16)],
+    preferences,
+  )!;
+  const large = createBeautifiedTextPlacement(
+    'large',
+    [geometricStroke('large-auto-size', 40, 200, 240, 58)],
+    preferences,
+  )!;
+  assert.ok(large.fontSize > small.fontSize);
 });
 
 function generatedHandwritingText(
@@ -1310,6 +1347,24 @@ test('same-line continuation prepends by source X while a physical next line rem
   }]);
   assert.equal(anchored.y, nextPlacement.y, 'new-line source Y remains authoritative');
   assert.equal(anchored.x, existing.x, 'nearby left margins align without changing line height');
+});
+
+test('same-line continuation rejects distant ink even after an earlier source union grew tall', () => {
+  const preferences = sanitizeHandwritingToolPreferences({ fontFamily: "'Kalam', cursive", fontSize: 28, color: '#334455' });
+  const existingSource = geometricStroke('existing-source', 20, 100, 120, 30);
+  const existing = generatedHandwritingText('existing-line', 'top line', existingSource, preferences);
+  existing.metadata!.sourceBounds = { x: 20, y: 100, width: 220, height: 500 };
+
+  const lowerSource = geometricStroke('lower-source', 40, 500, 120, 30);
+  const farRightSource = geometricStroke('far-right-source', 900, 102, 80, 30);
+  assert.equal(findSameGeneratedHandwritingLine(
+    [existing], createBeautifiedTextPlacement('lower line', [lowerSource], preferences)!.bounds,
+    existing.layerId, 'page-a',
+  ), null, 'an accumulated union box must not pull lower writing onto the old line');
+  assert.equal(findSameGeneratedHandwritingLine(
+    [existing], createBeautifiedTextPlacement('far away', [farRightSource], preferences)!.bounds,
+    existing.layerId, 'page-a',
+  ), null, 'same-baseline ink must still be spatially near the generated run');
 });
 
 test('three sequential physical lines keep their source baselines without cumulative drift', () => {
@@ -1612,6 +1667,93 @@ test('bulk conversion is one atomic history entry and leaves unselected strokes 
   assert.ok(texts.every(text => text.metadata?.generatedFrom === 'handwriting-recognition'));
 });
 
+test('dialog-owned handwriting snapshot survives modal selection clearing and remains undoable', () => {
+  const selected = [
+    geometricStroke('dialog-line-1', 20, 20),
+    { ...geometricStroke('dialog-line-2', 20, 100), tool: 'pencil' as const, color: '#dc2626' },
+  ];
+  let strokes = [...selected, ...Array.from({ length: 20 }, (_, index) => geometricStroke(`unrelated-${index}`, 400, 20 + index * 5))];
+  const layers = new LayerManager();
+  const history = new HistoryManager();
+  const texts = new TextManager(layers);
+  const drawing = {
+    getStrokes: () => strokes,
+    setStrokes: (next: Stroke[]) => { strokes = next; },
+    redraw: () => {},
+  };
+  const selection = new SelectionEngine(
+    drawing as any,
+    { getShapes: () => [] } as any,
+    history,
+    {} as any,
+    texts,
+    { getImages: () => [] } as any,
+    layers,
+  );
+  selected.forEach(source => selection.select(source.id, 'stroke', true));
+  const cancelledSnapshot = selection.getSelectedStrokes();
+  selection.clearSelection();
+  assert.deepEqual(cancelledSnapshot, selected);
+  assert.ok(selected.every(source => strokes.some(current => current.id === source.id)));
+  assert.deepEqual(texts.getTexts(), []);
+
+  // Reopening the dialog must capture a fresh stable snapshot after cancel.
+  selected.forEach(source => selection.select(source.id, 'stroke', true));
+  const dialogSnapshot = selection.getSelectedStrokes();
+  selection.clearSelection(); // Modal focus/dialog interaction may clear the visual selection.
+
+  const replacements: TextObject[] = ['First reviewed line', 'Second reviewed line'].map((text, index) => ({
+    id: `dialog-text-${index + 1}`,
+    type: 'text',
+    x: 20,
+    y: 20 + index * 80,
+    width: 240,
+    height: 48,
+    createdAt: 2_000 + index,
+    content: createHandwritingTipTapContent(text, { fontFamily: "'Sacramento', cursive", color: '#123456', fontSize: 28 }),
+  }));
+
+  assert.equal(selection.replaceSelectedStrokesWithTexts(dialogSnapshot, replacements), true);
+  assert.deepEqual(strokes.map(source => source.id), Array.from({ length: 20 }, (_, index) => `unrelated-${index}`));
+  assert.deepEqual(texts.getTexts().map(text => text.id), ['dialog-text-1', 'dialog-text-2']);
+  const savedDrawing = createEmptyDrawingData();
+  savedDrawing.objects = structuredClone([...strokes, ...texts.getTexts()]);
+  const reopenedDrawing = structuredClone(savedDrawing);
+  const reopenedTexts = reopenedDrawing.objects?.filter(object => object.type === 'text') ?? [];
+  assert.deepEqual(reopenedTexts.map(text => text.id), ['dialog-text-1', 'dialog-text-2']);
+  assert.equal(reopenedTexts[0]?.content.content[0].content[0].marks[0].attrs.fontFamily, "'Sacramento', cursive");
+  history.undo();
+  assert.ok(selected.every(source => strokes.some(current => current.id === source.id)));
+  assert.deepEqual(texts.getTexts(), []);
+  history.redo();
+  assert.ok(selected.every(source => !strokes.some(current => current.id === source.id)));
+  assert.deepEqual(texts.getTexts().map(text => text.id), ['dialog-text-1', 'dialog-text-2']);
+});
+
+test('dialog-owned handwriting snapshot is rejected after a genuine source-stroke edit', () => {
+  const source = geometricStroke('changed-after-dialog-open', 20, 20);
+  let strokes = [source];
+  const layers = new LayerManager();
+  const selection = new SelectionEngine(
+    { getStrokes: () => strokes, setStrokes: (next: Stroke[]) => { strokes = next; }, redraw: () => {} } as any,
+    { getShapes: () => [] } as any,
+    new HistoryManager(),
+    {} as any,
+    new TextManager(layers),
+    { getImages: () => [] } as any,
+    layers,
+  );
+  selection.select(source.id, 'stroke');
+  const dialogSnapshot = selection.getSelectedStrokes();
+  selection.clearSelection();
+  strokes = [{ ...source, color: '#ffffff' }];
+  assert.equal(selection.replaceSelectedStrokesWithTexts(dialogSnapshot, [{
+    id: 'must-not-exist', type: 'text', x: 0, y: 0, width: 100, height: 30, createdAt: 1,
+    content: createHandwritingTipTapContent('stale'),
+  }]), false);
+  assert.deepEqual(strokes, [{ ...source, color: '#ffffff' }]);
+});
+
 test('manual selected-ink conversion dialog remains available as the correction workflow', async () => {
   const [dialog, renderer, menu, toolbar, selection, engine] = await Promise.all([
     readFile(new URL('../src/components/notebook/HandwritingConversionDialog.tsx', import.meta.url), 'utf8'),
@@ -1623,11 +1765,13 @@ test('manual selected-ink conversion dialog remains available as the correction 
   ]);
   assert.match(dialog, /Recognition alternatives/);
   assert.match(dialog, /Recognized handwriting lines/);
-  assert.match(dialog, /STANDARD_TEXT_FONT_FAMILIES/);
+  assert.match(dialog, /<TextFontPicker/);
+  assert.doesNotMatch(dialog, /<optgroup label="(?:Standard|Handwriting)"/);
   assert.match(dialog, /onConfirm\(lines, preferences, providerId\)/);
   assert.match(renderer, /<HandwritingConversionDialog/);
   assert.match(renderer, /initialPreferences=\{notebookEngine\.handwriting\.getPreferences\(\)\}/);
   assert.match(renderer, /convertSelectedHandwritingLinesToText/);
+  assert.doesNotMatch(renderer, /autoOpenedHandwritingSelectionRef/);
   assert.match(menu, /Convert to Text/);
   assert.match(toolbar, /Convert to Text/);
   assert.match(selection, /getEligibleSelectedHandwritingStrokes/);

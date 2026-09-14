@@ -11,11 +11,15 @@ function localExcalidrawAssets() {
   return {
     name: 'panvas-local-excalidraw-assets',
     configureServer(server: { middlewares: { use: (route: string, handler: (request: any, response: any, next: () => void) => void) => void } }) {
-      server.middlewares.use('/excalidraw-assets', (request, response, next) => {
+      // Development Excalidraw requests a separate vendor directory. Serve it
+      // with the same bounded local-asset path checks as production assets.
+      for (const directory of ['excalidraw-assets', 'excalidraw-assets-dev']) {
+      const servedAssetsDir = path.resolve(excalidrawAssetsDir, '..', directory);
+      server.middlewares.use(`/${directory}`, (request, response, next) => {
         try {
           const relativePath = decodeURIComponent((request.url ?? '/').split('?')[0]).replace(/^[/\\]+/, '');
-          const assetPath = path.resolve(excalidrawAssetsDir, relativePath);
-          if (!assetPath.startsWith(`${excalidrawAssetsDir}${path.sep}`) || !existsSync(assetPath) || !statSync(assetPath).isFile()) {
+          const assetPath = path.resolve(servedAssetsDir, relativePath);
+          if (!assetPath.startsWith(`${servedAssetsDir}${path.sep}`) || !existsSync(assetPath) || !statSync(assetPath).isFile()) {
             next();
             return;
           }
@@ -28,6 +32,7 @@ function localExcalidrawAssets() {
           next();
         }
       });
+      }
     },
     writeBundle(outputOptions: { dir?: string }) {
       const outputDir = path.resolve(__dirname, outputOptions.dir ?? 'dist');

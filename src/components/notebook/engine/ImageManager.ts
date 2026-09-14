@@ -2,6 +2,7 @@ import { ImageObject, DEFAULT_PAGE_LAYER_ID } from './drawingTypes.ts';
 import { ViewportManager } from './ViewportManager.ts';
 import { canvasRepository } from '@/repositories/CanvasRepository';
 import { LayerManager } from './LayerManager.ts';
+import { getImageRenderAppearance, getImageCrop } from './imageAppearance.ts';
 
 export class ImageManager {
   private images: ImageObject[] = [];
@@ -107,14 +108,18 @@ export class ImageManager {
       // Ensure high quality bicubic/lanczos filtering across any zoom and display dimensions
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
+      const appearance = getImageRenderAppearance(imgObj);
+      ctx.globalAlpha *= appearance.opacity;
 
       // Move to center of image to apply rotation
       ctx.translate(imgObj.x + imgObj.width / 2, imgObj.y + imgObj.height / 2);
-      ctx.rotate(((imgObj.rotation || 0) * Math.PI) / 180);
+      ctx.rotate(appearance.rotationRadians);
       
       // Draw image centered at the translated coordinate using original full-resolution source
+      const crop = getImageCrop(imgObj);
       ctx.drawImage(
         imgElem,
+        crop.x * imgElem.naturalWidth, crop.y * imgElem.naturalHeight, crop.width * imgElem.naturalWidth, crop.height * imgElem.naturalHeight,
         -imgObj.width / 2,
         -imgObj.height / 2,
         imgObj.width,

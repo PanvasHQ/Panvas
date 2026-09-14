@@ -532,11 +532,14 @@ test('Electron payload scan reads filesystem-backed page and canvas payloads thr
     folder: { getAll: async () => [] },
     notebook: {
       getAll: async () => [{ id: 'nb-electron', workspaceId: 'ws-electron', folderId: null, deletedAt: null }],
-      loadPage: async () => { calls.push('loadPage'); return { type: 'doc', content: [{ type: 'text', text: 'filesystem text' }] }; },
-      loadDrawing: async () => { calls.push('loadDrawing'); return { strokes: [{ id: 'ink' }] }; },
+      loadPage: async (_workspaceId: string, _notebookId: string, pageId: string) => { calls.push(`loadPage:${pageId}`); return { type: 'doc', content: [{ type: 'text', text: `filesystem text ${pageId}` }] }; },
+      loadDrawing: async (_workspaceId: string, _notebookId: string, pageId: string) => { calls.push(`loadDrawing:${pageId}`); return { strokes: [{ id: `ink-${pageId}` }] }; },
     },
     notebookSection: { getAll: async () => [{ id: 'sec-electron', notebookId: 'nb-electron', deletedAt: null }] },
-    notebookPage: { getAll: async () => [{ id: 'page-electron', notebookId: 'nb-electron', sectionId: 'sec-electron', deletedAt: null }] },
+    notebookPage: { getAll: async () => [
+      { id: 'page-electron', notebookId: 'nb-electron', sectionId: 'sec-electron', deletedAt: null },
+      { id: 'page-electron-2', notebookId: 'nb-electron', sectionId: 'sec-electron', deletedAt: null },
+    ] },
     canvasFile: { getAll: async () => [{ id: 'canvas-electron', workspaceId: 'ws-electron', folderId: null, notebookId: null, deletedAt: null }] },
     canvas: { load: async () => { calls.push('canvas.load'); return { canvasFileId: 'canvas-electron', elements: [{ id: 'shape' }] }; } },
   } } });
@@ -545,8 +548,10 @@ test('Electron payload scan reads filesystem-backed page and canvas payloads thr
     const scanned = await source.scanWorkspace('ws-electron');
     assert.ok(scanned.some(item => item.entityType === 'pageContent' && item.entityId === 'page-electron' && item.bytes?.byteLength));
     assert.ok(scanned.some(item => item.entityType === 'pageDrawing' && item.entityId === 'page-electron' && item.bytes?.byteLength));
+    assert.ok(scanned.some(item => item.entityType === 'pageContent' && item.entityId === 'page-electron-2' && item.bytes?.byteLength));
+    assert.ok(scanned.some(item => item.entityType === 'pageDrawing' && item.entityId === 'page-electron-2' && item.bytes?.byteLength));
     assert.ok(scanned.some(item => item.entityType === 'canvasScene' && item.entityId === 'canvas-electron' && item.bytes?.byteLength));
-    assert.deepEqual(calls.sort(), ['canvas.load', 'loadDrawing', 'loadPage']);
+    assert.deepEqual(calls.sort(), ['canvas.load', 'loadDrawing:page-electron', 'loadDrawing:page-electron-2', 'loadPage:page-electron', 'loadPage:page-electron-2']);
   } finally {
     if (previousWindow === undefined) delete (globalThis as { window?: unknown }).window;
     else Object.defineProperty(globalThis, 'window', { configurable: true, value: previousWindow });

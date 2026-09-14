@@ -5,8 +5,17 @@ contextBridge.exposeInMainWorld('panvas', {
     create: (name: string) => ipcRenderer.invoke('workspace:create', name),
     openDialog: () => ipcRenderer.invoke('workspace:openDialog'),
     getAll: () => ipcRenderer.invoke('workspace:getAll'),
+    getRecoveryWorkspaceRoot: (id: string) => ipcRenderer.invoke('workspace:getRecoveryWorkspaceRoot', id),
     update: (id: string, updates: any) => ipcRenderer.invoke('workspace:update', id, updates),
     reorder: (wsId: string, type: 'folder' | 'notebook' | 'canvas' | 'section' | 'page', itemIds: string[]) => ipcRenderer.invoke('workspace:reorder', wsId, type, itemIds),
+  },
+  bootstrap: {
+    getSnapshot: () => ipcRenderer.invoke('workspace:getStartupSnapshot'),
+  },
+  storage: {
+    getRoot: () => ipcRenderer.invoke('storage:getRoot'),
+    setRoot: (folderPath: string) => ipcRenderer.invoke('storage:setRoot', folderPath),
+    chooseRoot: () => ipcRenderer.invoke('storage:chooseRoot'),
   },
   folder: {
     create: (wsId: string, name: string, parentId: string | null) => ipcRenderer.invoke('folder:create', wsId, name, parentId),
@@ -48,7 +57,7 @@ contextBridge.exposeInMainWorld('panvas', {
     getAll: (wsId: string) => ipcRenderer.invoke('notebookSection:getAll', wsId),
   },
   notebookPage: {
-    create: (wsId: string, notebookId: string, sectionId: string, title: string) => ipcRenderer.invoke('notebookPage:create', wsId, notebookId, sectionId, title),
+    create: (wsId: string, notebookId: string, sectionId: string, title: string, type: 'default' | 'pdf' = 'default', pdfDataId?: string) => ipcRenderer.invoke('notebookPage:create', wsId, notebookId, sectionId, title, type, pdfDataId),
     update: (wsId: string, pageId: string, updates: any) => ipcRenderer.invoke('notebookPage:update', wsId, pageId, updates),
     delete: (wsId: string, pageId: string) => ipcRenderer.invoke('notebookPage:delete', wsId, pageId),
     getAll: (wsId: string) => ipcRenderer.invoke('notebookPage:getAll', wsId),
@@ -59,7 +68,7 @@ contextBridge.exposeInMainWorld('panvas', {
     setTheme: (theme: string) => ipcRenderer.invoke('theme:set', theme),
   },
   migration: {
-    importWorkspace: (workspaceObj: any, canvasDataList: any[]) => ipcRenderer.invoke('migration:importWorkspace', workspaceObj, canvasDataList),
+    importWorkspace: (bundle: import('../src/lib/migration-core.js').WorkspaceMigrationBundle) => ipcRenderer.invoke('migration:importWorkspace', bundle),
   },
   binary: {
     storePdf: (id: string, fileName: string, data: ArrayBuffer) => ipcRenderer.invoke('binary:storePdf', id, fileName, data),
@@ -99,6 +108,7 @@ contextBridge.exposeInMainWorld('panvas', {
     connect: (provider: string) => ipcRenderer.invoke('cloudsync:connect', provider),
     disconnect: (provider: string) => ipcRenderer.invoke('cloudsync:disconnect', provider),
     getConnection: (provider: string) => ipcRenderer.invoke('cloudsync:getConnection', provider),
+    resetLocalData: () => ipcRenderer.invoke('cloudsync:resetLocalData'),
     drive: {
       ensureAppRoot: () => ipcRenderer.invoke('cloudsync:drive:ensureAppRoot'),
       listRemoteWorkspaces: () => ipcRenderer.invoke('cloudsync:drive:listRemoteWorkspaces'),
@@ -119,7 +129,10 @@ contextBridge.exposeInMainWorld('panvas', {
       putObjectIfAbsent: (_workspaceId: string, upload: import('../src/services/cloudsync/types').ObjectUpload) => ipcRenderer.invoke('cloudsync:driveV2:putObjectIfAbsent', upload),
       getMetadata: (_workspaceId: string, hash: string) => ipcRenderer.invoke('cloudsync:driveV2:getMetadata', hash),
     },
-    applyRemoteRecord: (workspaceId: string, record: { kind: import('../src/services/cloudsync/types').SyncEntityKind; id: string; payload: unknown; tombstone: boolean }) => ipcRenderer.invoke('cloudsync:applyRemoteRecord', workspaceId, record),
+    applyRemoteRecord: (workspaceId: string, record: { kind: import('../src/services/cloudsync/types').SyncEntityKind; id: string; parentId?: string | null; payload: unknown; tombstone: boolean }) => ipcRenderer.invoke('cloudsync:applyRemoteRecord', workspaceId, record),
+    applyRemoteRecords: (workspaceId: string, records: Array<{ kind: import('../src/services/cloudsync/types').SyncEntityKind; id: string; parentId?: string | null; payload: unknown; tombstone: boolean }>) => ipcRenderer.invoke('cloudsync:applyRemoteRecords', workspaceId, records) as Promise<
+      { success: true } | { success: false; errorCode: import('../src/services/cloudsync/errors').CloudErrorCode; diagnostic: import('../src/services/cloudsync/types').SafeCloudDiagnostic }
+    >,
     listPageDrawingRecords: (workspaceId: string) => ipcRenderer.invoke('cloudsync:listPageDrawingRecords', workspaceId) as Promise<Array<{ id: string; notebookId: string; ownerPageId: string }>>,
     logDiagnostic: (diagnostic: import('../src/services/cloudsync/types').SafeCloudDiagnostic) => ipcRenderer.send('cloudsync:diagnostic', diagnostic),
   },

@@ -41,6 +41,7 @@ export interface GoogleDriveProviderOptions {
   randomFn?: () => number;
   /** Optional child namespace below Panvas/. Legacy sync leaves this unset. */
   remoteNamespace?: string;
+  assertCurrent?: () => void;
 }
 
 const DEFAULT_API_BASE = 'https://www.googleapis.com/drive/v3';
@@ -63,6 +64,7 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
   private readonly sleepFn: (ms: number) => Promise<void>;
   private readonly randomFn: () => number;
   private readonly remoteNamespace: string | null;
+  private readonly assertCurrent: () => void;
   private metrics = EMPTY_METRICS();
   private rootFolderId: string | null = null;
   private objectsFolderId: string | null = null;
@@ -77,6 +79,9 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
   private workspaceJsonFiles = new Map<string, DriveFile>();
   private tokenRefreshPromise: Promise<string | null> | null = null;
   private validTokenPromise: Promise<string> | null = null;
+  private rootPromise: Promise<string> | null = null;
+  private folderPromises = new Map<string, Promise<string>>();
+  private creationIds = new Map<string, Promise<string>>();
 
   constructor(options: GoogleDriveProviderOptions = {}) {
     this.tokenProvider = options.tokenProvider ?? (async () => {
@@ -98,6 +103,7 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
     this.sleepFn = options.sleepFn ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
     this.randomFn = options.randomFn ?? Math.random;
     this.remoteNamespace = options.remoteNamespace?.trim() || null;
+    this.assertCurrent = options.assertCurrent ?? (() => {});
   }
 
   resetRequestMetrics(): void { this.metrics = EMPTY_METRICS(); }
@@ -164,20 +170,17 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
     const electronDrive = this.electronDrive();
     if (electronDrive) return this.unwrapElectronDrive(electronDrive.ensureAppRoot());
     if (this.rootFolderId && this.objectsFolderId && this.workspacesFolderId) return this.rootFolderId;
-    const cachePrefix = this.remoteNamespace ? `panvas_gdrive_${this.remoteNamespace}_` : 'panvas_gdrive_';
-    if (typeof localStorage !== 'undefined') {
-      this.rootFolderId ||= localStorage.getItem(`${cachePrefix}root_id`);
-      this.objectsFolderId ||= localStorage.getItem(`${cachePrefix}objects_id`);
-      this.workspacesFolderId ||= localStorage.getItem(`${cachePrefix}workspaces_id`);
-    }
-    if (this.rootFolderId && this.objectsFolderId && this.workspacesFolderId) return this.rootFolderId;
+    // Older persistent folder hints were not account-scoped or validated.
+    // Discover once per provider lifetime instead of trusting those hints.
+    this.rootPromise ??= this.discoverAppRoot().finally(() => { this.rootPromise = null; });
+    return this.rootPromise;
+  }
+
+  private async discoverAppRoot(): Promise<string> {
     const panvasRootId = await this.findOrCreateFolder('Panvas', 'root');
     const rootId = this.remoteNamespace ? await this.findOrCreateFolder(this.remoteNamespace, panvasRootId) : panvasRootId;
     const [objectsId, workspacesId] = await Promise.all([this.findOrCreateFolder('objects', rootId), this.findOrCreateFolder('workspaces', rootId)]);
     this.rootFolderId = rootId; this.objectsFolderId = objectsId; this.workspacesFolderId = workspacesId;
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(`${cachePrefix}root_id`, rootId); localStorage.setItem(`${cachePrefix}objects_id`, objectsId); localStorage.setItem(`${cachePrefix}workspaces_id`, workspacesId);
-    }
     return rootId;
   }
 
@@ -235,7 +238,8 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
     const electronDrive = this.electronDrive() as any;
     if (electronDrive?.readRootJson) return this.unwrapElectronDrive(electronDrive.readRootJson(name));
     await this.ensureAppRoot();
-    const file = this.rootJsonFiles.get(name) ?? await this.findFile(name, this.rootFolderId!);
+    const cached = this.rootJsonFiles.get(name);
+    const file = (cached ? await this.getFileMetadata(cached.id) : null) ?? await this.findFile(name, this.rootFolderId!);
     if (!file) return { value: null, etag: null };
     this.rootJsonFiles.set(name, file);
     return this.downloadJson<T>(file, `Root file ${name}`);
@@ -254,7 +258,8 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
     await this.ensureAppRoot();
     const folderId = await this.ensureWorkspaceFolder(workspaceId);
     const key = `${workspaceId}:${name}`;
-    const file = this.workspaceJsonFiles.get(key) ?? await this.findFile(name, folderId);
+    const cached = this.workspaceJsonFiles.get(key);
+    const file = (cached ? await this.getFileMetadata(cached.id) : null) ?? await this.findFile(name, folderId);
     if (!file) return { value: null, etag: null };
     this.workspaceJsonFiles.set(key, file);
     return this.downloadJson<T>(file, `Workspace file ${name}`);
@@ -272,10 +277,8 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
     const electronDrive = this.electronDrive();
     if (electronDrive) return this.unwrapElectronDrive(electronDrive.getObject(_workspaceId, hash));
     await this.ensureAppRoot();
-    await this.ensureObjectIndex();
-    const objectFile = this.objectFiles.get(hash) ?? await this.findFile(hash, this.objectsFolderId!);
-    if (!objectFile) throw new Error(`Remote object not found: ${hash}`);
-    this.objectFiles.set(hash, objectFile);
+    const objectFile = await this.resolveObjectFile(hash);
+    if (!objectFile) throw new CloudOperationError('sync', { stage: 'object-download', reason: 'remote-object-missing', operation: 'download', retryable: false });
     const token = await this.getValidToken();
     const response = await this.request(`Object download for "${hash}"`, `${this.apiBaseUrl}/files/${objectFile.id}?alt=media`, { headers: { Authorization: `Bearer ${token}` } }, this.uploadTimeoutMs);
     if (!response.ok) await this.handleHttpError(response, `Object download for "${hash}"`);
@@ -286,6 +289,9 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
     const electronDrive = this.electronDrive();
     if (electronDrive) return this.unwrapElectronDrive(electronDrive.putObjectIfAbsent(workspaceId, upload));
     await this.ensureAppRoot();
+    // Upload callers use the shared object index as their idempotency check.
+    // Manifest validation re-checks stale entries before a repair reaches this
+    // path, so avoid an extra Drive search for every object upload.
     await this.ensureObjectIndex();
     const existing = this.objectFiles.get(upload.hash);
     if (existing) { this.objectFiles.set(upload.hash, existing); return 'present'; }
@@ -301,7 +307,12 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
   async uploadLargeObject(_workspaceId: string, upload: ObjectUpload): Promise<void> {
     await this.ensureAppRoot();
     const token = await this.getValidToken();
-    const initResponse = await this.request(`Initiating resumable upload for "${upload.hash}"`, `${this.uploadBaseUrl}/files?uploadType=resumable`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8', 'X-Upload-Content-Type': 'application/octet-stream', 'X-Upload-Content-Length': String(upload.bytes.byteLength) }, body: JSON.stringify({ name: upload.hash, parents: [this.objectsFolderId!] }) }, this.uploadTimeoutMs);
+    const id = await this.creationId(upload.hash, this.objectsFolderId!);
+    const initResponse = await this.request(`Initiating resumable upload for "${upload.hash}"`, `${this.uploadBaseUrl}/files?uploadType=resumable&fields=id,name,size,md5Checksum,version,modifiedTime`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8', 'X-Upload-Content-Type': 'application/octet-stream', 'X-Upload-Content-Length': String(upload.bytes.byteLength) }, body: JSON.stringify({ id, name: upload.hash, parents: [this.objectsFolderId!] }) }, this.uploadTimeoutMs);
+    if (initResponse.status === 409) {
+      const existing = await this.getFileMetadata(id);
+      if (existing) { this.objectFiles.set(upload.hash, existing); return; }
+    }
     if (!initResponse.ok) await this.handleHttpError(initResponse, `Initiating resumable upload for "${upload.hash}"`);
     const sessionUri = initResponse.headers.get('Location');
     if (!sessionUri) throw new Error('Resumable upload session URI missing from Google Drive response');
@@ -330,7 +341,13 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
   async getMetadata(_workspaceId: string, hash: string): Promise<{ size: number } | null> {
     const electronDrive = this.electronDrive();
     if (electronDrive) return this.unwrapElectronDrive(electronDrive.getMetadata(_workspaceId, hash));
-    await this.ensureAppRoot(); await this.ensureObjectIndex(); const file = this.objectFiles.get(hash); if (!file) return null; return { size: Number(file.size ?? 0) };
+    await this.ensureAppRoot();
+    // Revalidate cached entries as well as misses. A prior run can have indexed
+    // a file that was removed or never completed, and stale metadata must not
+    // make a broken manifest look healthy.
+    const file = await this.resolveObjectFile(hash);
+    if (!file || file.size === undefined) return null;
+    return { size: Number(file.size) };
   }
 
   async listRemoteWorkspaces(): Promise<RemoteWorkspaceSummary[]> {
@@ -368,8 +385,22 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
     let file = cache.get(cacheKey) ?? await this.findFile(name, parentFolderId);
     const content = JSON.stringify(value);
     if (file) {
-      const current = await this.getFileMetadata(file.id) ?? file;
-      if (ifMatch !== null && ifMatch !== this.etag(current)) throw new ProviderConflictError();
+      let current = await this.getFileMetadata(file.id);
+      if (!current) {
+        if (ifMatch !== null) throw new ProviderConflictError();
+        current = await this.findFile(name, parentFolderId);
+      }
+      if (current) {
+        if (ifMatch !== null && ifMatch !== this.etag(current)) throw new ProviderConflictError();
+      } else {
+        file = null;
+      }
+      if (!current) {
+        const token = await this.getValidToken();
+        file = { ...await this.createFileMultipart({ name, parentFolderId, mimeType: 'application/json', content: new TextEncoder().encode(content), token }), name };
+        cache.set(cacheKey, file);
+        return { etag: this.etag(file) };
+      }
       const token = await this.getValidToken();
       const response = await this.request(`JSON update for ${name}`, `${this.uploadBaseUrl}/files/${current.id}?uploadType=media&fields=id,name,size,md5Checksum,version,modifiedTime`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8' }, body: content });
       if (!response.ok) await this.handleHttpError(response, `JSON update for ${name}`);
@@ -381,6 +412,23 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
     }
     cache.set(cacheKey, file);
     return { etag: this.etag(file) };
+  }
+
+  private async resolveObjectFile(hash: string, validateCached = true): Promise<DriveFile | null> {
+    await this.ensureObjectIndex();
+    const cached = this.objectFiles.get(hash);
+    if (cached) {
+      if (!validateCached) return cached;
+      const current = await this.getFileMetadata(cached.id);
+      if (current) {
+        this.objectFiles.set(hash, current);
+        return current;
+      }
+      this.objectFiles.delete(hash);
+    }
+    const file = await this.findFile(hash, this.objectsFolderId!);
+    if (file) this.objectFiles.set(hash, file);
+    return file;
   }
 
   private async ensureObjectIndex(): Promise<void> {
@@ -407,7 +455,14 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
   private async ensureWorkspaceFolder(workspaceId: string): Promise<string> {
     if (workspaceId === 'default') throw new Error('Legacy default workspace is not a canonical sync target.');
     const cached = this.workspaceFolders.get(workspaceId); if (cached) return cached;
-    const folder = await this.findOrCreateFolder(workspaceId, this.workspacesFolderId!); this.workspaceFolders.set(workspaceId, folder); return folder;
+    let pending = this.folderPromises.get(workspaceId);
+    if (!pending) {
+      pending = this.findOrCreateFolder(workspaceId, this.workspacesFolderId!).then(folder => {
+        this.workspaceFolders.set(workspaceId, folder); return folder;
+      }).finally(() => { this.folderPromises.delete(workspaceId); });
+      this.folderPromises.set(workspaceId, pending);
+    }
+    return pending;
   }
 
   private async findOrCreateFolder(name: string, parentFolderId: string): Promise<string> {
@@ -417,23 +472,21 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
     const search = await this.request(`Folder search for "${name}"`, `${this.apiBaseUrl}/files?q=${encodeURIComponent(query)}&spaces=drive&fields=files(id,name)`, { headers: { Authorization: `Bearer ${token}` } });
     if (!search.ok) await this.handleHttpError(search, `Folder search for "${name}"`);
     const found = (await search.json()).files?.[0]; if (found) return found.id;
-    const metadata: Record<string, unknown> = { name, mimeType: 'application/vnd.google-apps.folder' }; if (parentFolderId !== 'root') metadata.parents = [parentFolderId];
+    const id = await this.creationId(name, parentFolderId);
+    const metadata: Record<string, unknown> = { id, name, mimeType: 'application/vnd.google-apps.folder' }; if (parentFolderId !== 'root') metadata.parents = [parentFolderId];
     const created = await this.request(`Folder creation for "${name}"`, `${this.apiBaseUrl}/files?fields=id,name`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify(metadata) });
+    if (created.status === 409 && await this.getFileMetadata(id)) return id;
     if (!created.ok) await this.handleHttpError(created, `Folder creation for "${name}"`); return (await created.json()).id;
   }
 
   private async getFileMetadata(fileId: string): Promise<DriveFile | null> {
-    try {
       const token = await this.getValidToken();
       const response = await this.request(`File metadata for "${fileId}"`, `${this.apiBaseUrl}/files/${fileId}?fields=id,name,size,md5Checksum,version,modifiedTime,trashed,mimeType`, { headers: { Authorization: `Bearer ${token}` } });
       if (response.status === 404) return null;
-      if (!response.ok) return null;
+      if (!response.ok) await this.handleHttpError(response, `File metadata for "${fileId}"`);
       const file = await response.json() as DriveFile & { trashed?: boolean };
       if (file.trashed) return null;
       return file;
-    } catch {
-      return null;
-    }
   }
 
   private async findFile(name: string, parentFolderId: string): Promise<DriveFile | null> {
@@ -443,20 +496,43 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
   }
 
   private async createFileMultipart(input: { name: string; parentFolderId: string; mimeType: string; content: Uint8Array; token: string }): Promise<DriveFile> {
+    const id = await this.creationId(input.name, input.parentFolderId);
     const boundary = `-------PanvasBoundary${Date.now()}${Math.floor(this.randomFn() * 1e6)}`;
-    const header = new TextEncoder().encode(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: input.name, parents: [input.parentFolderId] })}\r\n--${boundary}\r\nContent-Type: ${input.mimeType}\r\n\r\n`);
+    const header = new TextEncoder().encode(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ id, name: input.name, parents: [input.parentFolderId] })}\r\n--${boundary}\r\nContent-Type: ${input.mimeType}\r\n\r\n`);
     const footer = new TextEncoder().encode(`\r\n--${boundary}--`);
     const body = new Uint8Array(header.length + input.content.length + footer.length); body.set(header); body.set(input.content, header.length); body.set(footer, header.length + input.content.length);
     const response = await this.request(`File upload for "${input.name}"`, `${this.uploadBaseUrl}/files?uploadType=multipart&fields=id,name,size,md5Checksum,version,modifiedTime`, { method: 'POST', headers: { Authorization: `Bearer ${input.token}`, 'Content-Type': `multipart/related; boundary=${boundary}` }, body: body as unknown as BodyInit }, this.uploadTimeoutMs);
+    if (response.status === 409) {
+      const existing = await this.getFileMetadata(id);
+      if (existing) return existing;
+    }
     if (!response.ok) await this.handleHttpError(response, `File upload for "${input.name}"`); return response.json();
   }
 
+  private creationId(name: string, parent: string): Promise<string> {
+    const key = `${parent}:${name}`;
+    let pending = this.creationIds.get(key);
+    if (!pending) {
+      pending = (async () => {
+        const token = await this.getValidToken();
+        const response = await this.request('File ID allocation', `${this.apiBaseUrl}/files/generateIds?count=1&space=drive&type=files`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!response.ok) await this.handleHttpError(response, 'File ID allocation');
+        const id = (await response.json()).ids?.[0];
+        if (typeof id !== 'string' || !id) throw new CloudOperationError('sync', { stage: 'file-id-allocation', reason: 'missing-file-id', retryable: true });
+        return id;
+      })().catch(error => { this.creationIds.delete(key); throw error; });
+      this.creationIds.set(key, pending);
+    }
+    return pending;
+  }
+
   private async refreshToken(): Promise<string | null> {
-    this.tokenRefreshPromise ??= this.tokenRefresher().catch(() => null).finally(() => { this.tokenRefreshPromise = null; });
+    this.tokenRefreshPromise ??= this.tokenRefresher().finally(() => { this.tokenRefreshPromise = null; });
     return this.tokenRefreshPromise;
   }
 
   private async getValidToken(): Promise<string> {
+    this.assertCurrent();
     this.validTokenPromise ??= (async () => {
       const token = await this.tokenProvider() ?? await this.refreshToken();
       if (!token) throw new AuthExpiredError();
@@ -475,7 +551,7 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
     localStorage.setItem('panvas_gdrive_account_id', connection.accountIdentifier);
   }
 
-  private clearCaches(): void { this.rootFolderId = null; this.objectsFolderId = null; this.workspacesFolderId = null; this.workspaceFolders.clear(); this.manifestFiles.clear(); this.missingManifests.clear(); this.objectFiles.clear(); this.rootJsonFiles.clear(); this.workspaceJsonFiles.clear(); this.objectIndexPromise = null; this.objectIndexLoaded = false; }
+  private clearCaches(): void { this.rootFolderId = null; this.objectsFolderId = null; this.workspacesFolderId = null; this.workspaceFolders.clear(); this.folderPromises.clear(); this.creationIds.clear(); this.manifestFiles.clear(); this.missingManifests.clear(); this.objectFiles.clear(); this.rootJsonFiles.clear(); this.workspaceJsonFiles.clear(); this.objectIndexPromise = null; this.objectIndexLoaded = false; }
 
   private retryDelay(response: Response, attempt: number): number {
     const retryAfter = response.headers.get('Retry-After');
@@ -490,6 +566,7 @@ export class GoogleDriveSyncProvider implements CloudSyncProvider {
     let requestInit = init;
     let authRetried = false;
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
+      this.assertCurrent();
       const controller = new AbortController();
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
       this.metrics.requests += 1;

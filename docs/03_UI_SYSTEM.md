@@ -1,5 +1,8 @@
 # UI system
 
+> [!NOTE]
+> **Historical Document**: This document reflects early planning/development phases (August-September 2026). For the canonical v0.1.0 architecture and documentation, see [README.md](../README.md) and [docs/ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Tokens and themes
 
 `src/styles/index.css` defines CSS variables and `tailwind.config.ts` exposes them as `panvas-*` utilities. Themes: default light (`:root`), dark (`.dark`), warm paper ink (`.theme-ink`). Use `bg-panvas-bg-*`, `text-panvas-text-*`, `border-panvas-border-*`, and `panvas-accent-*`; do not hard-code theme colors except inside small visual mock previews.

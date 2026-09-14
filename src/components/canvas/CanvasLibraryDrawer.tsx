@@ -1,5 +1,5 @@
 import { ExternalLink, Library, Search, Trash2, Upload, X } from 'lucide-react';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { PERSONAL_LIBRARY_FILE, type CanvasLibraryRecord } from '@/services/canvas/canvasLibraryModel';
 
 interface CanvasLibraryDrawerProps {
@@ -14,6 +14,8 @@ interface CanvasLibraryDrawerProps {
 
 export function CanvasLibraryDrawer({ records, loading, onClose, onOpenPersonalLibrary, onImport, onLoad, onDelete }: CanvasLibraryDrawerProps) {
   const [query, setQuery] = useState('');
+  const [tab, setTab] = useState<'local' | 'community'>('local');
+  const [online, setOnline] = useState(() => navigator.onLine);
   const [busyFile, setBusyFile] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const personal = records.find((record) => record.fileName === PERSONAL_LIBRARY_FILE);
@@ -26,6 +28,13 @@ export function CanvasLibraryDrawer({ records, loading, onClose, onOpenPersonalL
     try { await action(); } finally { setBusyFile(null); }
   };
 
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine);
+    window.addEventListener('online', update);
+    window.addEventListener('offline', update);
+    return () => { window.removeEventListener('online', update); window.removeEventListener('offline', update); };
+  }, []);
+
   return (
     <aside className="panvas-layer-drawer absolute inset-y-4 right-4 z-30 flex w-80 flex-col overflow-hidden rounded-2xl border border-panvas-border-strong bg-panvas-bg-elevated shadow-glass-lg" aria-label="Canvas library drawer">
       <header className="flex items-center gap-3 border-b border-panvas-border-subtle px-4 py-3">
@@ -34,7 +43,11 @@ export function CanvasLibraryDrawer({ records, loading, onClose, onOpenPersonalL
         <button type="button" onClick={onClose} aria-label="Close canvas libraries" className="rounded-lg p-1.5 text-panvas-text-tertiary hover:bg-panvas-bg-hover hover:text-panvas-text-primary"><X size={16} /></button>
       </header>
 
-      <div className="flex-1 space-y-5 overflow-y-auto p-4">
+      <div className="grid grid-cols-2 gap-1 border-b border-panvas-border-subtle bg-panvas-bg-secondary p-1.5" role="tablist" aria-label="Canvas library sources">
+        {(['local', 'community'] as const).map((value) => <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTab(value)} className={`rounded-lg px-3 py-2 text-xs font-medium capitalize ${tab === value ? 'bg-panvas-bg-elevated text-panvas-text-primary shadow-sm' : 'text-panvas-text-secondary hover:text-panvas-text-primary'}`}>{value}</button>)}
+      </div>
+
+      {tab === 'local' ? <div className="flex-1 space-y-5 overflow-y-auto p-4">
         <section>
           <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-panvas-text-tertiary">Personal library</div>
           <button type="button" onClick={onOpenPersonalLibrary} className="flex w-full items-center gap-3 rounded-xl border border-panvas-border-subtle bg-panvas-bg-secondary p-3 text-left hover:border-panvas-border-strong hover:bg-panvas-bg-hover">
@@ -60,12 +73,12 @@ export function CanvasLibraryDrawer({ records, loading, onClose, onOpenPersonalL
             ))}
           </div>
         </section>
-      </div>
+      </div> : <div className="flex flex-1 flex-col items-center justify-center p-6 text-center"><ExternalLink size={24} className="mb-3 text-panvas-accent-violet" /><h3 className="text-sm font-semibold text-panvas-text-primary">Community libraries</h3><p className="mt-2 text-xs leading-5 text-panvas-text-tertiary">Browse the official Excalidraw library in your browser, download a .excalidrawlib file, then import it into this workspace.</p>{online ? <a href="https://libraries.excalidraw.com" target="_blank" rel="noreferrer" className="mt-4 flex items-center gap-2 rounded-lg bg-panvas-bg-active px-4 py-2 text-sm font-medium text-panvas-text-primary hover:bg-panvas-bg-hover">Open community library <ExternalLink size={14} /></a> : <p className="mt-4 rounded-lg border border-panvas-border-subtle px-3 py-2 text-xs text-panvas-text-secondary">You are offline. Local libraries remain available.</p>}</div>}
 
       <footer className="space-y-2 border-t border-panvas-border-subtle p-4">
         <input ref={inputRef} type="file" accept=".excalidrawlib,application/json" className="hidden" onChange={async (event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) await run(file.name, () => onImport(file)); }} />
         <button type="button" onClick={() => inputRef.current?.click()} className="flex w-full items-center justify-center gap-2 rounded-lg border border-panvas-border-strong px-3 py-2 text-sm font-medium text-panvas-text-primary hover:bg-panvas-bg-hover"><Upload size={15} /> Import .excalidrawlib</button>
-        <a href="https://libraries.excalidraw.com" target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm text-panvas-text-secondary hover:bg-panvas-bg-hover hover:text-panvas-text-primary">Browse Excalidraw libraries <ExternalLink size={14} /></a>
+        <p className="text-center text-[11px] text-panvas-text-tertiary">Library changes are saved to this workspace.</p>
       </footer>
     </aside>
   );

@@ -2,13 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   getStarterElements,
+  filterLocalElements,
   localElementRepository,
   serializeSnapshotForComparison,
   validateElementSnapshot,
   type ElementSnapshot,
   type LocalElement,
 } from '../src/services/elements/LocalElementRepository.ts';
-import { createStickyNote, getStickyNoteColor, getStickyNoteShape, isStickyNote } from '../src/components/notebook/stickyNotes.ts';
+import { createStickyNote, getStickyNoteColor, getStickyNoteShape, isStickyNote, insertStickyPreset, STICKY_PRESETS } from '../src/components/notebook/stickyNotes.ts';
 import { LayerManager } from '../src/components/notebook/engine/LayerManager.ts';
 import { TextManager } from '../src/components/notebook/engine/TextManager.ts';
 import { SelectionEngine } from '../src/components/notebook/engine/SelectionEngine.ts';
@@ -137,19 +138,68 @@ test('an asynchronous clipboard read cannot insert into a page loaded while it w
   }
 });
 
-test('starter elements are provided with Starter category and valid sticky note metadata', () => {
+test('Starter derives every canonical sticky preset and supported compact shape from shared definitions', () => {
   const starters = getStarterElements();
-  assert.equal(starters.length, 3);
+  assert.equal(starters.length, STICKY_PRESETS.length + 6);
   assert.equal(starters.every(s => s.category === 'Starter' && s.builtin === true), true);
   assert.deepEqual(starters[0].snapshot.texts[0].content, { type: 'doc', content: [{ type: 'paragraph', content: [] }] });
 
   for (const starter of starters) {
     const valid = validateElementSnapshot(starter.snapshot);
     assert.ok(valid);
-    assert.equal(valid.texts.length, 1);
-    const text = valid.texts[0];
-    assert.equal(text.metadata?.isStickyNote, true);
-    assert.ok(text.metadata?.color);
+    assert.equal(valid.texts.length + valid.shapes.length, 1);
+    if (valid.texts.length) {
+      const text = valid.texts[0];
+      assert.equal(text.metadata?.isStickyNote, true);
+      assert.ok(text.metadata?.color);
+    }
+  }
+  assert.deepEqual(starters.filter(item => item.snapshot.texts.length).map(item => item.name), STICKY_PRESETS.map(item => item.label));
+  assert.deepEqual(starters.filter(item => item.snapshot.shapes.length).map(item => item.snapshot.shapes[0].shapeType), ['rectangle', 'ellipse', 'triangle', 'diamond', 'line', 'arrow']);
+});
+
+test('All, Starter, and My Elements are distinct stable semantic filters', () => {
+  const starters = getStarterElements();
+  const mine = { ...starters[0], id: 'mine', builtin: false, category: 'Custom' };
+  const all = [...starters, mine];
+  assert.equal(filterLocalElements(all, 'All').length, all.length);
+  assert.equal(filterLocalElements(all, 'Starter').length, starters.length);
+  assert.deepEqual(filterLocalElements(all, 'My Elements').map(item => item.id), ['mine']);
+});
+
+test('gallery action inserts every preset exactly once with metadata, active layer, dirty signal, and history', () => {
+  for (const preset of STICKY_PRESETS) {
+    const f = clipboardFixture();
+    const layer = f.layers.create('Preset layer');
+    let dirty = 0;
+    const engine = {
+      ...f,
+      drawing: Object.assign(f.drawing, { getInsertionPoint: () => ({ x: 75, y: 95 }) }),
+      tools: { setMode: (mode: string) => assert.equal(mode, 'select') },
+      input: { notifyChange: () => { dirty++; } },
+    };
+    const inserted = insertStickyPreset(engine as any, preset.id);
+    assert.ok(inserted, preset.id);
+    assert.equal(f.texts.getTexts().length, 1, preset.id);
+    assert.equal(inserted.layerId, layer.id);
+    assert.equal(inserted.x, 75);
+    assert.equal(inserted.y, 95);
+    assert.equal(inserted.width, preset.width);
+    assert.equal(inserted.height, preset.height);
+    assert.equal(inserted.metadata?.color, preset.color);
+    assert.equal(inserted.metadata?.opacity, preset.opacity);
+    assert.equal(inserted.metadata?.shape, preset.shape);
+    assert.equal(inserted.metadata?.paper, preset.paper);
+    assert.equal(f.selection.getSelectedElements()[0].id, inserted.id);
+    assert.equal(dirty, 1);
+    assert.deepEqual(JSON.parse(JSON.stringify(inserted)).metadata, inserted.metadata);
+    f.history.undo();
+    assert.equal(f.texts.getTexts().length, 0);
+    assert.equal(dirty, 2);
+    f.history.redo();
+    assert.equal(f.texts.getTexts().length, 1);
+    assert.equal(dirty, 3);
+    assert.deepEqual(f.texts.getTexts()[0].metadata, inserted.metadata);
   }
 });
 

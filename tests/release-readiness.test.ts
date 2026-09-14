@@ -38,7 +38,10 @@ test('release manifest and CSP exclude sensitive or executable renderer capabili
   assert.match(html, /object-src 'none'/);
   assert.match(html, /frame-src https:\/\/accounts\.google\.com\/gsi\//);
   assert.doesNotMatch(html, /frame-src[^;]*\*/);
-  assert.doesNotMatch(files, /\.env|\.mcp|Panvas Knowledge Infrastructure/i);
+  assert.match(files, /!\*\*\/\.env/);
+  assert.match(files, /!\*\*\/\.env\.\*/);
+  assert.match(files, /!\*\*\/\.mcp\.json/);
+  assert.match(files, /Panvas Knowledge Infrastructure/);
   assert.doesNotMatch(preload, new RegExp('nodeIntegration|child_process|execFile|spawn\\('));
   const knowledgeStart = preload.indexOf('knowledge:');
   const cloudSyncStart = preload.indexOf('cloudsync:', knowledgeStart);
@@ -47,6 +50,29 @@ test('release manifest and CSP exclude sensitive or executable renderer capabili
     assert.match(knowledgeBlock, new RegExp(operation));
   }
   assert.doesNotMatch(knowledgeBlock, /write|delete|move|copy|open_file|credential|apiKey/i);
+});
+
+test('Windows release metadata preserves Panvas user data and excludes development material', async () => {
+  const manifest = JSON.parse(await readFile('package.json', 'utf8'));
+  const build = manifest.build;
+  const files = JSON.stringify(build?.files ?? []);
+  const nsis = build?.nsis ?? {};
+  const winTargets = build?.win?.target ?? [];
+
+  assert.equal(manifest.name, 'panvas');
+  assert.equal(manifest.version, '0.1.0');
+  assert.equal(build?.appId, 'com.panvas.app');
+  assert.equal(build?.productName, 'Panvas');
+  assert.equal(build?.win?.artifactName, '${productName}-${version}-Setup.${ext}');
+  assert.equal(build?.win?.icon, 'build/icon.ico');
+  assert.ok(winTargets.some((target: { target?: string }) => target.target === 'nsis'));
+  assert.equal(nsis.createDesktopShortcut, true);
+  assert.equal(nsis.createStartMenuShortcut, true);
+  assert.equal(nsis.deleteAppDataOnUninstall, false);
+  assert.match(files, /!\*\*\/\.env/);
+  assert.match(files, /!\*\*\/\.mcp\.json/);
+  assert.match(files, /!\*\*\/(?:test|tests|__tests__)\/\*\*/);
+  assert.match(files, /!\*\*\/(?:scratch|artifacts)\/\*\*/);
 });
 
 test('incomplete legacy cloud sync is quarantined and cannot delete local data on authorization failure', async () => {

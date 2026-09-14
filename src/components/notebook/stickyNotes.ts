@@ -1,4 +1,5 @@
 import type { TextObject } from './engine/drawingTypes.ts';
+import type { NotebookEngine } from './engine/NotebookEngine.ts';
 
 export const STICKY_NOTE_WIDTH = 220;
 export const STICKY_NOTE_MIN_HEIGHT = 180;
@@ -30,6 +31,49 @@ export const STICKY_NOTE_SHAPES = [
 
 export type StickyNoteShape = (typeof STICKY_NOTE_SHAPES)[number]['id'];
 export const DEFAULT_STICKY_NOTE_SHAPE: StickyNoteShape = 'rounded-rect';
+
+export type StickyPaper = 'plain' | 'lined' | 'grid';
+export const STICKY_PRESETS = [
+  { id: 'classic', label: 'Classic', shape: 'square', color: '#fef08a', opacity: 1, paper: 'plain', width: 200, height: 200 },
+  { id: 'memo', label: 'Memo', shape: 'rounded-rect', color: '#fbcfe8', opacity: 1, paper: 'plain', width: 240, height: 160 },
+  { id: 'translucent', label: 'Translucent', shape: 'square', color: '#bae6fd', opacity: 0.5, paper: 'plain', width: 200, height: 200 },
+  { id: 'lined', label: 'Lined memo', shape: 'rectangle', color: '#fef08a', opacity: 1, paper: 'lined', width: 240, height: 180 },
+  { id: 'grid', label: 'Grid memo', shape: 'square', color: '#bbf7d0', opacity: 1, paper: 'grid', width: 200, height: 200 },
+  { id: 'label', label: 'Label', shape: 'rounded-rect', color: '#e9d5ff', opacity: 1, paper: 'plain', width: 240, height: 100 },
+  { id: 'card', label: 'Paper card', shape: 'rectangle', color: '#fffdf5', opacity: 1, paper: 'lined', width: 280, height: 180 },
+] as const;
+export function getStickyPaper(object: Pick<TextObject, 'metadata'>): StickyPaper {
+  return object.metadata?.paper === 'lined' || object.metadata?.paper === 'grid' ? object.metadata.paper : 'plain';
+}
+export function stickyPaperStyle(object: Pick<TextObject, 'metadata'>, spacing = 24) {
+  const paper = getStickyPaper(object);
+  const ink = `rgba(40,45,50,${0.14 * getStickyNoteOpacity(object)})`;
+  return { backgroundImage: paper === 'lined' ? `linear-gradient(to bottom, transparent ${spacing - 1}px, ${ink} 1px)` : paper === 'grid' ? `linear-gradient(to bottom, ${ink} 1px, transparent 1px), linear-gradient(to right, ${ink} 1px, transparent 1px)` : undefined, backgroundSize: `${spacing}px ${spacing}px` };
+}
+export function createStickyPreset(id: string, objectId: string, x: number, y: number): TextObject {
+  const preset = STICKY_PRESETS.find(item => item.id === id) ?? STICKY_PRESETS[0];
+  const note = createStickyNote({ ...preset, id: objectId, x, y });
+  return { ...note, width: preset.width, height: preset.height, metadata: { ...note.metadata, paper: preset.paper } };
+}
+
+/** Insert a gallery preset through the same validated, history-aware path as Local Elements. */
+export function insertStickyPreset(engine: NotebookEngine, id: string): TextObject | null {
+  const preset = STICKY_PRESETS.find(item => item.id === id);
+  if (!preset) return null;
+  const source = createStickyPreset(preset.id, `sticky-preset-${preset.id}`, 0, 0);
+  const inserted = engine.selection.pasteElements({
+    type: 'panvas/elements', strokes: [], shapes: [], texts: [source], images: [],
+  }, engine.drawing.getInsertionPoint(preset.width, preset.height), () => engine.input.notifyChange());
+  if (!inserted) return null;
+  // Match Local Elements: finish the history transaction before changing the
+  // toolbar's active group, so a portal-hosted gallery cannot unmount mid-click.
+  engine.tools.setMode('select');
+  const selection = engine.selection.getSelectedElements();
+  const selected = selection.length === 1 && selection[0].type === 'text'
+    ? engine.texts.getTexts().find(text => text.id === selection[0].id)
+    : undefined;
+  return selected ?? null;
+}
 
 export function isValidHexColor(value: unknown): value is string {
   if (typeof value !== 'string') return false;

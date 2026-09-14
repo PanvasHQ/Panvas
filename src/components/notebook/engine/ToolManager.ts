@@ -1,10 +1,11 @@
+import type { LineStyle } from './lineStyleGeometry.ts';
 // ============================================
 // Panvas — Tool Manager
 // ============================================
 // Single source of truth for active tool state.
 // React components read from this; engine modules consume it.
 
-import type { ToolState, NotebookMode, DrawingToolId, EraserMode, ShapeToolMode, StrokePattern } from './drawingTypes.ts';
+import type { InkFamily, ToolState, NotebookMode, DrawingToolId, EraserMode, ShapeToolMode, StrokePattern } from './drawingTypes.ts';
 import { DEFAULT_TOOL_STATE } from './drawingTypes.ts';
 
 export type ToolStateChangeListener = (state: Readonly<ToolState>) => void;
@@ -18,6 +19,7 @@ export interface DrawingStrokeContext {
   pressureSensitivity: boolean;
   stabilization: number;
   strokePattern: StrokePattern;
+  inkFamily?: InkFamily;
 }
 
 export function isHandwritingInputEligible(
@@ -40,6 +42,7 @@ export function resolveDrawingStrokeContext(toolState: Readonly<ToolState>): Dra
     pressureSensitivity: toolState.pressureSensitivity,
     stabilization: toolState.stabilization,
     strokePattern: toolState.strokePattern,
+    inkFamily: toolState.drawingTool === 'pen' && !recognitionEligible ? toolState.inkFamily : undefined,
   };
 }
 
@@ -178,6 +181,13 @@ export class ToolManager {
 
   setPressureSensitivity(enabled: boolean): void {
     this.state.pressureSensitivity = enabled;
+    this.notify();
+  }
+
+  setLineStyle(style: LineStyle): void { this.state.lineStyle = style; this.notify(); }
+
+  setInkFamily(family?: InkFamily): void {
+    this.state.inkFamily = family;
     this.notify();
   }
 
