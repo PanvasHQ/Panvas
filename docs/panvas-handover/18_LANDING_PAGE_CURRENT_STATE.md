@@ -24,8 +24,8 @@ This is the current landing-specific source-of-truth note. It supplements the en
 ## Media inventory and evidence
 
 - Primary captures: `public/Application SS updated/` and mirrored `public/app-screenshots/` contain hero, notebook, ink, PDF, canvas, toolbar, voice-note, cloud-sync, and export captures. `public/marketing-assets/` contains cleaned WebP derivatives (`hero-workspace-clean.webp`, `cloud-sync-clean.webp`, `handwriting-ocr-clean.webp`, `ink-gestures-clean.webp`, `ink-stationery-ruler-clean.webp`, `notebook-customize-clean.webp`, `notebooks-templates-clean.webp`, `pdf-workbench-clean.webp`, `spatial-canvas-clean.webp`, `voice-notes-clean.webp`).
-- The supplied QA screenshot `C:\Users\sksum\Downloads\curr update.png` (2026-09-07) shows the cloud hero and first three product sections, then a long blank lower page and a clipped Panvas footer wordmark.
-- The supplied motion recording `C:\Users\sksum\Videos\Screen Recordings\curr update.mp4` is inventoried for Astra. Frame-level decoding was unavailable in this audit environment, so timing findings are based on source inspection plus the screenshot rather than invented video observations.
+- The supplied QA screenshot `<downloads>/curr update.png` (2026-09-07) shows the cloud hero and first three product sections, then a long blank lower page and a clipped Panvas footer wordmark.
+- The supplied motion recording `<recordings>/curr update.mp4` is inventoried for Astra. Frame-level decoding was unavailable in this audit environment, so timing findings are based on source inspection plus the screenshot rather than invented video observations.
 - `Landingpage.png`, `public/hero-bg.jpg`, `CyberBackground.tsx`, and the simulated hero prototype represent older or illustrative directions and are not current product evidence.
 
 ## Verified problems

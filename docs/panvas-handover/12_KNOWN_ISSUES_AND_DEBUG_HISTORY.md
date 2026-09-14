@@ -29,7 +29,7 @@ This document maintains an accurate, ground-truth record of critical engineering
   pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
   ```
 * **Current Status**: **RESOLVED**.
-* **Files Involved**: [`src/components/notebook/InactivePagePreview.tsx`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/components/notebook/InactivePagePreview.tsx), [`src/components/canvas/PdfBlock.tsx`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/components/canvas/PdfBlock.tsx), [`src/hooks/usePdfDocument.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/hooks/usePdfDocument.ts).
+* **Files Involved**: [`src/components/notebook/InactivePagePreview.tsx`](../../src/components/notebook/InactivePagePreview.tsx), [`src/components/canvas/PdfBlock.tsx`](../../src/components/canvas/PdfBlock.tsx), [`src/hooks/usePdfDocument.ts`](../../src/hooks/usePdfDocument.ts).
 
 ---
 
@@ -47,7 +47,7 @@ This document maintains an accurate, ground-truth record of critical engineering
 * **Root Cause**: Outer parent DOM containers had `overflow: auto` enabled, allowing document scroll events to bubble up to the root application shell.
 * **Fix**: Enforced isolated scroll containment inside `.notebook-viewport` (`overflow-y: auto; overflow-x: hidden` for Vertical; `overflow-x: auto; overflow-y: hidden` for Horizontal). Placed `NotebookFloatingToolbar`, `TopBar`, `Sidebar`, and `NotebookToolPropertiesPanel` outside `.notebook-viewport` with fixed positioning.
 * **Current Status**: **RESOLVED**.
-* **Files Involved**: [`src/components/notebook/NotebookRenderer.tsx`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/components/notebook/NotebookRenderer.tsx), [`src/components/workspace/WorkspaceContent.tsx`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/components/workspace/WorkspaceContent.tsx).
+* **Files Involved**: [`src/components/notebook/NotebookRenderer.tsx`](../../src/components/notebook/NotebookRenderer.tsx), [`src/components/workspace/WorkspaceContent.tsx`](../../src/components/workspace/WorkspaceContent.tsx).
 
 ---
 
@@ -56,7 +56,7 @@ This document maintains an accurate, ground-truth record of critical engineering
 * **Root Cause**: Shared popover state keys and overlapping controlled event handler bindings in `NotebookToolPropertiesPanel.tsx`.
 * **Fix**: Separated popover ID state keys and isolated click handler callbacks for each property popover control.
 * **Current Status**: **RESOLVED**.
-* **Files Involved**: [`src/components/notebook/NotebookToolPropertiesPanel.tsx`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/components/notebook/NotebookToolPropertiesPanel.tsx).
+* **Files Involved**: [`src/components/notebook/NotebookToolPropertiesPanel.tsx`](../../src/components/notebook/NotebookToolPropertiesPanel.tsx).
 
 ---
 

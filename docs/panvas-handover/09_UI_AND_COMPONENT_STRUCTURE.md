@@ -65,7 +65,7 @@ AppShell [src/components/layout/AppShell.tsx]
 
 ### 2.3 `Sidebar.tsx` (`src/components/layout/Sidebar.tsx`)
 * Collapsible navigation sidebar (`w-64 flex-shrink-0 flex flex-col`).
-* Renders hierarchical workspace tree ([`WorkspaceTree.tsx`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/components/workspace/WorkspaceTree.tsx)) showing Workspaces, Folders, Notebooks, Sections, and Canvas files.
+* Renders hierarchical workspace tree ([`WorkspaceTree.tsx`](../../src/components/workspace/WorkspaceTree.tsx)) showing Workspaces, Folders, Notebooks, Sections, and Canvas files.
 * Supports drag-and-drop file imports into specific sections.
 
 ### 2.4 `NotebookRenderer.tsx` (`src/components/notebook/NotebookRenderer.tsx`)

@@ -2,7 +2,7 @@
 
 ## 1. Domain Entities & TypeScript Schemas
 
-The core data entities are defined in [`src/types/workspace.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/types/workspace.ts), [`src/types/notebook.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/types/notebook.ts), [`src/types/canvas.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/types/canvas.ts), and [`src/components/notebook/engine/drawingTypes.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/components/notebook/engine/drawingTypes.ts).
+The core data entities are defined in [`src/types/workspace.ts`](../../src/types/workspace.ts), [`src/types/notebook.ts`](../../src/types/notebook.ts), [`src/types/canvas.ts`](../../src/types/canvas.ts), and [`src/components/notebook/engine/drawingTypes.ts`](../../src/components/notebook/engine/drawingTypes.ts).
 
 ### 1.1 Hierarchy Specification
 
@@ -157,7 +157,7 @@ export interface DrawingData {
 
 ## 2. Persistence Implementation & File Structure
 
-When running in Electron desktop mode, data persistence is performed by [`WorkspaceService.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/electron/ipc/WorkspaceService.ts) and [`domain-handlers.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/electron/ipc/domain-handlers.ts).
+When running in Electron desktop mode, data persistence is performed by [`WorkspaceService.ts`](../../electron/ipc/WorkspaceService.ts) and [`domain-handlers.ts`](../../electron/ipc/domain-handlers.ts).
 
 ```
 %USERPROFILE%/Documents/Panvas/
@@ -217,7 +217,7 @@ this.version(2).stores({
 
 ## 4. Item Reordering & ID Generation
 
-* **ID Generation**: Handled by [`src/lib/utils/id.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/lib/utils/id.ts) using custom prefixes + Nanoid:
+* **ID Generation**: Handled by [`src/lib/utils/id.ts`](../../src/lib/utils/id.ts) using custom prefixes + Nanoid:
   * Workspace ID: `ws_...`
   * Notebook ID: `nb_...`
   * Section ID: `sec_...`

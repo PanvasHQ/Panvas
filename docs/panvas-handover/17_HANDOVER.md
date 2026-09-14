@@ -5,7 +5,7 @@
 This briefing document answers the critical question:
 > **"What do I need to know before touching this codebase tomorrow?"**
 
-Panvas is a mature **Electron + React + TypeScript + Vite** local-first digital workspace. The project has completed development through **Phase 9 (PDF Workspace)** of [`roadmap.md`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/roadmap.md). The application features a robust 5-tier document hierarchy, pressure-sensitive 2D vector ink drawing engine, TipTap rich text, infinite freeform canvas, PDF annotation workspace, and native local disk persistence.
+Panvas is a mature **Electron + React + TypeScript + Vite** local-first digital workspace. The project has completed development through **Phase 9 (PDF Workspace)** of [`roadmap.md`](../../roadmap.md). The application features a robust 5-tier document hierarchy, pressure-sensitive 2D vector ink drawing engine, TipTap rich text, infinite freeform canvas, PDF annotation workspace, and native local disk persistence.
 
 ---
 
@@ -42,16 +42,16 @@ Local Disk Filesystem                     Binary Asset Tables
 
 | Path | Significance |
 |---|---|
-| [`electron/main.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/electron/main.ts) | Electron main entry point, window framing, titlebar overlay configuration. |
-| [`electron/ipc/domain-handlers.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/electron/ipc/domain-handlers.ts) | All IPC invocation handlers for workspace, notebook, section, and page disk operations. |
-| [`src/stores/workspaceStore.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/stores/workspaceStore.ts) | Central Zustand store for active workspace, notebook, section, and page state. |
-| [`src/components/notebook/NotebookRenderer.tsx`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/components/notebook/NotebookRenderer.tsx) | Core notebook editor layout, page rendering container, and native scroll container `.notebook-viewport`. |
-| [`src/components/notebook/engine/NotebookEngine.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/components/notebook/engine/NotebookEngine.ts) | Facade for 2D vector drawing, input handling, selection, eraser, and stroke history. |
-| [`src/hooks/usePdfDocument.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/hooks/usePdfDocument.ts) | Fetches PDF ArrayBuffers, generates Blob Object URLs, and manages PDF.js instance lifecycles. |
-| [`src/components/pdf/PdfWorkspace.tsx`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/components/pdf/PdfWorkspace.tsx) | Interactive PDF document workspace and annotation suite. |
-| [`src/components/canvas/CanvasView.tsx`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/components/canvas/CanvasView.tsx) | Freeform infinite canvas view embedding Excalidraw and custom LaTeX/Markdown blocks. |
-| [`src/repositories/NotebookRepository.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/repositories/NotebookRepository.ts) | Repository layer abstraction delegating notebook CRUD between Electron IPC and Dexie. |
-| [`src/database/schema.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/database/schema.ts) | Dexie IndexedDB schema for fallback and binary PDF/image storage. |
+| [`electron/main.ts`](../../electron/main.ts) | Electron main entry point, window framing, titlebar overlay configuration. |
+| [`electron/ipc/domain-handlers.ts`](../../electron/ipc/domain-handlers.ts) | All IPC invocation handlers for workspace, notebook, section, and page disk operations. |
+| [`src/stores/workspaceStore.ts`](../../src/stores/workspaceStore.ts) | Central Zustand store for active workspace, notebook, section, and page state. |
+| [`src/components/notebook/NotebookRenderer.tsx`](../../src/components/notebook/NotebookRenderer.tsx) | Core notebook editor layout, page rendering container, and native scroll container `.notebook-viewport`. |
+| [`src/components/notebook/engine/NotebookEngine.ts`](../../src/components/notebook/engine/NotebookEngine.ts) | Facade for 2D vector drawing, input handling, selection, eraser, and stroke history. |
+| [`src/hooks/usePdfDocument.ts`](../../src/hooks/usePdfDocument.ts) | Fetches PDF ArrayBuffers, generates Blob Object URLs, and manages PDF.js instance lifecycles. |
+| [`src/components/pdf/PdfWorkspace.tsx`](../../src/components/pdf/PdfWorkspace.tsx) | Interactive PDF document workspace and annotation suite. |
+| [`src/components/canvas/CanvasView.tsx`](../../src/components/canvas/CanvasView.tsx) | Freeform infinite canvas view embedding Excalidraw and custom LaTeX/Markdown blocks. |
+| [`src/repositories/NotebookRepository.ts`](../../src/repositories/NotebookRepository.ts) | Repository layer abstraction delegating notebook CRUD between Electron IPC and Dexie. |
+| [`src/database/schema.ts`](../../src/database/schema.ts) | Dexie IndexedDB schema for fallback and binary PDF/image storage. |
 
 ---
 

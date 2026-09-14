@@ -2,7 +2,7 @@
 
 ## 1. Overview & Architecture
 
-Panvas uses **Zustand (`^5.0.0`)** for client-side state management. State is decoupled into distinct, focused stores located in [`src/stores/`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/stores/).
+Panvas uses **Zustand (`^5.0.0`)** for client-side state management. State is decoupled into distinct, focused stores located in [`src/stores/`](../../src/stores/).
 
 Zustand stores do not handle direct low-level disk I/O; they delegate persistence and data operations to the **Repository Layer** (`src/repositories/`), which decides whether to use Electron IPC handlers or IndexedDB (Dexie).
 

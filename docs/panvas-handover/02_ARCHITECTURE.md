@@ -37,7 +37,7 @@ Panvas is built as an **Electron + React + Vite + TypeScript** desktop applicati
 
 ### 2.1 Main Process (`electron/main.ts`)
 * Configures `BrowserWindow` with transparent titlebar overlay (`titleBarOverlay`), auto-hidden native menu bar, and `preload.mjs` entry.
-* Invokes `registerDomainHandlers()` from [`electron/ipc/domain-handlers.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/electron/ipc/domain-handlers.ts).
+* Invokes `registerDomainHandlers()` from [`electron/ipc/domain-handlers.ts`](../../electron/ipc/domain-handlers.ts).
 
 ### 2.2 Preload Script (`electron/preload.ts`)
 Exposes `window.panvas` into the Renderer main world using `contextBridge.exposeInMainWorld`.
@@ -78,7 +78,7 @@ Inside each workspace directory:
 To prevent corrupting `workspace.json` or page JSON files when multiple user interactions happen in quick succession, all disk writes pass through an async task queue (`WriteQueue`) ensuring sequential, atomic file writing.
 
 ### 3.2 IndexedDB / Dexie Storage (Secondary / Binary Layer)
-Defined in [`src/database/schema.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/database/schema.ts).
+Defined in [`src/database/schema.ts`](../../src/database/schema.ts).
 Dexie database name: `panvas`
 
 Tables:
@@ -116,11 +116,11 @@ UI Component / Zustand Store
 ```
 
 File locations:
-* [`src/repositories/WorkspaceRepository.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/repositories/WorkspaceRepository.ts)
-* [`src/repositories/NotebookRepository.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/repositories/NotebookRepository.ts)
-* [`src/repositories/CanvasRepository.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/repositories/CanvasRepository.ts)
-* [`src/repositories/FolderRepository.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/repositories/FolderRepository.ts)
-* [`src/repositories/SettingsRepository.ts`](file:///c:/Users/sksum/OneDrive/Documents/OSS%20ExcaliDraw/src/repositories/SettingsRepository.ts)
+* [`src/repositories/WorkspaceRepository.ts`](../../src/repositories/WorkspaceRepository.ts)
+* [`src/repositories/NotebookRepository.ts`](../../src/repositories/NotebookRepository.ts)
+* [`src/repositories/CanvasRepository.ts`](../../src/repositories/CanvasRepository.ts)
+* [`src/repositories/FolderRepository.ts`](../../src/repositories/FolderRepository.ts)
+* [`src/repositories/SettingsRepository.ts`](../../src/repositories/SettingsRepository.ts)
 
 ---
 
