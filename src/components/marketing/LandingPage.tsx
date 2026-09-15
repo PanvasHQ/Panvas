@@ -24,7 +24,7 @@ import { FlowPath, useLandingChoreography } from './LandingChoreography';
 import './landing.css';
 import './landing-choreography.css';
 
-const PRODUCT_ASSET_ROOT = '/Application SS updated';
+const PRODUCT_ASSET_ROOT = '/Application%20SS%20updated';
 const easeOut = [0.23, 1, 0.32, 1] as const;
 const imageDimensions: Record<string, [number, number]> = {
   'HeroPanvasClean.png': [1024, 517], 'NotebookStyle_Template.png': [1573, 1053],
@@ -40,18 +40,22 @@ type ProductImageProps = { src: string; alt: string; className?: string; eager?:
 function ProductImage({ src, alt, className = '', eager = false, sizes }: ProductImageProps) {
   return (
     <picture>
-      <source type="image/webp" srcSet={`${PRODUCT_ASSET_ROOT}/optimized/${src.replace('.png', '')}-640.webp 640w, ${PRODUCT_ASSET_ROOT}/optimized/${src.replace('.png', '')}-1280.webp ${Math.min(1280, imageDimensions[src]?.[0] ?? 1280)}w`} sizes={sizes ?? '(max-width: 760px) 92vw, 65vw'} />
-    <img
-      src={PRODUCT_ASSET_ROOT + '/' + src}
-      alt={alt}
-      className={className}
-      loading={eager ? 'eager' : 'lazy'}
-      decoding="async"
-      sizes={sizes ?? '(max-width: 760px) 92vw, 65vw'}
-      width={imageDimensions[src]?.[0]}
-      height={imageDimensions[src]?.[1]}
-      fetchPriority={eager ? 'high' : 'auto'}
-    />
+      <source
+        type="image/webp"
+        srcSet={`${encodeURI(`${PRODUCT_ASSET_ROOT}/optimized/${src.replace('.png', '')}-640.webp`)} 640w, ${encodeURI(`${PRODUCT_ASSET_ROOT}/optimized/${src.replace('.png', '')}-1280.webp`)} ${Math.min(1280, imageDimensions[src]?.[0] ?? 1280)}w`}
+        sizes={sizes ?? '(max-width: 760px) 92vw, 65vw'}
+      />
+      <img
+        src={encodeURI(`${PRODUCT_ASSET_ROOT}/${src}`)}
+        alt={alt}
+        className={className}
+        loading={eager ? 'eager' : 'lazy'}
+        decoding="async"
+        sizes={sizes ?? '(max-width: 760px) 92vw, 65vw'}
+        width={imageDimensions[src]?.[0]}
+        height={imageDimensions[src]?.[1]}
+        fetchPriority={eager ? 'high' : 'auto'}
+      />
     </picture>
   );
 }

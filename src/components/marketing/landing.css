@@ -64,11 +64,9 @@
 
 /* The cloud scene ends with the hero, rather than covering the entire document. */
 .pl-atmosphere { position: absolute; z-index: 0; inset: 0 0 auto; height: min(1000px, 110vh); overflow: hidden; pointer-events: none; background: #e8eef0; }
-.pl-atmosphere-sky { position: absolute; inset: 0; background: linear-gradient(180deg, #cae4f3 0%, #e3eff6 45%, #f4f8fa 75%, #f5f2eb 100%); opacity: .9; }
-.pl-atmosphere-cloud { position: absolute; inset: 0; pointer-events: none; }
-.pl-atmosphere-horizon { position: absolute; inset: 52% 0 0; background: linear-gradient(transparent, #f5f2eb 95%); }
-.pl-atmosphere-sun { position: absolute; inset: 0; pointer-events: none; }
-.pl-atmosphere-sun-glare { position: absolute; pointer-events: none; }
+.pl-atmosphere-vanta { position: absolute; inset: 0; pointer-events: none; }
+.pl-atmosphere-vanta canvas { width: 100% !important; height: 100% !important; display: block; }
+.pl-atmosphere-horizon { position: absolute; inset: 65% 0 0; background: linear-gradient(transparent, #f5f2eb 90%); pointer-events: none; }
 .pl-atmosphere-halftone { position: absolute; inset: 0; background-image: radial-gradient(#315fba 0.6px, transparent .9px); background-size: 5px 5px; opacity: .045; mask-image: linear-gradient(transparent 15%, #000 55%, transparent); }
 .pl-atmosphere-scrap { position: absolute; left: 5%; top: 32%; width: 11%; height: 23%; border-left: 1px solid #477fba; transform: rotate(-16deg); opacity: .08; }
 .pl-atmosphere-scrap::after { content: ""; position: absolute; left: 10px; top: 30px; width: 60%; height: 45%; border-bottom: 1px solid #477fba; transform: rotate(12deg); }
