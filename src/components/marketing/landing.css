@@ -63,20 +63,12 @@
 .pl-nav-sheet .pl-button { --ease-out: ease-out; margin-top: auto; }
 
 /* The cloud scene ends with the hero, rather than covering the entire document. */
-.pl-atmosphere { position: absolute; z-index: 0; inset: 0 0 auto; height: min(1000px, 110vh); overflow: hidden; pointer-events: none; background: #d6eaf6; }
-.pl-atmosphere-vanta, .pl-atmosphere-fallback { position: absolute; inset: 0; }
-.pl-atmosphere-vanta { opacity: 0; transition: opacity 600ms ease; }
-.pl-atmosphere.is-enhanced .pl-atmosphere-vanta { opacity: .86; }
-.pl-atmosphere-vanta canvas { width: 100% !important; height: 100% !important; }
-.pl-atmosphere-fallback {
-  background: radial-gradient(ellipse 60% 23% at 15% 33%, #fff 12%, #f4faffb0 45%, transparent 75%),
-    radial-gradient(ellipse 72% 24% at 86% 58%, #fff 8%, #edf7ffd0 38%, transparent 75%),
-    radial-gradient(ellipse 70% 24% at 18% 76%, #ffffffd9 18%, transparent 75%),
-    linear-gradient(180deg, #9fcbe4, #e4f0f7 70%, #f5f8fb);
-}
-.pl-atmosphere.is-enhanced .pl-atmosphere-fallback { opacity: .15; }
-.pl-atmosphere-horizon { position: absolute; inset: 55% 0 0; background: linear-gradient(transparent, #f5f8fb); }
-.pl-atmosphere-sun { position: absolute; inset: 0; background: linear-gradient(115deg, #fffce630, transparent 45%); }
+.pl-atmosphere { position: absolute; z-index: 0; inset: 0 0 auto; height: min(1000px, 110vh); overflow: hidden; pointer-events: none; background: #e8eef0; }
+.pl-atmosphere-sky { position: absolute; inset: 0; background: linear-gradient(180deg, #cae4f3 0%, #e3eff6 45%, #f4f8fa 75%, #f5f2eb 100%); opacity: .9; }
+.pl-atmosphere-cloud { position: absolute; inset: 0; pointer-events: none; }
+.pl-atmosphere-horizon { position: absolute; inset: 52% 0 0; background: linear-gradient(transparent, #f5f2eb 95%); }
+.pl-atmosphere-sun { position: absolute; inset: 0; pointer-events: none; }
+.pl-atmosphere-sun-glare { position: absolute; pointer-events: none; }
 .pl-atmosphere-halftone { position: absolute; inset: 0; background-image: radial-gradient(#315fba 0.6px, transparent .9px); background-size: 5px 5px; opacity: .045; mask-image: linear-gradient(transparent 15%, #000 55%, transparent); }
 .pl-atmosphere-scrap { position: absolute; left: 5%; top: 32%; width: 11%; height: 23%; border-left: 1px solid #477fba; transform: rotate(-16deg); opacity: .08; }
 .pl-atmosphere-scrap::after { content: ""; position: absolute; left: 10px; top: 30px; width: 60%; height: 45%; border-bottom: 1px solid #477fba; transform: rotate(12deg); }
