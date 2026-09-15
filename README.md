@@ -27,7 +27,7 @@
 
 ---
 
-![Panvas Hero Workspace](public/marketing-assets/hero-workspace-clean.webp)
+![Panvas Hero Workspace](public/marketing-assets/handwriting-ocr-clean.webp)
 
 <p align="center">
   <em>Think. Sketch. Write. Build.</em><br />
