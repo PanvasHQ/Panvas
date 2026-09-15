@@ -25,6 +25,7 @@ import './landing.css';
 import './landing-choreography.css';
 
 const PRODUCT_ASSET_ROOT = '/Application%20SS%20updated';
+const PRODUCT_ASSET_ROOT = '/Application SS updated';
 const easeOut = [0.23, 1, 0.32, 1] as const;
 const imageDimensions: Record<string, [number, number]> = {
   'HeroPanvasClean.png': [1024, 517], 'NotebookStyle_Template.png': [1573, 1053],
