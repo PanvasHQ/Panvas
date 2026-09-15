@@ -24,7 +24,6 @@ import { FlowPath, useLandingChoreography } from './LandingChoreography';
 import './landing.css';
 import './landing-choreography.css';
 
-const PRODUCT_ASSET_ROOT = '/Application%20SS%20updated';
 const PRODUCT_ASSET_ROOT = '/Application SS updated';
 const easeOut = [0.23, 1, 0.32, 1] as const;
 const imageDimensions: Record<string, [number, number]> = {
