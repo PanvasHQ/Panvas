@@ -33,7 +33,6 @@ function PublicSurface() {
         <Route path="/landing" component={LandingPage} />
         <Route path="/app/landing" component={LandingPage} />
         <Route path="/" component={LandingPage} />
-        <Route component={LandingPage} />
         <Route component={NotFoundPage} />
       </Switch>
     </Router>
@@ -42,7 +41,11 @@ function PublicSurface() {
 
 function EntrySurface() {
   const [route] = usePanvasLocation();
-  if (isPublicRoute(route, isDesktop)) {
+  const isApp = isDesktop
+    ? !isPublicRoute(route, true)
+    : (route === '/app' || (route.startsWith('/app/') && route !== '/app/landing')) || route.startsWith('/auth') || route === '/private-beta';
+
+  if (!isApp) {
     return <PublicSurface />;
   }
   return (

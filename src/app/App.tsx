@@ -237,9 +237,6 @@ export function App() {
             </AppShell>
           </AuthGuard>
         </Route>
-        <Route>
-          <LandingPage />
-        </Route>
         <Route component={NotFoundPage} />
       </Switch>
 

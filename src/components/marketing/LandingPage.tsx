@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import {
   AnimatePresence,
@@ -232,6 +232,25 @@ function Nav({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
 
 function Hero({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
   const reduceMotion = useReducedMotion();
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || reduceMotion) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          void video.play().catch(() => {});
+        } else {
+          video.pause();
+        }
+      },
+      { threshold: 0.1 }
+    );
+    observer.observe(video);
+    return () => observer.disconnect();
+  }, [reduceMotion]);
+
   return (
     <section className="pl-hero" id="top" data-scroll-scene>
       <div className="pl-hero-inner">
@@ -255,7 +274,7 @@ function Hero({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
             <div className="pl-hero-video-frame">
               {reduceMotion ? (
                 <img
-                  src="/media/panvas-showcase-poster.webp"
+                  src="/media/panvas-product-showcase-poster.webp"
                   alt="Panvas product showcase demonstration"
                   className="pl-hero-video"
                   width={1920}
@@ -265,18 +284,19 @@ function Hero({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
                 />
               ) : (
                 <video
+                  ref={videoRef}
                   className="pl-hero-video"
                   autoPlay
                   muted
                   loop
                   playsInline
                   preload="metadata"
-                  poster="/media/panvas-showcase-poster.webp"
+                  poster="/media/panvas-product-showcase-poster.webp"
                   width={1920}
                   height={1080}
                   aria-label="Panvas workspace product showcase video demonstration"
                 >
-                  <source src="/media/panvas-showcase.mp4" type="video/mp4" />
+                  <source src="/media/panvas-product-showcase-web.mp4" type="video/mp4" />
                   Your browser does not support the video tag.
                 </video>
               )}
